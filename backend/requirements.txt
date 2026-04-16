@@ -1,7 +1,7 @@
 # FastAPI and web framework
 fastapi==0.109.0
 uvicorn[standard]==0.27.0
-websockets>=13.0,<14
+websockets>=13.0,<17
 python-multipart==0.0.6
 
 # Configuration
