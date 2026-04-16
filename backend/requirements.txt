@@ -20,6 +20,9 @@ scipy>=1.11,<2
 statsmodels>=0.14,<0.15
 scikit-learn>=1.3,<2
 
+# Persistent IPython shell powering the code tool
+ipython>=8.0,<9
+
 # LLM providers
 openai==1.10.0
 anthropic==0.18.0
