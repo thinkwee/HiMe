@@ -1,0 +1,3140 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    " " : {
+      "shouldTranslate" : false
+    },
+    "--" : {
+      "shouldTranslate" : false
+    },
+    "(%@)" : {
+      "shouldTranslate" : false
+    },
+    "%@ · %lld readings" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ · %2$lld readings"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ · %2$lld 记录"
+          }
+        }
+      }
+    },
+    "%@ %@ %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ %2$@ %3$@"
+          }
+        }
+      },
+      "shouldTranslate" : false
+    },
+    "%@ %lldm" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ %2$lldm"
+          }
+        }
+      },
+      "shouldTranslate" : false
+    },
+    "%lld" : {
+      "shouldTranslate" : false
+    },
+    "%lld readings" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld readings"
+          }
+        }
+      }
+    },
+    "%lld%% synced" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld%% 已同步"
+          }
+        }
+      }
+    },
+    "%lldh %lldm" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lldh %2$lldm"
+          }
+        }
+      },
+      "shouldTranslate" : false
+    },
+    "%lldm window" : {
+      "shouldTranslate" : false
+    },
+    "%lldx triggered" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lldx 已触发"
+          }
+        }
+      }
+    },
+    "1 data point recorded" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 data point recorded"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已记录 1 个数据点"
+          }
+        }
+      }
+    },
+    "1. Who we are" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1. 我们是谁"
+          }
+        }
+      }
+    },
+    "2. Data the app collects on your device" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "2. 在您的设备上收集的数据"
+          }
+        }
+      }
+    },
+    "3. How the app collects data" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "3. app如何收集数据"
+          }
+        }
+      }
+    },
+    "4. How the app uses data" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "4. app如何使用数据"
+          }
+        }
+      }
+    },
+    "5. Sharing with third-party AI services" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "5. 与第三方AI服务共享数据"
+          }
+        }
+      }
+    },
+    "6. Data storage and retention" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "6. 数据存储和保留"
+          }
+        }
+      }
+    },
+    "7. Your consent and your controls" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "7. 您的许可和您的控制权"
+          }
+        }
+      }
+    },
+    "8. Security" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "8. 安全"
+          }
+        }
+      }
+    },
+    "9. Children" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "9. 儿童使用"
+          }
+        }
+      }
+    },
+    "10. Changes to this policy" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "10. 政策变更"
+          }
+        }
+      }
+    },
+    "11. Contact" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "11. 联系"
+          }
+        }
+      }
+    },
+    "192.168.1.100 or example.com" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "192.168.1.100 or example.com"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "192.168.1.100 或 example.com"
+          }
+        }
+      }
+    },
+    "A living health avatar" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A living health avatar"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一个有生命力的健康化身"
+          }
+        }
+      }
+    },
+    "About" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "About"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关于"
+          }
+        }
+      }
+    },
+    "Access requested" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Access requested"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已请求授权"
+          }
+        }
+      }
+    },
+    "Activity Log" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activity Log"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "活动日志"
+          }
+        }
+      }
+    },
+    "Agent" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "智能体"
+          }
+        }
+      }
+    },
+    "Agent Reports" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent Reports"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "智能体报告"
+          }
+        }
+      }
+    },
+    "Agent running" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent running"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "智能体运行中"
+          }
+        }
+      }
+    },
+    "AI Data Sharing" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI 数据分享"
+          }
+        }
+      }
+    },
+    "AI Data Sharing Consent" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI 数据分享许可"
+          }
+        }
+      }
+    },
+    "Analysis Goal" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Analysis Goal"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分析目标"
+          }
+        }
+      }
+    },
+    "Apple Health Access" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Health Access"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple 健康数据访问"
+          }
+        }
+      }
+    },
+    "As your personal AI health assistant, Hime understands your real-time health data, feels your heart beats, your breath, and your body's movements, and provides proactive insights so you never miss what matters. \n\nFully self-hosted, fully local, secure, and open-source. Say **Hi** to healthy **Me**!" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "As your personal AI health assistant, Hime understands your real-time health data, feels your heart beats, your breath, and your body's movements, and provides proactive insights so you never miss what matters. \n\nFully self-hosted, secure, and open-source. Say **Hi** to healthy **Me**!"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "作为您的个人AI健康智能体，Hime理解你的每一次心跳，每一次呼吸，每一次运动，并且主动提供健康洞察，从不错过。\n\n完全由您自己搭建服务器，安全，开源。Say **Hi** to healthy **Me**!"
+          }
+        }
+      }
+    },
+    "As your personal AI health assistant, Hime understands your real-time health data, feels your heart beats, your breath, and your body's movements, and provides proactive insights so you never miss what matters. \n\nFully self-hosted, secure, and open-source. Say **Hi** to healthy **Me**!" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "作为您的个人AI健康智能体，Hime理解你的每一次心跳，每一次呼吸，每一次运动，并且主动提供健康洞察，从不错过。\n\n完全由您自己搭建服务器，安全，开源。Say **Hi** to healthy **Me**!"
+          }
+        }
+      }
+    },
+    "Ask your agent to create a personalised page\nand it will appear right here." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ask your agent to create a personalised page\nand it will appear right here."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "让您的智能体创建一个个性化页面,\n它就会出现在这里。"
+          }
+        }
+      }
+    },
+    "Auth Token" : {
+      "shouldTranslate" : false
+    },
+    "Authorization" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Authorization"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "授权"
+          }
+        }
+      }
+    },
+    "Build" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Build"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "构建号"
+          }
+        }
+      }
+    },
+    "Burst Mode (High Priority)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Burst Mode (High Priority)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "高速模式(高优先级)"
+          }
+        }
+      }
+    },
+    "Cancel" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancel"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消"
+          }
+        }
+      }
+    },
+    "Chat Not Configured" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "聊天未配置"
+          }
+        }
+      }
+    },
+    "Clear" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除"
+          }
+        }
+      }
+    },
+    "Clear all activity logs?" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear all activity logs?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "要清除所有活动日志吗?"
+          }
+        }
+      }
+    },
+    "Clear Logs" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clear Logs"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清除日志"
+          }
+        }
+      }
+    },
+    "Collected Data" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Collected Data"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已采集数据"
+          }
+        }
+      }
+    },
+    "Condition" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Condition"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "条件"
+          }
+        }
+      }
+    },
+    "Connect" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接"
+          }
+        }
+      }
+    },
+    "Connect and wear your Apple Watch to start collecting health data." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect and wear your Apple Watch to start collecting health data."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接并佩戴 Apple Watch 即可开始采集健康数据。"
+          }
+        }
+      }
+    },
+    "Connect Your Server" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect Your Server"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接你的服务器"
+          }
+        }
+      }
+    },
+    "Connected" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connected"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已连接"
+          }
+        }
+      }
+    },
+    "Connected to %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connected to %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已连接到 %@"
+          }
+        }
+      }
+    },
+    "Continue" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continue"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "继续"
+          }
+        }
+      }
+    },
+    "Cooldown" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cooldown"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "冷却时间"
+          }
+        }
+      }
+    },
+    "Copied!" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copied!"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已复制!"
+          }
+        }
+      }
+    },
+    "Copy Logs" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copy Logs"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "复制日志"
+          }
+        }
+      }
+    },
+    "Could not reach server" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not reach server"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法连接到服务器"
+          }
+        }
+      }
+    },
+    "Create" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Create"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "创建"
+          }
+        }
+      }
+    },
+    "Cycles" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cycles"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "周期"
+          }
+        }
+      }
+    },
+    "Dashboard" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dashboard"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "仪表盘"
+          }
+        }
+      }
+    },
+    "Data & Privacy" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "数据和隐私"
+          }
+        }
+      }
+    },
+    "Data travels from this app to the Hime server you deploy, and your server makes API calls to the AI provider you selected. Hime does not upload your data to any service operated by the app developer." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "数据将由app传输到您自己部署的Hime服务器，您的服务器会通过API调用您自己选择和配置的AI服务。Hime本身不上传任何数据到其他任何开发者运营的服务上。"
+          }
+        }
+      }
+    },
+    "Deploy Your Own Server" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "部署您自己的服务器"
+          }
+        }
+      }
+    },
+    "Disconnect" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disconnect"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "断开连接"
+          }
+        }
+      }
+    },
+    "Disconnected" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disconnected"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未连接"
+          }
+        }
+      }
+    },
+    "Done" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完成"
+          }
+        }
+      }
+    },
+    "e.g. 0 8 * * *" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "e.g. 0 8 * * *"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例如 0 8 * * *"
+          }
+        }
+      }
+    },
+    "e.g. High Heart Rate" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "e.g. High Heart Rate"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "例如 心率过高"
+          }
+        }
+      }
+    },
+    "Enable to explore Hime with sample data. No server or HealthKit needed." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enable to explore Hime with sample data. No server or HealthKit needed."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开启后可使用示例数据探索 Hime,无需服务器或 HealthKit 授权。"
+          }
+        }
+      }
+    },
+    "Enter the WebSocket address of the Hime macOS server running on your Mac." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enter the WebSocket address of the Hime server running on your own device."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请输入运行在您的 Hime 服务器的 WebSocket 地址。"
+          }
+        }
+      }
+    },
+    "Enter your server address. Auth Token must match the API_AUTH_TOKEN in your server's .env file (leave empty for local use)." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "输入您的自建服务器地址。Auth Token必须与您的服务器.env文件里的API_AUTH_TOKEN相匹配"
+          }
+        }
+      }
+    },
+    "Event Triggers" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Event Triggers"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "事件触发器"
+          }
+        }
+      }
+    },
+    "Feature" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Feature"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "指标"
+          }
+        }
+      }
+    },
+    "Force Fetch All Data Now" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Force Fetch All Data Now"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "立即强制拉取全部数据"
+          }
+        }
+      }
+    },
+    "Get Started" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Get Started"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始使用"
+          }
+        }
+      }
+    },
+    "GitHub" : {
+      "shouldTranslate" : false
+    },
+    "Grant Access" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grant Access"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "授予访问权限"
+          }
+        }
+      }
+    },
+    "Granted" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已授权"
+          }
+        }
+      }
+    },
+    "Health Intelligence Management Engine" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Health Intelligence Management Engine"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "健康智能管理引擎"
+          }
+        }
+      }
+    },
+    "Health metrics from Apple Health (heart rate, HRV, SpO2, respiratory rate, sleep stages, steps, active energy, workouts, and related wearable data) and the text of your conversations with the AI agent." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "来自Apple Health的健康指标（例如心率，HRV, SpO2，呼吸频率，睡眠阶段，步数，活动能量，锻炼和相关穿戴设备数据）以及您和AI智能体的对话。"
+          }
+        }
+      }
+    },
+    "Health Report" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Health Report"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "健康报告"
+          }
+        }
+      }
+    },
+    "Health Summary" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Health Summary"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "健康概况"
+          }
+        }
+      }
+    },
+    "HealthKit" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HealthKit"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HealthKit"
+          }
+        }
+      }
+    },
+    "Hime" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime"
+          }
+        }
+      }
+    },
+    "Hime Home" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime Home"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime 主页"
+          }
+        }
+      }
+    },
+    "Hime is ready to go. You can change any of these settings later from the gear icon on the home screen." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime is ready to go. You can change any of these settings later from the gear icon on the home screen."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime 已准备就绪。您可以随时在主界面右上角的齿轮图标中修改这些设置。"
+          }
+        }
+      }
+    },
+    "Hime is ready. \n Long press the HiMeow in the home tab and the AI agent will start analysing health trends and pushing reports automatically." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime is ready. \n Long press the HiMeow in the home tab and the AI agent will start analysing health trends and pushing reports automatically."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime准备就绪！\n在主页长按您的HiMeow来唤醒智能体进行一次快速健康分析，并且自动推送健康分析报告"
+          }
+        }
+      }
+    },
+    "Hime is self-hosted, but your server forwards your data to a third-party AI service that you choose and configure. Please review the details below before continuing." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime是您自己搭建的服务，但是您自己搭建的服务器会按照您的选择和配置将数据传送到第三方AI服务。请在继续之前仔细阅读下面的细节。"
+          }
+        }
+      }
+    },
+    "Hime monitors 50+ health metrics from your Apple Watch in the background using HealthKit observer queries." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime monitors 50+ health metrics from your Apple Watch in the background using HealthKit observer queries."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime 在后台通过 HealthKit 观察查询持续监测来自您的 Apple Watch 的 50+ 项健康指标。"
+          }
+        }
+      }
+    },
+    "Hime Privacy Policy" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime隐私政策"
+          }
+        }
+      }
+    },
+    "Hime reads heart rate, HRV, blood oxygen, sleep, steps, workouts and related metrics from Apple Health so its agent can analyse trends. Hime never writes to Health and never uploads raw samples to third parties." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime reads heart rate, HRV, blood oxygen, sleep, steps, workouts and related metrics from Apple Health so its agent can analyse trends. Hime never writes to Health and never uploads raw samples to third parties."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime 从 Apple 健康读取心率、心率变异性、血氧、睡眠、步数、锻炼等指标以供智能体分析趋势。Hime 永远不会写入健康数据,也不会将原始样本上传给任何第三方。"
+          }
+        }
+      }
+    },
+    "Hime reads wearable health data from Apple Health so the AI agent can analyse trends. Hime never writes to Health and you have the full control on how and where AI process the data." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime reads wearable health data from Apple Health so the AI agent can analyse trends. Hime never writes to Health and you have the full control on how and where AI process the data."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime从Apple Health读取可穿戴健康数据，提供给智能体分析健康趋势。Hime从来不写入更改健康数据，由你自己完全控制在AI在哪里、如何处理你的健康数据。"
+          }
+        }
+      }
+    },
+    "Hime requires a self-hosted server. Follow the setup guide on GitHub to deploy your backend and connect this app." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime requires a self-hosted server. Follow the setup guide on GitHub to deploy your backend and connect this app."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime需要您自己搭建服务器。请按照Github上的指南来部署您的服务器并且连接到该app。"
+          }
+        }
+      }
+    },
+    "Hime runs on your own server. Follow the Hime GitHub Repo to deploy your own server." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime在您自己的服务器上运行。关注Hime Github仓库来部署服务器。"
+          }
+        }
+      }
+    },
+    "Hime sends Apple Health data and chat messages to the third-party AI provider configured on your server. Your explicit consent is required before any data is shared." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime基于您自己搭建的服务器的配置项，将Apple Health数据和智能体聊天记录发送到第三方AI供应商。在任何数据发送之前我们需要您的显式许可。"
+          }
+        }
+      }
+    },
+    "HiMeow is a AI digital health avatar that lives on your home screen and reflects your real-time health state. It's happy when you are well-rested, concerned when something looks off. \nLong-press HiMeow anytime for an instant health report and quick AI analysis." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HiMeow 是您的AI数字健康化身，它会驻留在您的Hime App主屏幕上，实时反映您的健康状况。当您休息充足时，它会感到高兴；当您的身体出现异常时，它会表示担忧。\n\n随时长按 HiMeow，即可查看即时健康报告和快速的 AI 分析。"
+          }
+        }
+      }
+    },
+    "How Hime shares your data with third-party AI" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime如何和第三方AI供应商分享您的数据"
+          }
+        }
+      }
+    },
+    "How it is sent" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "数据如何被发送"
+          }
+        }
+      }
+    },
+    "I Agree & Continue" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "我同意&继续"
+          }
+        }
+      }
+    },
+    "I understand and agree to share my data with the third-party AI service configured on my server." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "我理解并且同意将数据分享给我服务器上配置的第三方AI供应商"
+          }
+        }
+      }
+    },
+    "Infinite possibilities, one conversation away." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Infinite possibilities, one conversation away."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无限可能,只需一次对话。"
+          }
+        }
+      }
+    },
+    "Input" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Input"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "输入"
+          }
+        }
+      }
+    },
+    "Invalid address" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invalid address"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "地址无效"
+          }
+        }
+      }
+    },
+    "Invalid server address" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Invalid server address"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器地址无效"
+          }
+        }
+      }
+    },
+    "Last Analysis" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last Analysis"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近分析"
+          }
+        }
+      }
+    },
+    "Last Sync" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last Sync"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近同步"
+          }
+        }
+      }
+    },
+    "Last updated: 2026-04-15" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最后更新于：2026年4月15日"
+          }
+        }
+      }
+    },
+    "Let's get started" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Let's get started"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始吧"
+          }
+        }
+      }
+    },
+    "Mac Server" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac Server"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mac 服务器"
+          }
+        }
+      }
+    },
+    "Meet HiMeow" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "领养你的HiMeow"
+          }
+        }
+      }
+    },
+    "Meet Your Hime Cat" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Meet Your Hime Cat"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "领养你的HiMeow"
+          }
+        }
+      }
+    },
+    "min" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "min"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分钟"
+          }
+        }
+      }
+    },
+    "minutes" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "minutes"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分钟"
+          }
+        }
+      }
+    },
+    "New Scheduled Task" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New Scheduled Task"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建定时任务"
+          }
+        }
+      }
+    },
+    "New Trigger Rule" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "New Trigger Rule"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新建触发规则"
+          }
+        }
+      }
+    },
+    "No data" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No data"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无数据"
+          }
+        }
+      }
+    },
+    "No data collected yet" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No data collected yet"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未采集到任何数据"
+          }
+        }
+      }
+    },
+    "No data yet" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No data yet"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无数据"
+          }
+        }
+      }
+    },
+    "No messaging gateway is enabled on your server. Configure Telegram or Feishu by following the setup guide on GitHub." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "您的服务器没有启用消息Gateway服务。请根据Github指引配置telegram或者feishu gateway."
+          }
+        }
+      }
+    },
+    "No recent activity." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No recent activity."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无最近活动。"
+          }
+        }
+      }
+    },
+    "No reports yet" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No reports yet"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无报告"
+          }
+        }
+      }
+    },
+    "No scheduled tasks" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No scheduled tasks"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无定时任务"
+          }
+        }
+      }
+    },
+    "No trigger rules" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No trigger rules"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂无触发规则"
+          }
+        }
+      }
+    },
+    "Not configured" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not configured"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未配置"
+          }
+        }
+      }
+    },
+    "Not granted" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未授权"
+          }
+        }
+      }
+    },
+    "Off" : {
+      "shouldTranslate" : false
+    },
+    "OK" : {
+      "shouldTranslate" : false
+    },
+    "OK — connected to %@" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OK — connected to %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正常 — 已连接到 %@"
+          }
+        }
+      }
+    },
+    "On" : {
+      "shouldTranslate" : false
+    },
+    "Onboarding" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启动页"
+          }
+        }
+      }
+    },
+    "Optional" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可选"
+          }
+        }
+      }
+    },
+    "Output" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Output"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "输出"
+          }
+        }
+      }
+    },
+    "Overview" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Overview"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "概览"
+          }
+        }
+      }
+    },
+    "Pages" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pages"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "页面"
+          }
+        }
+      }
+    },
+    "Pause" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pause"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂停"
+          }
+        }
+      }
+    },
+    "Privacy Policy" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "隐私政策"
+          }
+        }
+      }
+    },
+    "Read the full privacy policy" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "阅读完整隐私政策"
+          }
+        }
+      }
+    },
+    "Read-only and on-device" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Read-only and on-device"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只读且在本地设备处理"
+          }
+        }
+      }
+    },
+    "Recent Collected Data" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recent Collected Data"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最近采集的数据"
+          }
+        }
+      }
+    },
+    "Records" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Records"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "记录数"
+          }
+        }
+      }
+    },
+    "Replay Onboarding" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Replay Onboarding"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新播放引导"
+          }
+        }
+      }
+    },
+    "Reports" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reports"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "报告"
+          }
+        }
+      }
+    },
+    "Resume" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resume"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "恢复"
+          }
+        }
+      }
+    },
+    "Review Disclosure" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "审阅披露文件"
+          }
+        }
+      }
+    },
+    "Revoke" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撤销"
+          }
+        }
+      }
+    },
+    "Revoke Consent" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撤销授权"
+          }
+        }
+      }
+    },
+    "Revoke consent to share data with third-party AI?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "是否撤销对于分享数据到第三方AI供应商的授权？"
+          }
+        }
+      }
+    },
+    "Rule Name" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rule Name"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "规则名称"
+          }
+        }
+      }
+    },
+    "Run Now" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Run Now"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "立即运行"
+          }
+        }
+      }
+    },
+    "Running" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Running"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "运行中"
+          }
+        }
+      }
+    },
+    "Schedule (Cron)" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Schedule (Cron)"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "计划(Cron 表达式)"
+          }
+        }
+      }
+    },
+    "Scheduled Tasks" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scheduled Tasks"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "定时任务"
+          }
+        }
+      }
+    },
+    "Scroll to read all sections, then agree below" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下滑以阅读全部章节，然后在下方确认您的授权"
+          }
+        }
+      }
+    },
+    "Section" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Section"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分区"
+          }
+        }
+      }
+    },
+    "Self-hosted, full control on your data" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "由您自己搭建服务器，拥有对数据的完整掌控权"
+          }
+        }
+      }
+    },
+    "Server" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器"
+          }
+        }
+      }
+    },
+    "Server Address" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server Address"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器地址"
+          }
+        }
+      }
+    },
+    "Server responded with an error" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server responded with an error"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器响应错误"
+          }
+        }
+      }
+    },
+    "Server returned an error" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Server returned an error"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器返回错误"
+          }
+        }
+      }
+    },
+    "Settings" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Settings"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "设置"
+          }
+        }
+      }
+    },
+    "Setup Guide" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配置指引"
+          }
+        }
+      }
+    },
+    "Setup Guide on GitHub" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Github指引"
+          }
+        }
+      }
+    },
+    "Skip" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Skip"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "跳过"
+          }
+        }
+      }
+    },
+    "Skip for now" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "暂时跳过"
+          }
+        }
+      }
+    },
+    "Start" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启动"
+          }
+        }
+      }
+    },
+    "Start the agent to generate health insights and reports." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start the agent to generate health insights and reports."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "启动智能体以生成健康洞察和报告。"
+          }
+        }
+      }
+    },
+    "Status" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Status"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "状态"
+          }
+        }
+      }
+    },
+    "Tasks" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tasks"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "任务"
+          }
+        }
+      }
+    },
+    "Test Again" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Test Again"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "再次测试"
+          }
+        }
+      }
+    },
+    "Test Connection" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Test Connection"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "测试连接"
+          }
+        }
+      }
+    },
+    "Test Server Connection" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Test Server Connection"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "测试服务器连接"
+          }
+        }
+      }
+    },
+    "Testing..." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Testing..."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "测试中…"
+          }
+        }
+      }
+    },
+    "The app will disconnect from your server and return to onboarding. You can re-grant consent there." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "app会断开服务器链接并重新回到初始引导界面，您可以重新确认是否要授权。"
+          }
+        }
+      }
+    },
+    "The third-party AI provider you configure on your server. Supported providers include OpenAI, Anthropic, Google (Gemini / Vertex), Mistral, Groq, DeepSeek, xAI, OpenRouter, Perplexity, Amazon Bedrock, Azure OpenAI, ZhipuAI, MiniMax, or a self-hosted vLLM endpoint. The provider you select will receive your data under its own terms and privacy policy." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "您在自己搭建的Hime服务器上所配置的第三方AI供应商。支持的AI供应商包括OpenAI, Anthropic, Google (Gemini / Vertex), Mistral, Groq, DeepSeek, xAI, OpenRouter, Perplexity, Amazon Bedrock, Azure OpenAI, ZhipuAI, MiniMax, 或者您自己通过vLLM部署的本地模型。您选择的第三方AI供应商会按照他们自己的条款和隐私政策接受您的数据。"
+          }
+        }
+      }
+    },
+    "Thinking" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thinking"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考"
+          }
+        }
+      }
+    },
+    "Threshold" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Threshold"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "阈值"
+          }
+        }
+      }
+    },
+    "Time" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "时间"
+          }
+        }
+      }
+    },
+    "Timing" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Timing"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "时间设置"
+          }
+        }
+      }
+    },
+    "Version" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Version"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "版本"
+          }
+        }
+      }
+    },
+    "Waiting for data..." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting for data..."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待数据中…"
+          }
+        }
+      }
+    },
+    "Wear your Apple Watch and sync data to see metrics here." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wear your Apple Watch and sync data to see metrics here."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "佩戴 Apple Watch 并同步数据,即可在此查看指标。"
+          }
+        }
+      }
+    },
+    "Welcome to Hime" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "欢迎使用Hime"
+          }
+        }
+      }
+    },
+    "What is sent" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "哪些数据被发送"
+          }
+        }
+      }
+    },
+    "Who it is sent to" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送给谁"
+          }
+        }
+      }
+    },
+    "Window" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Window"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "时间窗口"
+          }
+        }
+      }
+    },
+    "You can revoke consent any time in Settings → Data & Privacy. Revoking consent stops the app from sending data and returns you to onboarding." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "您可以在随时在设置->数据和隐私里撤销授权。撤销许可会停止数据传输并返回到开始引导界面。"
+          }
+        }
+      }
+    },
+    "You're All Set" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "You're All Set"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一切就绪"
+          }
+        }
+      }
+    },
+    "Your AI digital health avatar" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的AI数字健康化身"
+          }
+        }
+      }
+    },
+    "Your AI health companion. Hime uses an autonomous on-device agent to analyse Apple Watch data and surface insights you would otherwise miss." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your AI health companion. Hime uses an autonomous on-device agent to analyse Apple Watch data and surface insights you would otherwise miss."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的 AI 健康伙伴。Hime 使用设备端自主智能体分析 Apple Watch 数据,挖掘你可能错过的健康洞察。"
+          }
+        }
+      }
+    },
+    "Your control" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "您的控制"
+          }
+        }
+      }
+    },
+    "Your Hime cat reflects your current health state. Its expression and mood are driven by the agent in real time — happy when you are rested, concerned when something looks off." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your Hime cat reflects your current health state. Its expression and mood are driven by the agent in real time — happy when you are rested, concerned when something looks off."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的 Himeow会实时反映你当前的健康状态。它的表情和情绪由智能体实时驱动 — 当你休息充分时它会开心,当有异常时它会担忧。"
+          }
+        }
+      }
+    },
+    "Your Next Page Lives Here" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your Next Page Lives Here"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的下一个页面就在这里"
+          }
+        }
+      }
+    },
+    "Hime Privacy Policy" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime Privacy Policy"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime 隐私政策"
+          }
+        }
+      }
+    },
+    "Last updated: 2026-04-15" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Last updated: 2026-04-15"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "最后更新：2026-04-15"
+          }
+        }
+      }
+    },
+    "1. Who we are" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1. Who we are"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1. 我们是谁"
+          }
+        }
+      }
+    },
+    "Hime (Health Intelligence Management Engine) is an open-source, self-hosted AI health assistant. The iOS app is a client that communicates only to a backend server that you, the user, deploy and operate yourself. The app developer does not run any server, does not collect telemetry, and does not have access to your data." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime (Health Intelligence Management Engine) is an open-source, self-hosted AI health assistant. The iOS app is a client that communicates only to a backend server that you, the user, deploy and operate yourself. The app developer does not run any server, does not collect telemetry, and does not have access to your data."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime（Health Intelligence Management Engine）是一款开源、自托管的 AI 健康助手。本 iOS 应用只与你自己部署并运行的后端服务器通信。应用开发者不运营任何服务器，不收集遥测数据，也无法访问你的任何数据。"
+          }
+        }
+      }
+    },
+    "2. Data the app collects on your device" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "2. Data the app collects on your device"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "2. 应用在你设备上收集的数据"
+          }
+        }
+      }
+    },
+    "With your permission, the app reads health and fitness data from Apple HealthKit, including but not limited to: heart rate, heart rate variability (HRV), blood oxygen (SpO2), respiratory rate, body temperature, steps, distance, active and basal energy, exercise minutes, stand hours, workouts, sleep analysis (in-bed / core / deep / REM / awake), mindful sessions, and related wearable measurements. The app also stores the text of your conversations with the AI agent and the configuration you enter (server address, optional auth token, app preferences). The app does NOT read contacts, photos, location, microphone, camera, or any other personal data outside HealthKit." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "With your permission, the app reads health and fitness data from Apple HealthKit, including but not limited to: heart rate, heart rate variability (HRV), blood oxygen (SpO2), respiratory rate, body temperature, steps, distance, active and basal energy, exercise minutes, stand hours, workouts, sleep analysis (in-bed / core / deep / REM / awake), mindful sessions, and related wearable measurements. The app also stores the text of your conversations with the AI agent and the configuration you enter (server address, optional auth token, app preferences). The app does NOT read contacts, photos, location, microphone, camera, or any other personal data outside HealthKit."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在你授权后，应用会通过 Apple HealthKit 读取健康和运动数据，包括但不限于：心率、心率变异性（HRV）、血氧（SpO2）、呼吸频率、体温、步数、距离、活动与基础能量、锻炼时长、站立时长、训练记录、睡眠分析（在床 / 核心 / 深度 / REM / 清醒）、正念时长及相关可穿戴测量值。应用还会存储你与 AI 智能体的对话文本，以及你输入的配置信息（服务器地址、可选的鉴权令牌、应用偏好）。应用不会读取通讯录、照片、位置、麦克风、摄像头或 HealthKit 之外的任何其他个人数据。"
+          }
+        }
+      }
+    },
+    "3. How the app collects data" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "3. How the app collects data"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "3. 应用如何收集数据"
+          }
+        }
+      }
+    },
+    "Health data is read from Apple HealthKit using HealthKit observer queries that the user authorises on the \"Apple Health Access\" onboarding page. The app never writes to HealthKit. Conversation text is provided directly by the user when they message the AI agent. Configuration is entered manually by the user." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Health data is read from Apple HealthKit using HealthKit observer queries that the user authorises on the \"Apple Health Access\" onboarding page. The app never writes to HealthKit. Conversation text is provided directly by the user when they message the AI agent. Configuration is entered manually by the user."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "健康数据通过 HealthKit 的观察者查询（observer queries）读取，你需在「Apple 健康访问」引导页授权。应用从不向 HealthKit 写入数据。对话文本由你在与 AI 智能体交流时直接提供。配置信息由你手动输入。"
+          }
+        }
+      }
+    },
+    "4. How the app uses data" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "4. How the app uses data"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "4. 应用如何使用数据"
+          }
+        }
+      }
+    },
+    "Collected data is forwarded to the Hime backend server that you deploy and configure in the app's Settings. Your server stores the data locally and uses it to: (a) compute statistics for the on-device dashboard; (b) generate AI-driven health reports and chat replies; (c) trigger health alerts based on rules you define. The app developer never receives any of your data." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Collected data is forwarded to the Hime backend server that you deploy and configure in the app's Settings. Your server stores the data locally and uses it to: (a) compute statistics for the on-device dashboard; (b) generate AI-driven health reports and chat replies; (c) trigger health alerts based on rules you define. The app developer never receives any of your data."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收集到的数据会转发至你在应用设置中配置的 Hime 后端服务器。你的服务器将数据存储在本地，并用于：(a) 计算本机仪表盘的统计信息；(b) 生成 AI 健康报告与聊天回复；(c) 依据你定义的规则触发健康提醒。应用开发者永远不会接收你的任何数据。"
+          }
+        }
+      }
+    },
+    "5. Sharing with third-party AI services" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "5. Sharing with third-party AI services"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "5. 与第三方 AI 服务的共享"
+          }
+        }
+      }
+    },
+    "Your Hime server makes API calls to a third-party Large Language Model (LLM) provider that you select via the DEFAULT_LLM_PROVIDER setting on your server. Supported providers include: OpenAI, Anthropic, Google (Gemini / Vertex AI), Mistral, Groq, DeepSeek, xAI, OpenRouter, Perplexity, Amazon Bedrock, Azure OpenAI, ZhipuAI, MiniMax, or a self-hosted vLLM endpoint.\n\nWhen the AI agent runs, the following may be sent to the chosen provider: numeric health metrics (with timestamps and units), summaries derived from your data, the text of your messages, and prompts/instructions assembled by the agent. Each provider processes the data under its own terms of service and privacy policy. You can review the providers' policies on their respective websites. We require you to confirm that the provider you choose offers data protection equal to or stronger than what is described in this policy.\n\nHime does not share data with any other third party (no analytics SDKs, no advertising networks, no crash-reporting services that exfiltrate data)." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Your Hime server makes API calls to a third-party Large Language Model (LLM) provider that you select via the DEFAULT_LLM_PROVIDER setting on your server. Supported providers include: OpenAI, Anthropic, Google (Gemini / Vertex AI), Mistral, Groq, DeepSeek, xAI, OpenRouter, Perplexity, Amazon Bedrock, Azure OpenAI, ZhipuAI, MiniMax, or a self-hosted vLLM endpoint.\n\nWhen the AI agent runs, the following may be sent to the chosen provider: numeric health metrics (with timestamps and units), summaries derived from your data, the text of your messages, and prompts/instructions assembled by the agent. Each provider processes the data under its own terms of service and privacy policy. You can review the providers' policies on their respective websites. We require you to confirm that the provider you choose offers data protection equal to or stronger than what is described in this policy.\n\nHime does not share data with any other third party (no analytics SDKs, no advertising networks, no crash-reporting services that exfiltrate data)."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的 Hime 服务器会根据你在服务器上通过 DEFAULT_LLM_PROVIDER 配置的选项，调用第三方大语言模型（LLM）提供商的 API。支持的提供商包括：OpenAI、Anthropic、Google（Gemini / Vertex AI）、Mistral、Groq、DeepSeek、xAI、OpenRouter、Perplexity、Amazon Bedrock、Azure OpenAI、智谱 AI（ZhipuAI）、MiniMax，或自托管的 vLLM 终端。\n\n当 AI 智能体运行时，可能会向所选提供商发送：带时间戳与单位的数值健康指标、基于你数据生成的摘要、你的消息文本、以及智能体构造的提示词/指令。每个提供商会依据其自身的服务条款与隐私政策处理数据，你可在各提供商官网查阅其政策。我们要求你确认所选提供商提供的数据保护不低于本政策所述标准。\n\nHime 不与任何其他第三方共享数据（不使用分析 SDK、不使用广告网络、不使用会外传数据的崩溃上报服务）。"
+          }
+        }
+      }
+    },
+    "6. Data storage and retention" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "6. Data storage and retention"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "6. 数据存储与留存"
+          }
+        }
+      }
+    },
+    "Data is stored on your iPhone (HealthKit-derived caches, conversation history, configuration in UserDefaults) and on the Hime server you operate (per-user SQLite databases, agent memory, generated reports). Retention is fully under your control: deleting the app removes all on-device data; resetting your server wipes all server-side data. Third-party AI providers may retain prompt/response logs according to their own policies." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Data is stored on your iPhone (HealthKit-derived caches, conversation history, configuration in UserDefaults) and on the Hime server you operate (per-user SQLite databases, agent memory, generated reports). Retention is fully under your control: deleting the app removes all on-device data; resetting your server wipes all server-side data. Third-party AI providers may retain prompt/response logs according to their own policies."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "数据存储在你的 iPhone 上（HealthKit 衍生缓存、对话历史、存于 UserDefaults 的配置），以及你运营的 Hime 服务器上（按用户划分的 SQLite 数据库、智能体记忆、生成的报告）。留存期限完全由你控制：删除应用即可清除所有本机数据；重置服务器即可清除所有服务器端数据。第三方 AI 提供商可能会按其自身政策留存提示词/响应日志。"
+          }
+        }
+      }
+    },
+    "7. Your consent and your controls" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "7. Your consent and your controls"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "7. 你的同意与控制"
+          }
+        }
+      }
+    },
+    "Before any data is shared with a third-party AI service, the app requires your explicit consent on the \"AI Data Sharing\" onboarding page. You can withdraw consent at any time in Settings → Data & Privacy → Revoke Consent. Revoking consent disconnects the app from your server and returns you to onboarding; no data is sent until you re-consent. You can also revoke HealthKit access in the iOS Settings app at any time." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Before any data is shared with a third-party AI service, the app requires your explicit consent on the \"AI Data Sharing\" onboarding page. You can withdraw consent at any time in Settings → Data & Privacy → Revoke Consent. Revoking consent disconnects the app from your server and returns you to onboarding; no data is sent until you re-consent. You can also revoke HealthKit access in the iOS Settings app at any time."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在任何数据被共享给第三方 AI 服务之前，应用会在「AI 数据共享」引导页要求你明确同意。你可以随时在「设置 → 数据与隐私 → 撤回同意」中撤回授权。撤回后，应用会断开与服务器的连接并返回引导流程，在你再次同意前不会发送任何数据。你也可以随时在 iOS 系统设置中撤销 HealthKit 访问权限。"
+          }
+        }
+      }
+    },
+    "8. Security" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "8. Security"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "8. 安全"
+          }
+        }
+      }
+    },
+    "Communication between the app and your server uses HTTPS when you configure an HTTPS server URL. An optional bearer token (API_AUTH_TOKEN) authenticates every request when set. Server-side, dynamically generated personalised pages run under a strict Content Security Policy and a sandbox that blocks dangerous imports. SQL accepted from the agent is validated to prevent destructive statements against health data." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Communication between the app and your server uses HTTPS when you configure an HTTPS server URL. An optional bearer token (API_AUTH_TOKEN) authenticates every request when set. Server-side, dynamically generated personalised pages run under a strict Content Security Policy and a sandbox that blocks dangerous imports. SQL accepted from the agent is validated to prevent destructive statements against health data."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当你配置 HTTPS 服务器地址时，应用与服务器之间通过 HTTPS 通信。设置可选的 Bearer 令牌（API_AUTH_TOKEN）后，每次请求都会进行鉴权。在服务器端，动态生成的个性化页面运行在严格的内容安全策略（CSP）与屏蔽危险导入的沙箱中。智能体提交的 SQL 会经过校验，以防止对健康数据执行破坏性语句。"
+          }
+        }
+      }
+    },
+    "9. Children" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "9. Children"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "9. 儿童"
+          }
+        }
+      }
+    },
+    "Hime is not directed to children under 13. Do not use the app if you are under the minimum age of digital consent in your jurisdiction." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime is not directed to children under 13. Do not use the app if you are under the minimum age of digital consent in your jurisdiction."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime 不面向 13 岁以下的儿童。如果你未达到所在司法辖区的数字同意最低年龄，请勿使用本应用。"
+          }
+        }
+      }
+    },
+    "10. Changes to this policy" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "10. Changes to this policy"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "10. 本政策的变更"
+          }
+        }
+      }
+    },
+    "If material changes are made, the in-app version of this policy will be updated and the app will request fresh consent on next launch." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "If material changes are made, the in-app version of this policy will be updated and the app will request fresh consent on next launch."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "若本政策发生实质性变更，应用内的版本将同步更新，并在下次启动时请求你重新同意。"
+          }
+        }
+      }
+    },
+    "11. Contact" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "11. Contact"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "11. 联系方式"
+          }
+        }
+      }
+    },
+    "Questions about this policy or the project can be raised at https://github.com/thinkwee/Hime/issues." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Questions about this policy or the project can be raised at https://github.com/thinkwee/Hime/issues."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有关本政策或本项目的问题，可在 https://github.com/thinkwee/Hime/issues 提出。"
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

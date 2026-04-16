@@ -1,0 +1,78 @@
+# HIME — Docker Compose stack
+#
+# Quick start:
+#   cp .env.example .env       # then fill in at least one LLM API key
+#   docker compose up --build
+#   open http://localhost:5173
+#
+# Volume layout:
+#   watch-data — shared watch.db between watch exporter and backend
+#   ./data     — health DBs (SQLite)
+#   ./memory   — agent memory DBs, state JSON, last config
+#   ./logs     — backend / watch exporter logs
+#
+# These dirs are mounted into the backend container so your data survives
+# container restarts and lives on the host filesystem.
+
+volumes:
+  watch-data:
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: hime-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: "8000"
+    volumes:
+      - ./data:/app/data
+      - ./memory:/app/memory
+      - ./logs:/app/logs
+      - ./prompts:/app/prompts
+      - watch-data:/app/ios/Server
+    ports:
+      - "8000:8000"
+    depends_on:
+      watch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: hime-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  watch:
+    build:
+      context: .
+      dockerfile: Dockerfile.watch
+    container_name: hime-watch-exporter
+    restart: unless-stopped
+    volumes:
+      - watch-data:/app/watch-data
+    command: ["python", "ios/Server/server.py", "--db", "/app/watch-data/watch.db"]
+    ports:
+      - "8765:8765"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/ping', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s

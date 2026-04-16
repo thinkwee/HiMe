@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --primary-50: 255, 248, 237;
+    --primary-100: 255, 242, 219;
+    --primary-500: 212, 144, 46;
+    --primary-600: 199, 128, 51;
+    --primary-700: 166, 106, 40;
+  }
+}
+
+body {
+  background-color: #F9F5F0;
+  @apply text-gray-900;
+}
+
+.card {
+  @apply bg-white rounded-lg shadow-sm border border-gray-200 p-6;
+}
+
+.btn {
+  @apply px-4 py-2 rounded-lg font-medium transition-colors duration-200;
+}
+
+.btn-primary {
+  @apply btn bg-primary-600 text-white hover:bg-primary-700;
+}
+
+.btn-secondary {
+  @apply btn bg-gray-200 text-gray-800 hover:bg-gray-300;
+}
+
+.btn-danger {
+  @apply btn bg-red-600 text-white hover:bg-red-700;
+}
+
+.input {
+  @apply w-full border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 px-3 py-2;
+}
+
+.select {
+  @apply input;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.5s ease-out forwards;
+}

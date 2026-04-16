@@ -1,0 +1,23 @@
+{
+  "gateway": {
+    "no_gateway_available": "No messaging gateway available. Cannot send reply.",
+    "no_chat_id": "No chat_id available. Cannot send reply.",
+    "send_failed": "Failed to send message. Check backend logs for the provider error."
+  },
+  "reply": {
+    "fact_blocked": "Message blocked by fact verification ({status}): {detail}. Use sql/code tools to query data before making claims."
+  },
+  "callback": {
+    "cannot_edit_message": "Cannot edit message",
+    "unknown_action": "Unknown action",
+    "error_retrieving_evidence": "Error retrieving evidence",
+    "evidence_not_found": "Evidence not found",
+    "show_evidence_failed": "Failed to show evidence",
+    "original_message_not_found": "Original message not found",
+    "original_text_unavailable": "Original text unavailable",
+    "restore_failed": "Failed to restore message"
+  },
+  "card": {
+    "evidence_header": "Evidence"
+  }
+}

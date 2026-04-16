@@ -1,0 +1,23 @@
+# syntax=docker/dockerfile:1.6
+# ---------- builder ----------
+FROM node:20-alpine AS builder
+
+WORKDIR /build
+
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm ci
+
+COPY frontend/ ./
+RUN npm run build
+
+# ---------- runtime (nginx serves the static SPA) ----------
+FROM nginx:1.27-alpine AS runtime
+
+RUN rm /etc/nginx/conf.d/default.conf
+COPY docker/nginx.conf /etc/nginx/conf.d/hime.conf
+
+COPY --from=builder /build/dist /usr/share/nginx/html
+
+EXPOSE 5173
+
+CMD ["nginx", "-g", "daemon off;"]
