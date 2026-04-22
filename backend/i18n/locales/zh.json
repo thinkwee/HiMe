@@ -1,0 +1,23 @@
+{
+  "gateway": {
+    "no_gateway_available": "没有可用的消息网关，无法发送回复。",
+    "no_chat_id": "缺少 chat_id，无法发送回复。",
+    "send_failed": "消息发送失败，请查看后端日志中的服务商错误。"
+  },
+  "reply": {
+    "fact_blocked": "消息未通过事实核验（{status}）：{detail}。请先使用 sql/code 工具查询数据后再作出结论。"
+  },
+  "callback": {
+    "cannot_edit_message": "无法编辑该消息",
+    "unknown_action": "未知操作",
+    "error_retrieving_evidence": "获取证据时出错",
+    "evidence_not_found": "未找到证据",
+    "show_evidence_failed": "展示证据失败",
+    "original_message_not_found": "未找到原始消息",
+    "original_text_unavailable": "原始内容不可用",
+    "restore_failed": "恢复消息失败"
+  },
+  "card": {
+    "evidence_header": "证据"
+  }
+}

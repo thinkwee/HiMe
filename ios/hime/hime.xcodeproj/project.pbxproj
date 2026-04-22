@@ -1,0 +1,895 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0141B1F42F856858003CA206 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0141B1F32F856858003CA206 /* WidgetKit.framework */; };
+		0141B1F62F856858003CA206 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0141B1F52F856858003CA206 /* SwiftUI.framework */; };
+		0141B2052F85685A003CA206 /* HimeWidgetsExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 0141B1F12F856858003CA206 /* HimeWidgetsExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		0141B2102F856881003CA206 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0141B1F32F856858003CA206 /* WidgetKit.framework */; };
+		0141B2112F856881003CA206 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0141B1F52F856858003CA206 /* SwiftUI.framework */; };
+		0141B21E2F856882003CA206 /* HimeWatchWidgetsExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 0141B20F2F856881003CA206 /* HimeWatchWidgetsExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		018DDAAE2F6F3F4200341A6F /* himewatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 018DDAA42F6F3F4100341A6F /* himewatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		0141B2032F85685A003CA206 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 014762EE2F64D5A800C8B14E /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0141B1F02F856858003CA206;
+			remoteInfo = HimeWidgetsExtension;
+		};
+		0141B21C2F856882003CA206 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 014762EE2F64D5A800C8B14E /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0141B20E2F856881003CA206;
+			remoteInfo = HimeWatchWidgetsExtension;
+		};
+		018DDAAC2F6F3F4200341A6F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 014762EE2F64D5A800C8B14E /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 018DDAA32F6F3F4100341A6F;
+			remoteInfo = himewatch;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		0141B2062F85685A003CA206 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				0141B2052F85685A003CA206 /* HimeWidgetsExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		0141B2232F856882003CA206 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				0141B21E2F856882003CA206 /* HimeWatchWidgetsExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		018DDAAF2F6F3F4200341A6F /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				018DDAAE2F6F3F4200341A6F /* himewatch.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		0141B1F12F856858003CA206 /* HimeWidgetsExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = HimeWidgetsExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		0141B1F32F856858003CA206 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
+		0141B1F52F856858003CA206 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+		0141B20F2F856881003CA206 /* HimeWatchWidgetsExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = HimeWatchWidgetsExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		0141B2242F85913F003CA206 /* HimeWidgetsExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = HimeWidgetsExtension.entitlements; sourceTree = "<group>"; };
+		0141B2252F859191003CA206 /* HimeWatchWidgetsExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = HimeWatchWidgetsExtension.entitlements; sourceTree = "<group>"; };
+		014762F62F64D5A800C8B14E /* hime.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = hime.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		018DDAA42F6F3F4100341A6F /* himewatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = himewatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		01CFCF010000000000C8B14E /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config.xcconfig; sourceTree = "<group>"; };
+		01CFCF020000000000C8B14E /* Config.xcconfig.template */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config.xcconfig.template; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		EE00000000000000000000A1 /* Exceptions for "hime" folder in "hime" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 014762F52F64D5A800C8B14E /* hime */;
+		};
+		EE00000000000000000000A2 /* Exceptions for "HimeWidgets" folder in "HimeWidgetsExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 0141B1F02F856858003CA206 /* HimeWidgetsExtension */;
+		};
+		EE00000000000000000000A3 /* Exceptions for "HimeWatchWidgets" folder in "HimeWatchWidgetsExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 0141B20E2F856881003CA206 /* HimeWatchWidgetsExtension */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		0141B1F72F856858003CA206 /* HimeWidgets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				EE00000000000000000000A2 /* Exceptions for "HimeWidgets" folder in "HimeWidgetsExtension" target */,
+			);
+			path = HimeWidgets;
+			sourceTree = "<group>";
+		};
+		0141B2122F856881003CA206 /* HimeWatchWidgets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				EE00000000000000000000A3 /* Exceptions for "HimeWatchWidgets" folder in "HimeWatchWidgetsExtension" target */,
+			);
+			path = HimeWatchWidgets;
+			sourceTree = "<group>";
+		};
+		014762F82F64D5A800C8B14E /* hime */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				EE00000000000000000000A1 /* Exceptions for "hime" folder in "hime" target */,
+			);
+			path = hime;
+			sourceTree = "<group>";
+		};
+		018DDAA52F6F3F4100341A6F /* himewatch */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = himewatch;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		0141B1EE2F856858003CA206 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0141B1F62F856858003CA206 /* SwiftUI.framework in Frameworks */,
+				0141B1F42F856858003CA206 /* WidgetKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		0141B20C2F856881003CA206 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0141B2112F856881003CA206 /* SwiftUI.framework in Frameworks */,
+				0141B2102F856881003CA206 /* WidgetKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		014762F32F64D5A800C8B14E /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		018DDAA12F6F3F4100341A6F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		0141B1F22F856858003CA206 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				0141B1F32F856858003CA206 /* WidgetKit.framework */,
+				0141B1F52F856858003CA206 /* SwiftUI.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		014762ED2F64D5A800C8B14E = {
+			isa = PBXGroup;
+			children = (
+				0141B2252F859191003CA206 /* HimeWatchWidgetsExtension.entitlements */,
+				0141B2242F85913F003CA206 /* HimeWidgetsExtension.entitlements */,
+				01CFCF010000000000C8B14E /* Config.xcconfig */,
+				01CFCF020000000000C8B14E /* Config.xcconfig.template */,
+				014762F82F64D5A800C8B14E /* hime */,
+				018DDAA52F6F3F4100341A6F /* himewatch */,
+				0141B1F72F856858003CA206 /* HimeWidgets */,
+				0141B2122F856881003CA206 /* HimeWatchWidgets */,
+				0141B1F22F856858003CA206 /* Frameworks */,
+				014762F72F64D5A800C8B14E /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		014762F72F64D5A800C8B14E /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				014762F62F64D5A800C8B14E /* hime.app */,
+				018DDAA42F6F3F4100341A6F /* himewatch.app */,
+				0141B1F12F856858003CA206 /* HimeWidgetsExtension.appex */,
+				0141B20F2F856881003CA206 /* HimeWatchWidgetsExtension.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		0141B1F02F856858003CA206 /* HimeWidgetsExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0141B2092F85685A003CA206 /* Build configuration list for PBXNativeTarget "HimeWidgetsExtension" */;
+			buildPhases = (
+				0141B1ED2F856858003CA206 /* Sources */,
+				0141B1EE2F856858003CA206 /* Frameworks */,
+				0141B1EF2F856858003CA206 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				0141B1F72F856858003CA206 /* HimeWidgets */,
+			);
+			name = HimeWidgetsExtension;
+			packageProductDependencies = (
+			);
+			productName = HimeWidgetsExtension;
+			productReference = 0141B1F12F856858003CA206 /* HimeWidgetsExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		0141B20E2F856881003CA206 /* HimeWatchWidgetsExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 0141B21F2F856882003CA206 /* Build configuration list for PBXNativeTarget "HimeWatchWidgetsExtension" */;
+			buildPhases = (
+				0141B20B2F856881003CA206 /* Sources */,
+				0141B20C2F856881003CA206 /* Frameworks */,
+				0141B20D2F856881003CA206 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				0141B2122F856881003CA206 /* HimeWatchWidgets */,
+			);
+			name = HimeWatchWidgetsExtension;
+			packageProductDependencies = (
+			);
+			productName = HimeWatchWidgetsExtension;
+			productReference = 0141B20F2F856881003CA206 /* HimeWatchWidgetsExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		014762F52F64D5A800C8B14E /* hime */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 014763012F64D5AA00C8B14E /* Build configuration list for PBXNativeTarget "hime" */;
+			buildPhases = (
+				014762F22F64D5A800C8B14E /* Sources */,
+				014762F32F64D5A800C8B14E /* Frameworks */,
+				014762F42F64D5A800C8B14E /* Resources */,
+				018DDAAF2F6F3F4200341A6F /* Embed Watch Content */,
+				0141B2062F85685A003CA206 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				018DDAAD2F6F3F4200341A6F /* PBXTargetDependency */,
+				0141B2042F85685A003CA206 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				014762F82F64D5A800C8B14E /* hime */,
+			);
+			name = hime;
+			packageProductDependencies = (
+			);
+			productName = hime;
+			productReference = 014762F62F64D5A800C8B14E /* hime.app */;
+			productType = "com.apple.product-type.application";
+		};
+		018DDAA32F6F3F4100341A6F /* himewatch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 018DDAB22F6F3F4200341A6F /* Build configuration list for PBXNativeTarget "himewatch" */;
+			buildPhases = (
+				018DDAA02F6F3F4100341A6F /* Sources */,
+				018DDAA12F6F3F4100341A6F /* Frameworks */,
+				018DDAA22F6F3F4100341A6F /* Resources */,
+				0141B2232F856882003CA206 /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				0141B21D2F856882003CA206 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				018DDAA52F6F3F4100341A6F /* himewatch */,
+			);
+			name = himewatch;
+			packageProductDependencies = (
+			);
+			productName = himewatch;
+			productReference = 018DDAA42F6F3F4100341A6F /* himewatch.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		014762EE2F64D5A800C8B14E /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2630;
+				LastUpgradeCheck = 2630;
+				TargetAttributes = {
+					0141B1F02F856858003CA206 = {
+						CreatedOnToolsVersion = 26.3;
+					};
+					0141B20E2F856881003CA206 = {
+						CreatedOnToolsVersion = 26.3;
+					};
+					014762F52F64D5A800C8B14E = {
+						CreatedOnToolsVersion = 26.3;
+					};
+					018DDAA32F6F3F4100341A6F = {
+						CreatedOnToolsVersion = 26.3;
+					};
+				};
+			};
+			buildConfigurationList = 014762F12F64D5A800C8B14E /* Build configuration list for PBXProject "hime" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+				"zh-Hans",
+			);
+			mainGroup = 014762ED2F64D5A800C8B14E;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 014762F72F64D5A800C8B14E /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				014762F52F64D5A800C8B14E /* hime */,
+				018DDAA32F6F3F4100341A6F /* himewatch */,
+				0141B1F02F856858003CA206 /* HimeWidgetsExtension */,
+				0141B20E2F856881003CA206 /* HimeWatchWidgetsExtension */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		0141B1EF2F856858003CA206 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		0141B20D2F856881003CA206 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		014762F42F64D5A800C8B14E /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		018DDAA22F6F3F4100341A6F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		0141B1ED2F856858003CA206 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		0141B20B2F856881003CA206 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		014762F22F64D5A800C8B14E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		018DDAA02F6F3F4100341A6F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		0141B2042F85685A003CA206 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 0141B1F02F856858003CA206 /* HimeWidgetsExtension */;
+			targetProxy = 0141B2032F85685A003CA206 /* PBXContainerItemProxy */;
+		};
+		0141B21D2F856882003CA206 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 0141B20E2F856881003CA206 /* HimeWatchWidgetsExtension */;
+			targetProxy = 0141B21C2F856882003CA206 /* PBXContainerItemProxy */;
+		};
+		018DDAAD2F6F3F4200341A6F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 018DDAA32F6F3F4100341A6F /* himewatch */;
+			targetProxy = 018DDAAC2F6F3F4200341A6F /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		0141B2072F85685A003CA206 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = HimeWidgetsExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = HimeWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = HimeWidgets;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BUNDLE_ID_PREFIX).hime.HimeWidgets";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		0141B2082F85685A003CA206 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = HimeWidgetsExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = HimeWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = HimeWidgets;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BUNDLE_ID_PREFIX).hime.HimeWidgets";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		0141B2202F856882003CA206 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = HimeWatchWidgetsExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = HimeWatchWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = HimeWatchWidgets;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BUNDLE_ID_PREFIX).hime.watchkitapp.HimeWatchWidgets";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 11.6;
+			};
+			name = Debug;
+		};
+		0141B2212F856882003CA206 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = HimeWatchWidgetsExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = HimeWatchWidgets/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = HimeWatchWidgets;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BUNDLE_ID_PREFIX).hime.watchkitapp.HimeWatchWidgets";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 11.6;
+			};
+			name = Release;
+		};
+		014762FF2F64D5AA00C8B14E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 01CFCF010000000000C8B14E /* Config.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		014763002F64D5AA00C8B14E /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 01CFCF010000000000C8B14E /* Config.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		014763022F64D5AA00C8B14E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = hime/hime.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = hime/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = HimeApp;
+				"INFOPLIST_KEY_CFBundleDisplayName[sdk=iphoneos*]" = HimeApp;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Hime reads your heart rate, sleep, blood oxygen, HRV, steps, workouts, and related Apple Watch health metrics so the on-device AI agent can analyze patterns, detect anomalies, and provide personalized health insights. Your health data stays on your device and your self-hosted Hime server - it is never sold or used for advertising.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Hime does not write data back to Apple Health. This description is required because the app links the HealthKit framework. All analysis is read-only and runs on your device and your self-hosted Hime server.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BUNDLE_ID_PREFIX).hime";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		014763032F64D5AA00C8B14E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = hime/hime.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = hime/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = HimeApp;
+				"INFOPLIST_KEY_CFBundleDisplayName[sdk=iphoneos*]" = HimeApp;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Hime reads your heart rate, sleep, blood oxygen, HRV, steps, workouts, and related Apple Watch health metrics so the on-device AI agent can analyze patterns, detect anomalies, and provide personalized health insights. Your health data stays on your device and your self-hosted Hime server - it is never sold or used for advertising.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Hime does not write data back to Apple Health. This description is required because the app links the HealthKit framework. All analysis is read-only and runs on your device and your self-hosted Hime server.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BUNDLE_ID_PREFIX).hime";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		018DDAB02F6F3F4200341A6F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
+				CODE_SIGN_ENTITLEMENTS = himewatch/himeWatch.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = himeWatch;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Hime on Apple Watch reads heart rate, HRV, SpO2, respiratory rate, sleep, steps, active energy, and workout data so the companion iPhone app and its on-device AI agent can analyze trends and surface personalized health insights. Your health data stays on your device and your self-hosted Hime server - it is never sold or used for advertising.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Hime on Apple Watch does not write data back to Apple Health. This description is required because the app links the HealthKit framework. All analysis is read-only and runs on your device and your self-hosted Hime server.";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "$(BUNDLE_ID_PREFIX).hime";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BUNDLE_ID_PREFIX).hime.watchkitapp";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 11.6;
+			};
+			name = Debug;
+		};
+		018DDAB12F6F3F4200341A6F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
+				CODE_SIGN_ENTITLEMENTS = himewatch/himeWatch.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = himeWatch;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "Hime on Apple Watch reads heart rate, HRV, SpO2, respiratory rate, sleep, steps, active energy, and workout data so the companion iPhone app and its on-device AI agent can analyze trends and surface personalized health insights. Your health data stays on your device and your self-hosted Hime server - it is never sold or used for advertising.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "Hime on Apple Watch does not write data back to Apple Health. This description is required because the app links the HealthKit framework. All analysis is read-only and runs on your device and your self-hosted Hime server.";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = "$(BUNDLE_ID_PREFIX).hime";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BUNDLE_ID_PREFIX).hime.watchkitapp";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 11.6;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		0141B2092F85685A003CA206 /* Build configuration list for PBXNativeTarget "HimeWidgetsExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0141B2072F85685A003CA206 /* Debug */,
+				0141B2082F85685A003CA206 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		0141B21F2F856882003CA206 /* Build configuration list for PBXNativeTarget "HimeWatchWidgetsExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				0141B2202F856882003CA206 /* Debug */,
+				0141B2212F856882003CA206 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		014762F12F64D5A800C8B14E /* Build configuration list for PBXProject "hime" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				014762FF2F64D5AA00C8B14E /* Debug */,
+				014763002F64D5AA00C8B14E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		014763012F64D5AA00C8B14E /* Build configuration list for PBXNativeTarget "hime" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				014763022F64D5AA00C8B14E /* Debug */,
+				014763032F64D5AA00C8B14E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		018DDAB22F6F3F4200341A6F /* Build configuration list for PBXNativeTarget "himewatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				018DDAB02F6F3F4200341A6F /* Debug */,
+				018DDAB12F6F3F4200341A6F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 014762EE2F64D5A800C8B14E /* Project object */;
+}

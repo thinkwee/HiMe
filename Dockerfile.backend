@@ -1,0 +1,53 @@
+# syntax=docker/dockerfile:1.6
+# ---------- builder ----------
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+# System deps needed by some Python packages (numpy, pandas, etc.)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        gcc \
+        && rm -rf /var/lib/apt/lists/*
+
+COPY backend/requirements.txt ./
+RUN pip install --upgrade pip && \
+    pip install --prefix=/install --no-cache-dir -r requirements.txt
+
+# ---------- runtime ----------
+FROM python:3.11-slim AS runtime
+
+# Runtime C libraries and gosu for privilege de-escalation
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    gosu \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root user for safety (entrypoint drops to this user via gosu)
+RUN groupadd --system --gid 1500 hime && useradd --system --uid 1500 --gid 1500 --home-dir /app hime
+
+WORKDIR /app
+
+# Bring over installed packages from the builder stage
+COPY --from=builder /install /usr/local
+
+# Application code
+COPY backend/ ./backend/
+COPY prompts/ ./prompts/
+COPY skills/ ./skills/
+COPY data/personalised_pages/_shared/ ./data/personalised_pages/_shared/
+
+# Entrypoint that fixes bind-mount permissions then drops to hime
+COPY docker/entrypoint-backend.sh /usr/local/bin/entrypoint.sh
+
+# Writable runtime dirs (mounted as volumes in compose)
+RUN mkdir -p /app/data/data_stores /app/data/personalised_pages /app/memory /app/logs /app/ios/Server && \
+    chown -R hime:hime /app
+
+EXPOSE 8000
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+ENTRYPOINT ["entrypoint.sh"]
+CMD ["python", "-m", "backend.main"]

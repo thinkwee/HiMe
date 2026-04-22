@@ -1,0 +1,60 @@
+{
+  "name": "hime-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Frontend dashboard for HiMe — Health Intelligence Management Engine",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/thinkwee/HiMe.git",
+    "directory": "frontend"
+  },
+  "homepage": "https://github.com/thinkwee/HiMe",
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src --max-warnings=0",
+    "format": "prettier --write src"
+  },
+  "dependencies": {
+    "clsx": "^2.1.0",
+    "html-to-image": "^1.11.13",
+    "i18next": "^23.11.5",
+    "i18next-browser-languagedetector": "^8.0.0",
+    "lucide-react": "^0.303.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-i18next": "^14.1.2",
+    "react-markdown": "^10.1.0",
+    "react-router-dom": "^6.21.1",
+    "react-syntax-highlighter": "^16.1.1",
+    "recharts": "^2.10.3",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/typography": "^0.5.19",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "@testing-library/user-event": "^14.5.2",
+    "@vitejs/plugin-react": "^4.2.1",
+    "@vitest/coverage-v8": "^2.1.9",
+    "autoprefixer": "^10.4.16",
+    "eslint": "^8.57.1",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "jsdom": "^25.0.1",
+    "postcss": "^8.4.33",
+    "prettier": "^3.8.3",
+    "tailwindcss": "^3.4.1",
+    "vite": "^5.0.11",
+    "vitest": "^2.1.8"
+  }
+}

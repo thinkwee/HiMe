@@ -1,0 +1,280 @@
+{
+    "sql": {
+        "type": "function",
+        "function": {
+            "name": "sql",
+            "description": "Execute SQL queries.\n\n**Databases:**\n- `health_data` — streaming health data (SELECT only). Table: `samples`. Columns: timestamp (TEXT), feature_type (TEXT), value (REAL), metadata (TEXT)\n- `memory` — agent memory (full read-write). Pre-created tables: `reports`, `scheduled_tasks`, `trigger_rules`, `message_evidence`. Create any additional tables you need.\n\n**Trigger rules** (`trigger_rules` table): You can INSERT/UPDATE/DELETE trigger rules to set up event-driven analysis. Columns: id, name (TEXT), feature_type (TEXT), condition (TEXT: gt/lt/gte/lte/avg_gt/avg_lt/spike/drop/delta_gt/absent), threshold (REAL), window_minutes (INT, default 60), cooldown_minutes (INT, default 30), prompt_goal (TEXT), status (TEXT: active/paused/deleted), last_triggered_at, trigger_count, created_at. When data meets a trigger condition, an analysis task is auto-queued with the rule's prompt_goal.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "database": {
+                        "type": "string",
+                        "enum": ["health_data", "memory"],
+                        "description": "Target database."
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "SQL query to execute."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max rows to return (1-50). Default 50."
+                    }
+                },
+                "required": [
+                    "database",
+                    "query"
+                ]
+            }
+        }
+    },
+    "code": {
+        "type": "function",
+        "function": {
+            "name": "code",
+            "description": "Run Python in a **persistent notebook session** (like Jupyter). Variables survive across calls.\n\n**ALREADY LOADED — do NOT re-import or redefine:**\n- `pd`, `np`, `datetime`, `timedelta`, `timezone`, `sqlite3`\n- `plt` (matplotlib.pyplot, Agg backend), `matplotlib`\n- `scipy`, `stats`, `signal`, `sm`, `sklearn`\n\n**Data access (two layers):**\n- `df` — pre-loaded 14-day sliding window DataFrame. Columns: timestamp (datetime64[ns]), feature_type (str), value (float64). Use for recent data — fast, no query needed.\n- `health_db` — pre-connected read-only SQLite. Use `pd.read_sql(..., health_db)` when you need data older than 14 days.\n- `memory_db` — pre-connected read-write SQLite for agent memory tables.\n- **FORBIDDEN**: `sqlite3.connect(...)` — never create your own connections. Always use the pre-connected `health_db`/`memory_db`.\n\n**Examples:**\n```python\n# Recent data via df (preferred)\nsleep = df[df['feature_type'].isin(['sleep_core', 'sleep_deep', 'sleep_rem'])]\nprint(sleep.groupby('feature_type')['value'].sum() / 3600)\n\n# Older data via health_db\nmonth = pd.read_sql(\"SELECT timestamp, value FROM samples WHERE feature_type='resting_heart_rate' AND timestamp > strftime('%Y-%m-%dT%H:%M:%S','now','-30 days')\", health_db)\n```\n\n**Notebook behaviour:**\n- Last expression auto-displays (no print needed): `df.head()` shows the table.\n- Variables persist across calls: `sleep` defined in one call is available in the next.\n\n**Rules:** Check `df.empty` before analysis. No triple-quoted f-strings. Keep cells focused.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "Python code cell. Variables persist across calls. Last expression auto-displays (like Jupyter). print() also works."
+                    }
+                },
+                "required": [
+                    "code"
+                ]
+            }
+        }
+    },
+    "push_report": {
+        "type": "function",
+        "function": {
+            "name": "push_report",
+            "description": "Publish your analysis report. You can only push ONE report per analysis cycle. Call this when you have thoroughly explored the data and are ready to present your findings.\n\nA report has **two bodies** with different jobs:\n- `content` — the full report. Saved to memory DB, surfaced in the HIME dashboard and iOS app. This is where depth lives.\n- `im_digest` — the short, conversational message sent to the user through messaging channels (Telegram, Feishu, …). This is what the user actually reads first. Keep it brief and human — if they want the full report they'll open the dashboard.\n\n**Required:** title, content, im_digest, time_range_start, time_range_end (ISO format)\n**Optional:** alert_level (normal|info|warning|critical), tags",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "Short title for the report."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "The full Markdown report body. Stored in the memory DB and displayed in the HIME dashboard + iOS app — this is the version the user opens when they want depth. Focus on key findings with specific numbers. Use ## headers and bullet points. Do NOT dump raw data tables — summarize insights instead."
+                    },
+                    "im_digest": {
+                        "type": "string",
+                        "description": "Short conversational message sent to the user through every messaging channel (Telegram, Feishu, …). Keep it spoken-word brief — a one-liner or a couple of short sentences, second-person, with the key number(s) that drive your conclusion. Avoid robotic phrases like 'I checked the data' or 'The data shows'. Do NOT try to fit the whole report here — that's what `content` is for; the user can tap through to the dashboard for the full body."
+                    },
+                    "time_range_start": {
+                        "type": "string",
+                        "description": "Start of analysis period (ISO-8601)."
+                    },
+                    "time_range_end": {
+                        "type": "string",
+                        "description": "End of analysis period (ISO-8601)."
+                    },
+                    "alert_level": {
+                        "type": "string",
+                        "enum": [
+                            "normal",
+                            "info",
+                            "warning",
+                            "critical"
+                        ],
+                        "description": "normal=routine, warning/critical=concerning pattern detected"
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Optional topic tags."
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "description": "Optional extra metadata to attach to the report."
+                    }
+                },
+                "required": [
+                    "title",
+                    "content",
+                    "im_digest",
+                    "time_range_start",
+                    "time_range_end"
+                ]
+            }
+        }
+    },
+    "update_md": {
+        "type": "function",
+        "function": {
+            "name": "update_md",
+            "description": "Edit the editable body of prompts/user.md or prompts/experience.md. The current content of both files is loaded into your system prompt, so you can see exactly what is already there before choosing an operation. The file header is protected — you can never overwrite it.\n\nThree operations:\n- op='append' (default, safest): add `content` to the end of the body. Use when recording a new, unrelated observation.\n- op='edit': replace `old_string` with `new_string` exactly once. Use when refining an existing line/stanza. `old_string` must match the current body verbatim and must be unique — include enough context to disambiguate.\n- op='replace': overwrite the entire body with `content`. Use only when reorganising or pruning accumulated notes.\n\nfile=user.md → stable user preferences, communication style, habits.\nfile=experience.md → agent's own learnings: sql/code gotchas, undocumented data quirks. Never health baselines or per-analysis findings.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file": {
+                        "type": "string",
+                        "description": "Filename: user.md or experience.md"
+                    },
+                    "op": {
+                        "type": "string",
+                        "enum": ["append", "edit", "replace"],
+                        "description": "Operation mode. Defaults to 'append'."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "For op=append: the text to add. For op=replace: the full new body. Ignored for op=edit."
+                    },
+                    "old_string": {
+                        "type": "string",
+                        "description": "op=edit only. Exact substring of the current body to replace. Must be unique."
+                    },
+                    "new_string": {
+                        "type": "string",
+                        "description": "op=edit only. Replacement text. Pass empty string to delete."
+                    }
+                },
+                "required": [
+                    "file"
+                ]
+            }
+        }
+    },
+    "reply_user": {
+        "type": "function",
+        "function": {
+            "name": "reply_user",
+            "description": "Send a message (and optionally a chart image) to the user on whichever messaging channel their current message arrived on (Telegram, Feishu, …). REQUIRED: The user CANNOT see plain text. You MUST call this tool to send any reply. Match their language (Chinese→Chinese, English→English). To send a chart: first use the code tool to create and save a plot with `plt.savefig('/tmp/chart.png')`, then pass `image_path='/tmp/chart.png'` here.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "The reply text. Supports Markdown. Keep it conversational and concise."
+                    },
+                    "image_path": {
+                        "type": "string",
+                        "description": "Optional. Absolute path to a chart/image file (e.g. '/tmp/chart.png') to send along with the message."
+                    }
+                },
+                "required": [
+                    "message"
+                ]
+            }
+        }
+    },
+    "finish_chat": {
+        "type": "function",
+        "function": {
+            "name": "finish_chat",
+            "description": "Call this tool ONLY when you have completely finished your interaction with the user for the current message. This signals that you have provided all necessary information and no further actions (like SQL queries or further replies) are needed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "description": "Optional brief summary of what was resolved in this interaction."
+                    }
+                }
+            }
+        }
+    },
+    "analyze": {
+        "type": "function",
+        "function": {
+            "name": "analyze",
+            "description": "Run a focused data analysis on the user's health data. A sub-agent will query the database, run computations, and return structured findings. Use this for ANY question that requires looking at the user's health data. The analysis runs synchronously — you will receive the findings as the tool result, then use them to craft your reply.\n\nExample goals:\n- 'Analyze heart rate over the past 24 hours — averages, min/max, trends, and any anomalies.'\n- 'Check last night sleep quality — duration, stages, efficiency.'\n- 'Compare this week step count vs last week.'",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {
+                        "type": "string",
+                        "description": "Clear, specific analysis goal describing what data to examine and what to look for."
+                    }
+                },
+                "required": [
+                    "goal"
+                ]
+            }
+        }
+    },
+    "create_page": {
+        "type": "function",
+        "function": {
+            "name": "create_page",
+            "description": "Create a personalised page using the HimeUI component library. Use a unique page_id slug (e.g. 'sleep_trend_v1'). Full HimeUI docs, backend helpers, and frontend templates are in your system prompt under 'create_page: HimeUI Component Library'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "page_id": {
+                        "type": "string",
+                        "description": "Unique slug identifier, e.g. 'sleep_trend_v1'"
+                    },
+                    "display_name": {
+                        "type": "string",
+                        "description": "Human-readable screen title"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Short description of what this page does"
+                    },
+                    "backend_code": {
+                        "type": "string",
+                        "description": "Python route_handler(request)->dict using auto-injected helpers (query_health, health_stats, query_memory, write_memory, ensure_table, parse_request_body, get_query_params)."
+                    },
+                    "frontend_html": {
+                        "type": "string",
+                        "description": "Full HTML page using HimeUI components. Must include hime-ui.css and hime-ui.js from /api/personalised-pages/_shared/."
+                    },
+                    "patch": {
+                        "type": "boolean",
+                        "description": "If true, update existing page preserving unmodified parts. Default false (full overwrite)."
+                    }
+                },
+                "required": [
+                    "page_id",
+                    "display_name",
+                    "backend_code",
+                    "frontend_html"
+                ]
+            }
+        }
+    },
+    "read_skill": {
+        "type": "function",
+        "function": {
+            "name": "read_skill",
+            "description": "Load the full body of a user-written analysis playbook (skill) by name. Skills are listed in the `<available_skills>` section of the system prompt — each entry shows `name` and a one-line `description`. Call this tool with the skill's `name` when the current task matches its description, then follow the instructions in the returned markdown (typically a sequence of `sql` queries and `code` analyses). The response includes `content` (full markdown body) and `description`. Skills are documentation only — they are executed by you using HIME's existing tools.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The skill name as listed in `<available_skills>`."
+                    }
+                },
+                "required": ["name"]
+            }
+        }
+    },
+    "manage": {
+        "type": "function",
+        "function": {
+            "name": "manage",
+            "description": "Delegate a framework operation to a management sub-agent. Use for: creating/updating/deleting personalised pages; setting up trigger rules or scheduled tasks; reading or writing memory tables; any CRUD on HIME's own state. Do NOT use for health data analysis — use analyze() for that.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {
+                        "type": "string",
+                        "description": "A clear description of what to create, update, delete, or query in HIME's memory/configuration. Be specific: include page IDs, rule names, cron expressions, or SQL conditions as needed."
+                    }
+                },
+                "required": ["goal"]
+            }
+        }
+    }
+}

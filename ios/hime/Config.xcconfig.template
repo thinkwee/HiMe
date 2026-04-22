@@ -1,0 +1,24 @@
+// HIME — iOS / watchOS local build configuration TEMPLATE
+//
+// Copy this file to `Config.xcconfig` (in the same directory) and fill in
+// your own values. The real `Config.xcconfig` is gitignored, so your
+// personal Apple Developer Team ID and bundle identifier prefix never
+// land in version control.
+//
+//   cp ios/hime/Config.xcconfig.template ios/hime/Config.xcconfig
+//   # then edit Config.xcconfig with your values, and ⌘R in Xcode
+//
+// You can find your DEVELOPMENT_TEAM in Xcode → Settings → Accounts →
+// (select your Apple ID) → Manage Certificates, or via:
+//   xcrun security find-identity -v -p codesigning
+//
+// BUNDLE_ID_PREFIX is the reverse-DNS prefix for your bundle identifiers.
+// The iPhone target becomes "$(BUNDLE_ID_PREFIX).hime" and the watchOS
+// companion becomes "$(BUNDLE_ID_PREFIX).hime.watchkitapp". Pick something
+// unique to you, e.g. "com.example" or "org.yourname".
+//
+// App Group identifiers and entitlements are derived automatically from
+// BUNDLE_ID_PREFIX — no manual synchronisation needed.
+
+DEVELOPMENT_TEAM =
+BUNDLE_ID_PREFIX = com.example

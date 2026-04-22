@@ -1,0 +1,104 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+/lib/
+/lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.log
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# Conda
+.conda/
+
+# Environment variables
+.env
+.env.local
+
+# iOS local build configuration (Team ID, bundle prefix — never commit)
+ios/hime/Config.xcconfig
+ios/hime/hime.xcodeproj/xcuserdata/
+ios/hime/hime.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Cloudflare Tunnel
+tunnel.sh
+tunnel.token
+.tunnel.pid
+cloudflared
+
+# Runtime data / memory (new layout)
+logs/
+memory/
+data/data_stores/
+data/personalised_pages/*
+!data/personalised_pages/_shared/
+!data/personalised_pages/_shared/**
+ios/Server/watch*
+
+# supported dataset (too large for git)
+GLOBEM/
+APPLE/
+# IDE
+.vscode/
+.idea/
+.claude/
+.cursor/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.vite/
+frontend/.cache/
+
+# Logs
+*.log
+logs/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+_test_harness/results/
+
+# Type checker cache
+.mypy_cache/
+
+# Documentation builds
+docs/_build/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+hime.pptx
+rebuild_data.sh
+test_api.py
+scripts/
+CLAUDE.md
+

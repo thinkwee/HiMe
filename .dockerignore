@@ -1,0 +1,60 @@
+# Runtime data — never bake into images
+data/data_stores/
+data/personalised_pages/
+!data/personalised_pages/_shared/
+!data/personalised_pages/_shared/**
+memory/
+logs/
+ios/Server/watch.db*
+
+# Secrets
+.env
+.env.local
+ios/hime/Config.xcconfig
+
+# VCS / IDE
+.git
+.gitignore
+.vscode/
+.idea/
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.cache/
+
+# iOS app (keep ios/Server/ for Dockerfile.watch)
+ios/hime/
+
+# Large datasets
+GLOBEM/
+APPLE/
+
+# Tests & docs — not needed in container images
+tests/
+docs/
+*.md
+!prompts/*.md
+
+# Images (keep required assets)
+*.png
+!assets/logo.png
+!assets/logo_ios.png
+!frontend/public/assets/logo_web.png
+
+# Misc
+*.log
+*.tmp
+*.swp

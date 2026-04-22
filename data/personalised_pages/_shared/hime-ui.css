@@ -1,0 +1,738 @@
+/* HimeUI — iOS-native shared component stylesheet
+ * Targets iOS 17+ HIG, rendered in WKWebView and desktop browsers.
+ * Pure CSS. No preprocessors. Theming via :root custom properties. */
+
+:root {
+  /* iOS system colors (light) */
+  --hime-blue: #007aff;
+  --hime-green: #34c759;
+  --hime-red: #ff3b30;
+  --hime-orange: #ff9500;
+  --hime-purple: #af52de;
+  --hime-pink: #ff2d55;
+  --hime-teal: #5ac8fa;
+  --hime-indigo: #5856d6;
+  --hime-yellow: #ffcc00;
+
+  --hime-bg: #f2f2f7;
+  --hime-bg-secondary: #ffffff;
+  --hime-cell: #ffffff;
+  --hime-grouped-cell: #ffffff;
+  --hime-separator: rgba(60, 60, 67, 0.18);
+  --hime-label: #000000;
+  --hime-label-secondary: rgba(60, 60, 67, 0.6);
+  --hime-label-tertiary: rgba(60, 60, 67, 0.3);
+  --hime-fill: rgba(120, 120, 128, 0.12);
+  --hime-segmented-track: #e5e5ea;
+  --hime-segmented-selected: #ffffff;
+  --hime-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+
+  --hime-radius-card: 12px;
+  --hime-radius-button: 10px;
+  --hime-radius-sheet: 16px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --hime-bg: #000000;
+    --hime-bg-secondary: #1c1c1e;
+    --hime-cell: #1c1c1e;
+    --hime-grouped-cell: #2c2c2e;
+    --hime-separator: rgba(84, 84, 88, 0.6);
+    --hime-label: #ffffff;
+    --hime-label-secondary: rgba(235, 235, 245, 0.6);
+    --hime-label-tertiary: rgba(235, 235, 245, 0.3);
+    --hime-fill: rgba(120, 120, 128, 0.24);
+    --hime-segmented-track: #39393b;
+    --hime-segmented-selected: #636366;
+    --hime-shadow: none;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--hime-bg);
+  color: var(--hime-label);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, sans-serif;
+  font-size: 17px;
+  font-weight: 400;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  /* Prevent any oversized child (wide tables, chart canvases) from causing
+   * horizontal panning on mobile WebViews. */
+  overflow-x: hidden;
+  width: 100%;
+}
+
+/* ---------------- Page skeleton ---------------- */
+
+.hime-page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 16px 16px 64px;
+  min-height: 100vh;
+}
+
+.hime-header {
+  padding: 16px 4px 12px;
+}
+
+.hime-large-title {
+  font-size: 34px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.4px;
+  margin: 0;
+  color: var(--hime-label);
+}
+
+.hime-section-title {
+  font-size: 13px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--hime-label-secondary);
+  margin: 24px 16px 8px;
+}
+
+.hime-caption {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--hime-label-secondary);
+}
+
+/* ---------------- Cards ---------------- */
+
+.hime-card {
+  background: var(--hime-cell);
+  border-radius: var(--hime-radius-card);
+  box-shadow: var(--hime-shadow);
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+/* ---------------- MetricGrid ---------------- */
+
+.hime-metric-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.hime-metric-card {
+  background: var(--hime-cell);
+  border-radius: var(--hime-radius-card);
+  box-shadow: var(--hime-shadow);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 96px;
+}
+
+.hime-metric-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--hime-label-secondary);
+}
+
+.hime-metric-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.hime-metric-value {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+  color: var(--hime-label);
+  line-height: 1.1;
+}
+
+.hime-metric-unit {
+  font-size: 15px;
+  font-weight: 400;
+  color: var(--hime-label-secondary);
+  margin-left: 4px;
+}
+
+.hime-metric-trend {
+  font-size: 13px;
+  color: var(--hime-label-secondary);
+}
+
+.hime-metric-trend.up { color: var(--hime-green); }
+.hime-metric-trend.down { color: var(--hime-red); }
+
+/* ---------------- DetailList (grouped list) ---------------- */
+
+.hime-detail-list {
+  margin-bottom: 16px;
+}
+
+.hime-detail-list .hime-section-title {
+  margin: 4px 16px 8px;
+}
+
+.hime-list-group {
+  background: var(--hime-cell);
+  border-radius: var(--hime-radius-card);
+  box-shadow: var(--hime-shadow);
+  overflow: hidden;
+}
+
+.hime-row {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  min-height: 44px;
+  background: transparent;
+  cursor: default;
+  position: relative;
+  gap: 12px;
+}
+
+.hime-row.actionable { cursor: pointer; }
+.hime-row.actionable:active { background: var(--hime-fill); }
+
+.hime-row + .hime-row {
+  box-shadow: inset 16px 0 0 0 var(--hime-cell), inset 0 1px 0 0 var(--hime-separator);
+}
+
+.hime-row-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.hime-row-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hime-row-title {
+  font-size: 17px;
+  font-weight: 400;
+  color: var(--hime-label);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hime-row-subtitle {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--hime-label-secondary);
+}
+
+.hime-row-right {
+  font-size: 17px;
+  color: var(--hime-label-secondary);
+  text-align: right;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hime-chevron {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--hime-label-tertiary);
+  border-top: 2px solid var(--hime-label-tertiary);
+  transform: rotate(45deg);
+  margin-left: 4px;
+}
+
+/* ---------------- Detail block sub-elements (inside sheet) ---------------- */
+
+.hime-detail-block { padding: 0 4px; }
+.hime-detail-block .db-text { font-size: 15px; line-height: 1.5; color: var(--hime-label); margin: 8px 0; }
+.hime-detail-block .db-header { font-size: 17px; font-weight: 600; margin: 16px 0 8px; color: var(--hime-label); }
+.hime-detail-block .db-divider { height: 1px; background: var(--hime-separator); margin: 12px 0; }
+.hime-detail-block .db-steps { padding-left: 20px; margin: 8px 0; color: var(--hime-label); }
+.hime-detail-block .db-steps li { margin-bottom: 6px; }
+.hime-detail-block .db-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 8px 0; }
+.hime-detail-block .db-metric { background: var(--hime-fill); border-radius: 8px; padding: 10px 12px; }
+.hime-detail-block .db-metric-label { font-size: 12px; color: var(--hime-label-secondary); }
+.hime-detail-block .db-metric-value { font-size: 20px; font-weight: 600; color: var(--hime-label); }
+.hime-detail-block .db-metric-unit { font-size: 13px; color: var(--hime-label-secondary); margin-left: 3px; }
+.hime-detail-block .db-alert { border-radius: 10px; padding: 10px 12px; margin: 10px 0; font-size: 14px; color: #fff; }
+
+/* ---------------- Buttons ---------------- */
+
+.hime-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
+  font-size: 17px;
+  font-weight: 500;
+  border-radius: var(--hime-radius-button);
+  padding: 12px 20px;
+  border: none;
+  cursor: pointer;
+  transition: opacity 120ms ease, background 120ms ease;
+  -webkit-appearance: none;
+  user-select: none;
+  text-decoration: none;
+}
+.hime-button:active { opacity: 0.7; }
+.hime-button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.hime-button-primary {
+  background: var(--hime-blue);
+  color: #ffffff;
+}
+
+.hime-button-secondary {
+  background: transparent;
+  color: var(--hime-blue);
+  border: 1px solid var(--hime-blue);
+}
+
+.hime-button-block {
+  width: 100%;
+  margin-top: 12px;
+}
+
+/* ---------------- ChartView ---------------- */
+
+.hime-chart-view {
+  background: var(--hime-cell);
+  border-radius: var(--hime-radius-card);
+  box-shadow: var(--hime-shadow);
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.hime-chart-canvas-wrap {
+  position: relative;
+  width: 100%;
+  height: 220px;
+}
+
+.hime-chart-canvas-wrap canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.hime-chart-empty {
+  height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--hime-label-secondary);
+  font-size: 15px;
+}
+
+.hime-error-banner {
+  margin: 12px 16px 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255, 59, 48, 0.10);
+  border: 1px solid rgba(255, 59, 48, 0.25);
+  color: #b3261e;
+}
+.hime-error-banner-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.hime-error-banner-msg {
+  font-size: 13px;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.hime-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--hime-label-secondary);
+}
+
+.hime-chart-legend .swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+/* ---------------- Segmented control ---------------- */
+
+.hime-segmented-control {
+  display: inline-flex;
+  background: var(--hime-segmented-track);
+  border-radius: 9px;
+  padding: 2px;
+  margin-bottom: 12px;
+  width: 100%;
+}
+
+.hime-segmented-control button {
+  flex: 1;
+  background: transparent;
+  border: none;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--hime-label);
+  padding: 6px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 150ms ease;
+}
+
+.hime-segmented-control button.active {
+  background: var(--hime-segmented-selected);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+/* ---------------- InputForm ---------------- */
+
+.hime-input-form { margin-bottom: 16px; }
+
+.hime-form-group {
+  background: var(--hime-cell);
+  border-radius: var(--hime-radius-card);
+  box-shadow: var(--hime-shadow);
+  overflow: hidden;
+}
+
+.hime-field {
+  display: flex;
+  align-items: center;
+  padding: 10px 16px;
+  min-height: 44px;
+  gap: 12px;
+}
+
+.hime-field + .hime-field {
+  box-shadow: inset 16px 0 0 0 var(--hime-cell), inset 0 1px 0 0 var(--hime-separator);
+}
+
+.hime-field-label {
+  flex: 0 0 auto;
+  min-width: 96px;
+  font-size: 17px;
+  color: var(--hime-label);
+}
+
+.hime-field-control {
+  flex: 1;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+
+.hime-field-control input[type="text"],
+.hime-field-control input[type="number"],
+.hime-field-control input[type="date"],
+.hime-field-control input[type="time"],
+.hime-field-control select,
+.hime-field-control textarea {
+  font-family: inherit;
+  font-size: 17px;
+  color: var(--hime-label);
+  background: transparent;
+  border: none;
+  outline: none;
+  text-align: right;
+  width: 100%;
+  padding: 4px 0;
+}
+
+.hime-field-control textarea {
+  text-align: left;
+  min-height: 60px;
+  resize: vertical;
+}
+
+.hime-field-control input[type="range"] {
+  flex: 1;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  height: 28px;
+}
+.hime-field-control input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  background: var(--hime-fill);
+  border-radius: 2px;
+}
+.hime-field-control input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 24px;
+  height: 24px;
+  background: #fff;
+  border-radius: 50%;
+  border: 0.5px solid rgba(0,0,0,0.04);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  margin-top: -10px;
+}
+
+.hime-field-display {
+  font-size: 15px;
+  color: var(--hime-label-secondary);
+  min-width: 36px;
+  text-align: right;
+}
+
+/* iOS-style toggle switch */
+.hime-switch {
+  position: relative;
+  width: 51px;
+  height: 31px;
+  background: var(--hime-fill);
+  border-radius: 16px;
+  cursor: pointer;
+  transition: background 150ms ease;
+  flex-shrink: 0;
+}
+.hime-switch input { display: none; }
+.hime-switch .knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 27px;
+  height: 27px;
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+  transition: transform 180ms ease;
+}
+.hime-switch.on { background: var(--hime-green); }
+.hime-switch.on .knob { transform: translateX(20px); }
+
+/* ---------------- Tracker ---------------- */
+
+.hime-tracker { margin-bottom: 16px; }
+
+.hime-tracker-history {
+  background: var(--hime-cell);
+  border-radius: var(--hime-radius-card);
+  box-shadow: var(--hime-shadow);
+  overflow: hidden;
+  margin-top: 16px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.hime-tracker-empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--hime-label-secondary);
+  font-size: 15px;
+}
+
+/* ---------------- Sheet (bottom modal) ---------------- */
+
+.hime-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 9000;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+.hime-sheet-backdrop.open { opacity: 1; }
+
+.hime-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--hime-bg-secondary);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+  border-top-left-radius: var(--hime-radius-sheet);
+  border-top-right-radius: var(--hime-radius-sheet);
+  max-height: 85vh;
+  overflow-y: auto;
+  z-index: 9001;
+  transform: translateY(100%);
+  transition: transform 280ms cubic-bezier(0.32, 0.72, 0, 1);
+  padding: 8px 16px 24px;
+}
+.hime-sheet.open { transform: translateY(0); }
+
+.hime-sheet-handle {
+  width: 36px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--hime-label-tertiary);
+  margin: 6px auto 12px;
+}
+
+.hime-sheet-title {
+  font-size: 17px;
+  font-weight: 600;
+  text-align: center;
+  margin: 0 0 12px;
+  color: var(--hime-label);
+}
+
+.hime-sheet-body { font-size: 15px; color: var(--hime-label); }
+
+/* ---------------- Toast ---------------- */
+
+.hime-toast {
+  position: fixed;
+  top: 24px;
+  left: 50%;
+  transform: translate(-50%, -16px);
+  background: rgba(50, 50, 56, 0.92);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 10px 18px;
+  border-radius: 999px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.2);
+  opacity: 0;
+  transition: opacity 220ms ease, transform 220ms ease;
+  z-index: 9100;
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+  pointer-events: none;
+  max-width: 80vw;
+}
+.hime-toast.visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+.hime-toast.success { background: rgba(52, 199, 89, 0.95); }
+.hime-toast.error { background: rgba(255, 59, 48, 0.95); }
+.hime-toast.info { background: rgba(50, 50, 56, 0.92); }
+
+/* ---------------- Badge ---------------- */
+
+.hime-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: #fff;
+  background: var(--hime-blue);
+  letter-spacing: 0.1px;
+}
+
+/* ---------------- Progress bar ---------------- */
+
+.hime-progress {
+  width: 100%;
+  height: 6px;
+  background: var(--hime-fill);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.hime-progress > .fill {
+  height: 100%;
+  background: var(--hime-blue);
+  border-radius: inherit;
+  transition: width 220ms ease;
+}
+
+/* ---------------- Progress ring ---------------- */
+
+.hime-progress-ring {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+.hime-progress-ring svg {
+  display: block;
+  transform: rotate(-90deg);
+}
+.hime-progress-ring .label {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--hime-label);
+}
+
+/* ---------------- Table ---------------- */
+
+.hime-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  background: var(--hime-cell);
+  border-radius: var(--hime-radius-card);
+  overflow: hidden;
+  box-shadow: var(--hime-shadow);
+}
+.hime-table th, .hime-table td {
+  padding: 10px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--hime-separator);
+  color: var(--hime-label);
+}
+.hime-table th {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--hime-label-secondary);
+  background: transparent;
+}
+.hime-table tr:last-child td { border-bottom: none; }
+
+/* ---------------- Color helpers (used by JS to color icons & badges) ---------------- */
+
+.hime-bg-blue   { background: var(--hime-blue); }
+.hime-bg-green  { background: var(--hime-green); }
+.hime-bg-red    { background: var(--hime-red); }
+.hime-bg-orange { background: var(--hime-orange); }
+.hime-bg-purple { background: var(--hime-purple); }
+.hime-bg-pink   { background: var(--hime-pink); }
+.hime-bg-teal   { background: var(--hime-teal); }
+.hime-bg-indigo { background: var(--hime-indigo); }
+.hime-bg-yellow { background: var(--hime-yellow); color: #1c1c1e; }
+.hime-bg-gray   { background: rgba(120,120,128,0.5); }
+
+.hime-text-blue   { color: var(--hime-blue); }
+.hime-text-green  { color: var(--hime-green); }
+.hime-text-red    { color: var(--hime-red); }
+.hime-text-orange { color: var(--hime-orange); }
+.hime-text-purple { color: var(--hime-purple); }

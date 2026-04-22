@@ -1,0 +1,21 @@
+# syntax=docker/dockerfile:1.6
+FROM python:3.11-slim AS runtime
+
+RUN groupadd --system --gid 1500 watch && useradd --system --uid 1500 --gid 1500 --home-dir /app watch
+
+WORKDIR /app
+
+COPY ios/Server/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY ios/Server/ ./ios/Server/
+
+RUN mkdir -p /app/ios/Server /app/watch-data && chown -R watch:watch /app
+
+USER watch
+
+EXPOSE 8765
+
+ENV PYTHONUNBUFFERED=1
+
+CMD ["python", "ios/Server/server.py", "--db", "/app/watch-data/watch.db"]
