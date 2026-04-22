@@ -19,7 +19,7 @@
 
 ---
 
-HiMe (Health Intelligence Management Engine) is a self-hosted, fully local, secure, open-source one-stop personal health AI agent platform.
+HiMe (Health Intelligence Management Engine) is a self-hosted, fully local, secure and open-source one-stop personal health AI agent platform. It understand your wearable health data in real-time and provide you with proactive insights 7/24, and of course, a cute pixel-art cat that serves as your personal health digital twin.
 
 ## Features
 
@@ -39,13 +39,13 @@ HiMe (Health Intelligence Management Engine) is a self-hosted, fully local, secu
   <img src="assets/hime_panel.png" alt="HiMe Panel" width="600"/>
 </p>
 
-- Real-time wearable ingestion from Apple Watch + iPhone to local SQLite.
-- iOS and watchOS companion apps for syncing health data and controlling the agent.
+- Real-time wearable data ingestion from Apple Watch + iPhone, including heart rate, HRV, SpO2, sleep stages, workouts, mobility, and 50+ metrics more.
+- iOS and watchOS companion apps for easy syncing health data and controlling the agent.
 - Autonomous AI analysis with scheduled checks and event triggers.
 - OpenClaw-style chat over Telegram or Feishu, with evidence-backed responses.
-- Agent-generated personalised pages on demand for repeated workflows.
+- Agent-generated personalised pages on demand for repeated workflows or personalised interaction. Generate your app, not learn to use it.
 - Skills system for reusable analysis playbooks.
-- Strong self-hosted privacy posture; no telemetry pipeline.
+- Strong self-hosted privacy posture.
 
 ## Quick Start
 
