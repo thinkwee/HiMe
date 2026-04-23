@@ -32,7 +32,7 @@ google-genai>=1.51,<2
 # Optional: for vLLM compatibility (uses OpenAI client)
 # vLLM is run separately, not installed as dependency
 # Cron scheduling
-croniter>=1.3
+croniter>=6.2.2
 
 # HTTP Client
 httpx==0.28.1
