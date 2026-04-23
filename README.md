@@ -11,10 +11,25 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img alt="License: PolyForm Noncommercial 1.0.0" src="https://img.shields.io/badge/license-PolyForm%20NC%201.0.0-blue.svg"></a>
-  <a href="https://github.com/thinkwee/HiMe/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/thinkwee/HiMe/actions/workflows/ci.yml/badge.svg"></a>
+  <b>English</b> | <a href="README.zh.md">简体中文</a>
+</p>
+
+<p align="center">
   <a href="https://apps.apple.com/app/id6762160735"><img alt="Download on the App Store" src="https://img.shields.io/badge/App_Store-Download-0a84ff?logo=apple"></a>
   <a href="docs/DEVELOPMENT.md"><img alt="Developer docs" src="https://img.shields.io/badge/docs-development-green"></a>
+  <a href="docs/INSTALL.md#im-gateway-setup"><img alt="Telegram Support" src="https://img.shields.io/badge/Telegram-supported-26A5E4?logo=telegram&logoColor=white"></a>
+  <a href="docs/INSTALL.md#im-gateway-setup"><img alt="Feishu Support" src="https://img.shields.io/badge/Feishu-supported-00D6B9?logo=lark&logoColor=white"></a>
+  <br/>
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img alt="License: PolyForm Noncommercial 1.0.0" src="https://img.shields.io/badge/license-PolyForm%20NC%201.0.0-blue.svg"></a>
+  <a href="https://github.com/thinkwee/HiMe/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/thinkwee/HiMe/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/thinkwee/HiMe/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/thinkwee/HiMe?display_name=tag&sort=semver"></a>
+  <a href="https://github.com/thinkwee/HiMe/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/thinkwee/HiMe"></a>
+  <img alt="Python" src="https://img.shields.io/badge/python-3.11%2B-blue?logo=python&logoColor=white">
+  <img alt="Platform iOS" src="https://img.shields.io/badge/platform-iOS%20%7C%20watchOS-lightgrey?logo=apple">
+  <img alt="Docker" src="https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white">
 </p>
 
 ---
@@ -24,7 +39,7 @@ HiMe (Health Intelligence Management Engine) is a self-hosted, fully local, secu
 ## Features
 
 <p align="center">
-  <img src="assets/hime_app.png" alt="HiMe App" width="900"/>
+  <a href="https://apps.apple.com/app/id6762160735"><img src="assets/hime_app.png" alt="HiMe App — Download on the App Store" width="900"/></a>
 </p>
 
 ---
