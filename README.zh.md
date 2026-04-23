@@ -1,13 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" alt="HiMe Logo" width="500"/>
-</p>
-
-<p align="center">
-  <em>HiMe — Say Hi to Healthy Me</em>
-</p>
-
-<p align="center">
-  一站式个人健康 AI Agent
+  <img src="assets/logo.png" alt="HiMe Logo" width="800"/>
 </p>
 
 <p align="center">
