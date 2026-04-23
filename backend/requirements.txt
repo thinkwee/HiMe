@@ -16,7 +16,7 @@ numpy==1.26.3
 pyarrow==14.0.2
 
 # Scientific analysis (available in code tool)
-scipy>=1.11,<2
+scipy>=1.17.1,<2
 statsmodels>=0.14,<0.15
 scikit-learn>=1.3,<2
 matplotlib>=3.7,<4
