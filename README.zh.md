@@ -37,13 +37,13 @@ HiMe（Health Intelligence Management Engine）是一款自托管、完全本地
 ---
 
 <p align="center">
-  <img src="assets/hime_chat.png" alt="HiMe Chat" width="600"/>
+  <img src="assets/hime_chat.png" alt="HiMe Chat" width="800"/>
 </p>
 
 ---
 
 <p align="center">
-  <img src="assets/hime_panel.png" alt="HiMe Panel" width="600"/>
+  <img src="assets/hime_panel.png" alt="HiMe Panel" width="800"/>
 </p>
 
 - 实时接入 Apple Watch + iPhone 的可穿戴数据，包括心率、HRV、血氧、睡眠阶段、运动、活动能力等 50+ 项指标。

@@ -37,13 +37,13 @@ HiMe (Health Intelligence Management Engine) is a self-hosted, fully local, secu
 ---
 
 <p align="center">
-  <img src="assets/hime_chat.png" alt="HiMe Chat" width="600"/>
+  <img src="assets/hime_chat.png" alt="HiMe Chat" width="800"/>
 </p>
 
 ---
 
 <p align="center">
-  <img src="assets/hime_panel.png" alt="HiMe Panel" width="600"/>
+  <img src="assets/hime_panel.png" alt="HiMe Panel" width="800"/>
 </p>
 
 - Real-time wearable data ingestion from Apple Watch + iPhone, including heart rate, HRV, SpO2, sleep stages, workouts, mobility, and 50+ metrics more.
