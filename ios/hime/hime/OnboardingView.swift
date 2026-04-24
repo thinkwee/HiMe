@@ -105,58 +105,109 @@ struct OnboardingView: View {
     }
 
     private var serverPage: some View {
-        OnboardingPage(
-            icon: "server.rack",
-            iconColor: .blue,
-            title: "Connect Your Server",
-            subtitle: "Self-hosted, full control on your data",
-            bodyText: "Hime runs on your own server. Follow the Hime GitHub Repo to deploy your own server.",
-            extraContent: AnyView(
-                VStack(spacing: 12) {
-                    HStack {
-                        Image(systemName: "network")
-                            .foregroundColor(.secondary)
-                        TextField("192.168.1.100 or example.com", text: $serverAddress)
-                            .keyboardType(.URL)
-                            .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(Color(.secondarySystemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
+        // Scroll-based layout so the keyboard never clips the Test Connection
+        // button or bleeds a band of systemBackground over it. The inner form
+        // is split out so the type checker doesn't choke on a single giant
+        // expression.
+        GeometryReader { geo in
+            ScrollView(.vertical, showsIndicators: false) {
+                serverPageContent
+                    .frame(minHeight: geo.size.height)
+                    .frame(maxWidth: .infinity)
+            }
+            .scrollDismissesKeyboard(.interactively)
+        }
+    }
 
-                    Button {
-                        Task { await testServerConnection() }
-                    } label: {
-                        HStack(spacing: 6) {
-                            if serverTestState == .testing {
-                                ProgressView().scaleEffect(0.8)
-                            }
-                            Text(testButtonTitle)
-                                .fontWeight(.medium)
-                        }
-                    }
-                    .disabled(serverTestState == .testing || serverAddress.isEmpty)
+    private var serverPageContent: some View {
+        VStack(spacing: 20) {
+            Spacer(minLength: 24)
 
-                    if case .success(let msg) = serverTestState {
-                        Label(msg, systemImage: "checkmark.circle.fill")
-                            .foregroundColor(.green)
-                            .font(.footnote)
-                    } else if case .failure(let msg) = serverTestState {
-                        Label(msg, systemImage: "xmark.octagon.fill")
-                            .foregroundColor(.red)
-                            .font(.footnote)
-                    }
+            Image(systemName: "server.rack")
+                .font(.system(size: 64))
+                .foregroundColor(.blue)
 
-                    Link(destination: URL(string: "https://github.com/thinkwee/HiMe")!) {
-                        Label("Setup Guide on GitHub", systemImage: "link")
-                            .font(.footnote)
-                    }
-                }
+            VStack(spacing: 6) {
+                Text("Connect Your Server")
+                    .font(.system(size: 26, weight: .bold, design: .rounded))
+                    .multilineTextAlignment(.center)
+                Text("Self-hosted, full control on your data")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 32)
+
+            Text("Hime runs on your own server. Follow the Hime GitHub Repo to deploy your own server.")
+                .font(.body)
+                .foregroundColor(.primary.opacity(0.85))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+                .fixedSize(horizontal: false, vertical: true)
+
+            serverPageForm
                 .padding(.horizontal, 24)
-            )
-        )
+
+            Spacer(minLength: 24)
+        }
+    }
+
+    private var serverPageForm: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Image(systemName: "network")
+                    .foregroundColor(.secondary)
+                TextField("192.168.1.100 or example.com", text: $serverAddress)
+                    .keyboardType(.URL)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .submitLabel(.go)
+                    .onSubmit {
+                        Task { await testServerConnection() }
+                    }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Color(.secondarySystemBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+
+            Button {
+                Task { await testServerConnection() }
+            } label: {
+                HStack(spacing: 6) {
+                    if serverTestState == .testing {
+                        ProgressView().scaleEffect(0.8)
+                    }
+                    Text(testButtonTitle)
+                        .fontWeight(.medium)
+                }
+            }
+            .disabled(serverTestState == .testing || serverAddress.isEmpty)
+
+            serverTestResult
+
+            Link(destination: URL(string: "https://github.com/thinkwee/HiMe")!) {
+                Label("Setup Guide on GitHub", systemImage: "link")
+                    .font(.footnote)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var serverTestResult: some View {
+        switch serverTestState {
+        case .success(let msg):
+            Label(msg, systemImage: "checkmark.circle.fill")
+                .foregroundColor(.green)
+                .font(.footnote)
+                .multilineTextAlignment(.center)
+        case .failure(let msg):
+            Label(msg, systemImage: "xmark.octagon.fill")
+                .foregroundColor(.red)
+                .font(.footnote)
+                .multilineTextAlignment(.center)
+        default:
+            EmptyView()
+        }
     }
 
     private var aiDisclosurePage: some View {
@@ -175,47 +226,31 @@ struct OnboardingView: View {
             .padding(.top, 16)
             .padding(.bottom, 8)
 
-            ZStack(alignment: .bottom) {
-                ScrollView(.vertical, showsIndicators: true) {
-                    VStack(alignment: .leading, spacing: 14) {
-                        Text(AIDisclosureContent.bodyText)
-                            .font(.callout)
-                            .foregroundColor(.primary.opacity(0.9))
+            // No fade/chevron overlay — the native scroll indicator plus the
+            // explicit "Scroll to read…" subtitle are enough, and the old
+            // gradient+chevron stack ended up drawing a visible white band
+            // across the page content as the user scrolled.
+            ScrollView(.vertical, showsIndicators: true) {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text(AIDisclosureContent.bodyText)
+                        .font(.callout)
+                        .foregroundColor(.primary.opacity(0.9))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    AIDisclosureDetails()
+
+                    Toggle(isOn: $aiConsentChecked) {
+                        Text("I understand and agree to share my data with the third-party AI service configured on my server.")
+                            .font(.footnote)
                             .fixedSize(horizontal: false, vertical: true)
-
-                        AIDisclosureDetails()
-
-                        Toggle(isOn: $aiConsentChecked) {
-                            Text("I understand and agree to share my data with the third-party AI service configured on my server.")
-                                .font(.footnote)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        .tint(.purple)
-                        .padding(.top, 4)
-
-                        // Bottom padding so the fade overlay never hides the toggle.
-                        Color.clear.frame(height: 24)
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 8)
-                    .padding(.bottom, 16)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .tint(.purple)
+                    .padding(.top, 4)
                 }
-
-                // Fade + chevron hint at the bottom so it's visually obvious there's more.
-                VStack(spacing: 2) {
-                    LinearGradient(
-                        colors: [Color(.systemBackground).opacity(0), Color(.systemBackground)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .frame(height: 18)
-                    Image(systemName: "chevron.compact.down")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundColor(.secondary)
-                        .padding(.bottom, 2)
-                }
-                .allowsHitTesting(false)
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+                .padding(.bottom, 16)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
