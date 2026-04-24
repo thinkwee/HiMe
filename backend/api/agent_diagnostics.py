@@ -24,55 +24,23 @@ diagnostics_router = APIRouter()
 async def get_chat_info():
     """Return the iOS chat-button target for whichever gateway is active.
 
-    Resolution order:
-    * Feishu gateway enabled → ``{platform: "feishu", label: "Chat on Feishu",
-      url: <best-effort lark deep link>}``.
-    * Telegram gateway enabled → ``{platform: "telegram", label: "Chat on Telegram",
-      url: <best telegram link>}``.
-    * Neither → ``{platform: "none", label: "Chat", url: ""}``.
-
-    The iOS app calls this on the chat button so it doesn't need to know
-    which gateway HIME is configured for.
+    We intentionally just open the app, NOT a specific chat — see the
+    deep-link failure modes in commit history. The iOS side falls back to
+    the public web page if the scheme URL can't be handled (e.g. the app
+    isn't installed).
     """
     if getattr(settings, "FEISHU_GATEWAY_ENABLED", False):
-        chat_id = ""
-        allowed = getattr(settings, "FEISHU_ALLOWED_CHAT_IDS", "") or ""
-        if allowed:
-            chat_id = allowed.split(",")[0].strip()
-        elif getattr(settings, "FEISHU_DEFAULT_CHAT_ID", ""):
-            chat_id = settings.FEISHU_DEFAULT_CHAT_ID.strip()
-        # Lark scheme link — opens the conversation in the Feishu/Lark app
-        # if installed.  ``oc_*`` is a chat (group / p2p) open-id.
-        url = f"lark://im/chat?chatId={chat_id}" if chat_id else "lark://"
         return {
             "platform": "feishu",
             "label":    "Chat on Feishu",
-            "url":      url,
-            "chat_id":  chat_id,
+            "url":      "lark://",
         }
 
     if getattr(settings, "TELEGRAM_GATEWAY_ENABLED", False):
-        info = await get_telegram_info()
-        # Pick the best link the legacy endpoint returns
-        link = info.get("group_link") or ""
-        if not link:
-            chat_id = info.get("chat_id", "")
-            if chat_id:
-                numeric = chat_id
-                if numeric.startswith("-100"):
-                    numeric = numeric[4:]
-                elif numeric.startswith("-"):
-                    numeric = numeric[1:]
-                link = f"tg://openmessage?chat_id={numeric}"
-        if not link and info.get("bot_username"):
-            link = f"https://t.me/{info['bot_username']}"
         return {
-            "platform":     "telegram",
-            "label":        "Chat on Telegram",
-            "url":          link,
-            "bot_username": info.get("bot_username", ""),
-            "chat_id":      info.get("chat_id", ""),
-            "group_link":   info.get("group_link", ""),
+            "platform": "telegram",
+            "label":    "Chat on Telegram",
+            "url":      "tg://",
         }
 
     return {"platform": "none", "label": "Chat", "url": ""}

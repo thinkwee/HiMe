@@ -9,6 +9,7 @@
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>tg</string>
+		<string>lark</string>
 	</array>
 	<key>UIBackgroundModes</key>
 	<array>

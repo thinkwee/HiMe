@@ -2260,43 +2260,60 @@ class CatViewModel: ObservableObject {
         }
     }
 
-    /// Open the configured chat platform (Telegram or Feishu, depending on
-    /// which gateway the backend has enabled).  Always re-fetches
-    /// ``/api/agent/chat-info`` so that flipping platforms server-side
-    /// takes effect on the next tap without an iOS rebuild.
+    /// Open the configured chat platform. Intentionally does NOT try to
+    /// deep-link into a specific chat: `lark://im/chat?chatId=…` isn't a
+    /// real Feishu deep link, and `tg://openmessage?chat_id=…` silently
+    /// fails for group chats. Both used to leave the user staring at an
+    /// unresponsive button. Now we just open the app (or its web landing
+    /// page if the app isn't installed) and let the user pick the chat.
     func openChat() {
         Task {
             let base = ServerConfig.load().apiBaseURL
-            guard let url = URL(string: "\(base)/api/agent/chat-info") else { return }
-            do {
-                let (data, _) = try await URLSession.shared.data(for: APIClient.request(url))
-                guard let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-                let platform = j["platform"] as? String ?? "none"
-                let label = j["label"] as? String ?? "Chat"
-                let primaryURL = j["url"] as? String ?? ""
+            guard let infoURL = URL(string: "\(base)/api/agent/chat-info") else { return }
+
+            var platform = self.chatPlatform
+            var label = self.chatLabel
+            var primaryURL = ""
+            if let (data, _) = try? await URLSession.shared.data(for: APIClient.request(infoURL)),
+               let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                platform = j["platform"] as? String ?? platform
+                label = j["label"] as? String ?? label
+                primaryURL = j["url"] as? String ?? ""
                 UserDefaults.standard.set(label, forKey: "chatLabel")
                 UserDefaults.standard.set(platform, forKey: "chatPlatform")
-                await MainActor.run {
-                    self.chatLabel = label
-                    self.chatPlatform = platform
+            }
+
+            await MainActor.run {
+                self.chatLabel = label
+                self.chatPlatform = platform
+
+                guard platform != "none" else {
+                    self.showNoChatAlert = true
+                    return
                 }
-                await MainActor.run {
-                    switch platform {
-                    case "telegram":
-                        let groupLink = j["group_link"] as? String ?? ""
-                        let chatId = j["chat_id"] as? String ?? ""
-                        let botUsername = j["bot_username"] as? String ?? ""
-                        if !groupLink.isEmpty { _openURL(groupLink) }
-                        else if !chatId.isEmpty { _openTelegramGroup(chatId: chatId, botUsername: botUsername) }
-                        else if !botUsername.isEmpty { _openTelegramBotFallback(bot: botUsername) }
-                        else if !primaryURL.isEmpty { _openURL(primaryURL) }
-                    case "feishu":
-                        if !primaryURL.isEmpty { _openURL(primaryURL) }
-                    default:
-                        self.showNoChatAlert = true
+
+                guard let target = URL(string: primaryURL) else {
+                    self.showNoChatAlert = true
+                    return
+                }
+
+                UIApplication.shared.open(target, options: [:]) { opened in
+                    guard !opened else { return }
+                    // Scheme URL (e.g. `lark://`) only fails when the app
+                    // isn't installed. Fall back to the public web landing
+                    // page so the tap still goes somewhere useful.
+                    let fallback: URL? = {
+                        switch platform {
+                        case "feishu":   return URL(string: "https://www.feishu.cn/")
+                        case "telegram": return URL(string: "https://telegram.org/")
+                        default:         return nil
+                        }
+                    }()
+                    if let f = fallback {
+                        UIApplication.shared.open(f)
                     }
                 }
-            } catch {}
+            }
         }
     }
 
@@ -2320,31 +2337,6 @@ class CatViewModel: ObservableObject {
                 }
             } catch {}
         }
-    }
-
-    private func _openURL(_ link: String) {
-        guard let u = URL(string: link) else { return }
-        UIApplication.shared.open(u)
-    }
-
-    private func _openTelegramGroup(chatId: String, botUsername: String) {
-        let numericId: String
-        if chatId.hasPrefix("-100") { numericId = String(chatId.dropFirst(4)) }
-        else if chatId.hasPrefix("-") { numericId = String(chatId.dropFirst(1)) }
-        else { numericId = chatId }
-        if let u = URL(string: "tg://openmessage?chat_id=\(numericId)"),
-           UIApplication.shared.canOpenURL(u) {
-            UIApplication.shared.open(u); return
-        }
-        _openTelegramBotFallback(bot: botUsername)
-    }
-
-    private func _openTelegramBotFallback(bot: String) {
-        guard !bot.isEmpty else { return }
-        if let u = URL(string: "tg://resolve?domain=\(bot)"), UIApplication.shared.canOpenURL(u) {
-            UIApplication.shared.open(u); return
-        }
-        if let u = URL(string: "https://t.me/\(bot)") { UIApplication.shared.open(u) }
     }
 
     private func notifyServerSyncControl(enabled: Bool) async throws {
