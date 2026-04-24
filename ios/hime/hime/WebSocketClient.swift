@@ -20,6 +20,17 @@ private final class SessionDelegate: NSObject, URLSessionWebSocketDelegate, URLS
         }
     }
 
+    /// Fired when URLSession has a task that cannot proceed because iOS
+    /// considers the target unreachable. Seeing this in the log narrows
+    /// the diagnosis to network-path / Local-Network-permission issues
+    /// rather than server or payload problems.
+    func urlSession(_ session: URLSession, taskIsWaitingForConnectivity task: URLSessionTask) {
+        let url = task.currentRequest?.url?.absoluteString ?? "?"
+        Task { @MainActor in
+            HealthKitManager.bgLog("HTTP: Task waiting for connectivity — \(url)")
+        }
+    }
+
     /// WebSocket/HTTP failure
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         let isWS = task is URLSessionWebSocketTask
@@ -121,8 +132,16 @@ final class WebSocketClient: ObservableObject {
 
     private lazy var fgSession: URLSession = {
         let cfg = URLSessionConfiguration.default
-        cfg.waitsForConnectivity = true
+        // waitsForConnectivity = false: if iOS considers the LAN target
+        // unreachable, fail the task fast rather than parking it in an
+        // opaque "waiting" state — the reconnect backoff handles recovery.
+        cfg.waitsForConnectivity = false
         cfg.timeoutIntervalForRequest = 30
+        // Leave timeoutIntervalForResource at the default (7 days). This
+        // session hosts the long-lived WebSocket task alongside short
+        // HTTP tasks; a short resource timeout here would kill the WS
+        // periodically and force a full reconnect — 500 records/minute
+        // instead of 500 records/100ms.
         sessionDelegate.client = self
         return URLSession(configuration: cfg, delegate: sessionDelegate, delegateQueue: .main)
     }()
@@ -136,10 +155,14 @@ final class WebSocketClient: ObservableObject {
     }()
 
     private init() {
-        // Restore pending HTTP task tracking from previous session
-        if let dict = UserDefaults.standard.dictionary(forKey: Self.kPendingHTTPKey) as? [String: Int] {
-            pendingHTTPTasks = Dictionary(uniqueKeysWithValues: dict.compactMap { k, v in Int(k).map { ($0, v) } })
-        }
+        // Clear persisted in-flight HTTP task tracking. Only bgSession tasks
+        // can meaningfully survive an app launch (URLSessionConfiguration.
+        // background reattaches them), but our per-task count map doesn't
+        // round-trip reliably — cleared entries just mean one batch might
+        // be re-sent on the next flush, which the server upserts
+        // idempotently. Preferable to leaking stale entries that would
+        // block the background-HTTP dedup guard.
+        UserDefaults.standard.removeObject(forKey: Self.kPendingHTTPKey)
     }
 
     private func _persistPendingHTTPTasks() {
@@ -215,20 +238,59 @@ final class WebSocketClient: ObservableObject {
         _isFlushing = true
         defer { _isFlushing = false }
 
-        let storeCount = PendingStore.shared.count
-        guard storeCount > 0 else { return }
+        // Transport policy:
+        //
+        //   Foreground → WS exclusively.
+        //     If WS isn't up yet, return. PendingStore is file-backed and
+        //     loss-proof; samples sit there until onWSOpened re-kicks
+        //     _flush and drains them over WS. HTTP was a fallback in the
+        //     prior design, but that caused first-launch observer bursts
+        //     to race the WS handshake and get stranded on URLSession
+        //     upload tasks that never completed (iOS "waiting for
+        //     connectivity"). WS-only in foreground eliminates the race.
+        //
+        //   Background → HTTP exclusively.
+        //     WebSocket tasks don't survive app suspension, so bgSession
+        //     (URLSessionConfiguration.background) carries the drain.
+        //
+        // This function drains in a loop rather than via recursive calls.
+        // Previously _sendWS's success callback called _flush() again, but
+        // at that point the outer _flush was still awaiting the continuation
+        // and _isFlushing was still true — the recursive call tripped the
+        // guard and did nothing. That turned every successful WS send into
+        // a dead end; the pipeline only limped forward when an external
+        // event (observer fire, WS reconnect) happened to call _flush with
+        // _isFlushing = false.
+        while true {
+            let storeCount = PendingStore.shared.count
+            guard storeCount > 0 else { return }
 
-        let limit = chunkSize
-        let payloads = PendingStore.shared.peek(limit: limit)
-        guard !payloads.isEmpty else { return }
+            if appState != "background" {
+                guard isConnected else {
+                    HealthKitManager.bgLog("📤 FLUSH: deferred — WS not connected, \(storeCount) queued (will drain on onWSOpened)")
+                    return
+                }
+                let payloads = PendingStore.shared.peek(limit: chunkSize)
+                guard !payloads.isEmpty else { return }
+                HealthKitManager.bgLog("📤 FLUSH: \(payloads.count)/\(storeCount) records via WS (appState=\(appState))")
+                await _sendWS(payloads)
+                // If _sendWS hit an error, isConnected is now false and the
+                // next iteration returns via the guard above. PendingStore
+                // keeps the unsent top-N until WS reconnects.
+                continue
+            }
 
-        let transport = (isConnected && appState != "background") ? "WS" : "HTTP"
-        HealthKitManager.bgLog("📤 FLUSH: \(payloads.count)/\(storeCount) records via \(transport) (appState=\(appState), wsConnected=\(isConnected))")
-
-        if isConnected && appState != "background" {
-            await _sendWS(payloads)
-        } else {
+            // Background HTTP path. De-dup in-flight tasks so bg refresh events
+            // don't fire duplicates for the same top-N while an upload is still
+            // outstanding; the delegate re-kicks _flush when it completes.
+            if !pendingHTTPTasks.isEmpty { return }
+            let payloads = PendingStore.shared.peek(limit: chunkSize)
+            guard !payloads.isEmpty else { return }
+            HealthKitManager.bgLog("📤 FLUSH: \(payloads.count)/\(storeCount) records via HTTP (appState=\(appState))")
             _sendHTTP(payloads, appState: appState)
+            // HTTP is fire-and-forget here; the session delegate re-kicks
+            // _flush when the bgSession task resolves.
+            return
         }
     }
 
@@ -279,9 +341,10 @@ final class WebSocketClient: ObservableObject {
                         PendingStore.shared.pop(count: payloads.count)
                         HealthKitManager.shared.markOldestAsSynced(count: payloads.count)
                         HealthKitManager.bgLog("WS: Sent \(payloads.count) records")
-                        if PendingStore.shared.count > 0 {
-                            await self._flush()
-                        }
+                        // Don't call _flush here. The enclosing _flush is
+                        // looping and will peek the next chunk itself.
+                        // Calling _flush here would recurse while
+                        // _isFlushing is still true and just trip the guard.
                         guardBox.resume()
                     }
                 }
@@ -346,7 +409,11 @@ final class WebSocketClient: ObservableObject {
                 HealthKitManager.shared.markOldestAsSynced(count: count)
                 HealthKitManager.bgLog("HTTP: Success (\(count) records)")
                 self.httpRetryDelay = 2.0
-                if PendingStore.shared.count > 0 { await self._flush() }
+                // HTTP tasks only fire from bgSession under the current
+                // transport policy, so keep the drain on the HTTP path.
+                // If this dispatched to foreground, the WS-only rule would
+                // stall the chain during bg wake when WS is not alive.
+                if PendingStore.shared.count > 0 { await self._flush(appState: "background") }
             }
         }
     }
@@ -370,7 +437,7 @@ final class WebSocketClient: ObservableObject {
                 let delay = self.httpRetryDelay
                 self.httpRetryDelay = min(self.httpRetryDelay * 2, self.maxHttpRetryDelay)
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-                await self._flush()
+                await self._flush(appState: "background")
             }
         }
     }

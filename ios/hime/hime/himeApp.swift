@@ -54,6 +54,12 @@ struct himeApp: App {
         // Only request HealthKit + run bootstrap if the user has already
         // completed onboarding AND granted AI data-sharing consent.
         if hasOnboarded && hasConsentedToAI {
+            // Open the WebSocket before kicking HealthKit. Observer
+            // callbacks fire immediately after registration and each one
+            // triggers a flush; if WS isn't up yet, those flushes have
+            // nowhere to go (foreground is WS-only by policy). Opening WS
+            // here ensures it's ready by the time setup() finishes.
+            WebSocketClient.shared.connect()
             Task {
                 await HealthKitManager.shared.setup()
             }

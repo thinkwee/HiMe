@@ -370,6 +370,13 @@ struct OnboardingView: View {
         serverAddress = cleaned
         let cfg = ServerConfig(baseAddress: cleaned)
         cfg.save()
+        // Publish to the live singleton so existing WS/HTTP pipelines pick up
+        // the new address immediately. Without this, the WebSocketClient keeps
+        // pointing at whatever ServerConfig.load() returned at app launch
+        // (usually the default 192.168.1.100), and every post-onboarding
+        // upload silently targets a dead address — see SettingsView for the
+        // same pattern.
+        WebSocketClient.shared.serverConfig = cfg
         guard let url = URL(string: "\(cfg.apiBaseURL)/health") else {
             serverTestState = .failure(String(localized: "Invalid server address"))
             return
@@ -381,6 +388,13 @@ struct OnboardingView: View {
             if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
                 let fmt = String(localized: "Connected to %@")
                 serverTestState = .success(String(format: fmt, cfg.baseAddress))
+                // Open the WebSocket now — the user still has several pages
+                // to tap through (consent, HK auth, cat picker) before the
+                // first observer burst. By the time HealthKit starts firing
+                // samples, WS is already established and the initial 1000s
+                // of records drain over WS instead of racing a
+                // half-initialised HTTP fallback.
+                WebSocketClient.shared.connect()
             } else {
                 serverTestState = .failure(String(localized: "Server responded with an error"))
             }

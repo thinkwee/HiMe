@@ -238,6 +238,13 @@ final class HealthKitManager: ObservableObject {
 
     private init() {}
 
+    /// Guards against duplicate observer registration. setup() is called from
+    /// both himeApp bootstrap and OnboardingView's HealthKit step; without
+    /// this flag each observer gets attached twice and every HK change fires
+    /// two fetch+upload pipelines — doubling backfill traffic and the
+    /// recentSamples UI list.
+    private var didRegisterObservers = false
+
     func setup() async {
         guard HKHealthStore.isHealthDataAvailable() else {
             await MainActor.run { authStatus = "HealthKit not available on this device" }
@@ -268,6 +275,12 @@ final class HealthKitManager: ObservableObject {
             HealthKitManager.bgLog("HealthKit auth failed: \(error.localizedDescription)")
             return
         }
+
+        if didRegisterObservers {
+            HealthKitManager.bgLog("HealthKit observers already registered — skipping duplicate setup()")
+            return
+        }
+        didRegisterObservers = true
 
         // Cumulative metrics use HKStatisticsCollectionQuery for source-priority
         // deduplication — this matches iOS Health's numbers exactly.
@@ -397,8 +410,8 @@ final class HealthKitManager: ObservableObject {
         let anchorKey = "anchor_workouts"
         let anchor = HealthKitManager.loadAnchorStatic(anchorKey)
 
-        let thirtyDaysAgo = Calendar.current.date(byAdding: .day, value: -30, to: Date())!
-        let predicate = HKQuery.predicateForSamples(withStart: thirtyDaysAgo, end: nil, options: .strictStartDate)
+        let backfillStart = Calendar.current.date(byAdding: .day, value: -14, to: Date())!
+        let predicate = HKQuery.predicateForSamples(withStart: backfillStart, end: nil, options: .strictStartDate)
 
         let healthStore = await MainActor.run { HealthKitManager.shared.store }
         let payloads: [HealthPayload] = await withCheckedContinuation { continuation in
@@ -445,10 +458,7 @@ final class HealthKitManager: ObservableObject {
         await MainActor.run {
             let m = HealthKitManager.shared
             m.lastSync = ts
-            m.recentSamples.insert(contentsOf: recents.reversed(), at: 0)
-            if m.recentSamples.count > 1000 {
-                m.recentSamples = Array(m.recentSamples.prefix(1000))
-            }
+            m.mergeRecentSamples(recents)
         }
 
         await WebSocketClient.shared.flushPendingAndWait(appState: appState)
@@ -476,14 +486,14 @@ final class HealthKitManager: ObservableObject {
         // latest value wins.
         let lookbackSeconds: TimeInterval = 6 * 3600
 
-        let thirtyDaysAgo = Calendar.current.date(byAdding: .day, value: -30, to: Date())!
+        let backfillStart = Calendar.current.date(byAdding: .day, value: -14, to: Date())!
         let startDate: Date
         if lastSent > 0 {
             let hwmDate = Date(timeIntervalSince1970: lastSent)
             let lookbackDate = hwmDate.addingTimeInterval(-lookbackSeconds)
-            startDate = max(lookbackDate, thirtyDaysAgo)
+            startDate = max(lookbackDate, backfillStart)
         } else {
-            startDate = thirtyDaysAgo
+            startDate = backfillStart
         }
 
         // Align bucket boundaries to midnight for predictable hourly intervals.
@@ -565,10 +575,7 @@ final class HealthKitManager: ObservableObject {
         await MainActor.run {
             let m = HealthKitManager.shared
             m.lastSync = ts
-            m.recentSamples.insert(contentsOf: recents.reversed(), at: 0)
-            if m.recentSamples.count > 1000 {
-                m.recentSamples = Array(m.recentSamples.prefix(1000))
-            }
+            m.mergeRecentSamples(recents)
         }
 
         await WebSocketClient.shared.flushPendingAndWait(appState: appState)
@@ -588,10 +595,10 @@ final class HealthKitManager: ObservableObject {
         let anchorKey = "anchor_\(sampleType.identifier)"
         let anchor = HealthKitManager.loadAnchorStatic(anchorKey)
 
-        // Always cap queries to the last 30 days — prevents historical data flood
+        // Always cap queries to the last 14 days — prevents historical data flood
         // after app reinstall (anchor lost) and keeps incremental queries bounded.
-        let thirtyDaysAgo = Calendar.current.date(byAdding: .day, value: -30, to: Date())!
-        let predicate = HKQuery.predicateForSamples(withStart: thirtyDaysAgo, end: nil, options: .strictStartDate)
+        let backfillStart = Calendar.current.date(byAdding: .day, value: -14, to: Date())!
+        let predicate = HKQuery.predicateForSamples(withStart: backfillStart, end: nil, options: .strictStartDate)
 
         let healthStore = await MainActor.run { HealthKitManager.shared.store }
         let localPayloads: [HealthPayload] = await withCheckedContinuation { continuation in
@@ -657,16 +664,28 @@ final class HealthKitManager: ObservableObject {
         await MainActor.run {
             let m = HealthKitManager.shared
             m.lastSync = ts
-            m.recentSamples.insert(contentsOf: recents.reversed(), at: 0)
-            if m.recentSamples.count > 1000 {
-                m.recentSamples = Array(m.recentSamples.prefix(1000))
-            }
+            m.mergeRecentSamples(recents)
         }
 
         await WebSocketClient.shared.flushPendingAndWait(appState: appState)
     }
 
     // MARK: - UI Sync Status
+
+    /// Merge freshly-emitted samples into `recentSamples`, deduplicating by
+    /// (feature, timestamp). Cumulative metrics re-emit the same hourly bucket
+    /// every foreground sync; without dedup the UI list would stack 10–20
+    /// identical entries per bucket. When a duplicate arrives we replace the
+    /// old entry (value may have been revised by HealthKit) and keep newest-first order.
+    func mergeRecentSamples(_ incoming: [RecentSample]) {
+        guard !incoming.isEmpty else { return }
+        let keys = Set(incoming.map { "\($0.feature)|\($0.timestamp.timeIntervalSince1970)" })
+        recentSamples.removeAll { keys.contains("\($0.feature)|\($0.timestamp.timeIntervalSince1970)") }
+        recentSamples.insert(contentsOf: incoming.reversed(), at: 0)
+        if recentSamples.count > 1000 {
+            recentSamples = Array(recentSamples.prefix(1000))
+        }
+    }
 
     /// Marks the N oldest samples as synced in the UI.
     /// Already isolated to @MainActor via the class annotation.

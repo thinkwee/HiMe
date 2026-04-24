@@ -76,7 +76,6 @@ INSERT = """
     ON CONFLICT(ts, f) DO UPDATE SET
         v = excluded.v,
         updated_at = strftime('%s', 'now')
-    WHERE excluded.v != health_samples_eav.v
 """
 
 
