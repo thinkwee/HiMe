@@ -150,6 +150,28 @@ async def query_agent_memory(pid: str, query_type: str = "stats"):
 
 
 # ---------------------------------------------------------------------------
+# DELETE /memory/{pid}/reports/{report_id}
+# ---------------------------------------------------------------------------
+
+@diagnostics_router.delete("/memory/{pid}/reports/{report_id}")
+async def delete_agent_report(pid: str, report_id: int):
+    """Delete a single agent-generated report by id."""
+    try:
+        memory = _get_or_create_memory(pid)
+        if not memory:
+            raise HTTPException(status_code=404, detail=f"No memory found for user {pid}")
+        removed = memory.delete_report(report_id)
+        if not removed:
+            raise HTTPException(status_code=404, detail=f"Report {report_id} not found")
+        return {"success": True, "user_id": pid, "deleted_id": report_id}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Error deleting report %s for %s: %s", report_id, pid, exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
 # GET /tools
 # ---------------------------------------------------------------------------
 

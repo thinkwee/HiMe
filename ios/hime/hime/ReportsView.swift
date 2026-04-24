@@ -105,8 +105,9 @@ struct ReportsEmptyView: View {
 
 struct ReportRow: View {
     let report: AgentReport
-    let viewModel: DashboardViewModel
+    @ObservedObject var viewModel: DashboardViewModel
     @State private var isExpanded: Bool = false
+    @State private var showDeleteConfirm: Bool = false
 
     private var alertColor: Color {
         switch viewModel.alertColor(for: report.alert_level) {
@@ -174,9 +175,19 @@ struct ReportRow: View {
                     .lineSpacing(3)
                     .fixedSize(horizontal: false, vertical: true)
 
-                if let level = report.alert_level {
-                    HStack {
-                        Spacer()
+                HStack {
+                    Button {
+                        showDeleteConfirm = true
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                            .font(.caption.weight(.medium))
+                            .foregroundColor(.red)
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer()
+
+                    if let level = report.alert_level {
                         Text(level.uppercased())
                             .font(.system(size: 9, weight: .bold))
                             .foregroundColor(alertColor)
@@ -191,6 +202,21 @@ struct ReportRow: View {
         .padding(12)
         .background(Color(.secondarySystemGroupedBackground))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .contextMenu {
+            Button(role: .destructive) {
+                showDeleteConfirm = true
+            } label: {
+                Label("Delete Report", systemImage: "trash")
+            }
+        }
+        .alert("Delete this report?", isPresented: $showDeleteConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) {
+                Task { await viewModel.deleteReport(id: report.id) }
+            }
+        } message: {
+            Text("This will remove the report from your server. This cannot be undone.")
+        }
     }
 
     private func formatTimestamp(_ ts: String) -> String {

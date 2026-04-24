@@ -175,6 +175,13 @@ class MemoryManager:
             result.append(d)
         return result
 
+    def delete_report(self, report_id: int) -> bool:
+        """Delete a single report by id. Returns True if a row was removed."""
+        with sqlite3.connect(self.db_file, timeout=30) as conn:
+            cursor = conn.execute("DELETE FROM reports WHERE id = ?", (report_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
     # ------------------------------------------------------------------
     # Activity log
     # ------------------------------------------------------------------

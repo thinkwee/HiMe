@@ -718,6 +718,34 @@ class DashboardViewModel: ObservableObject {
         }
     }
 
+    /// Delete a report on the server and, on success, remove it from the local
+    /// list so the UI updates immediately. If the server call fails, the report
+    /// is re-inserted so the user can retry. Any surface error is exposed via
+    /// `errorMessage` so the view can show a toast / alert.
+    func deleteReport(id: Int) async {
+        let base = ServerConfig.load().apiBaseURL
+        guard let url = URL(string: "\(base)/api/agent/memory/\(userId)/reports/\(id)") else { return }
+
+        let original = reports
+        let optimistic = reports.filter { $0.id != id }
+        reports = optimistic
+        publishLatestReportToWidget()
+
+        do {
+            var request = APIClient.request(url, method: "DELETE")
+            request.timeoutInterval = 10
+            let (_, response) = try await URLSession.shared.data(for: request)
+            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                throw URLError(.badServerResponse)
+            }
+            errorMessage = nil
+        } catch {
+            reports = original
+            publishLatestReportToWidget()
+            errorMessage = "Could not delete report: \(error.localizedDescription)"
+        }
+    }
+
     // MARK: - Health Metrics from Server API (same data as web dashboard)
 
     private struct DashboardResponse: Decodable {

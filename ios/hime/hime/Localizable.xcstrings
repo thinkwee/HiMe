@@ -931,6 +931,15 @@
         }
       }
     },
+    "Delete" : {
+
+    },
+    "Delete Report" : {
+
+    },
+    "Delete this report?" : {
+
+    },
     "Deploy Your Own Server" : {
       "localizations" : {
         "zh-Hans" : {
@@ -2642,6 +2651,9 @@
           }
         }
       }
+    },
+    "This will remove the report from your server. This cannot be undone." : {
+
     },
     "Threshold" : {
       "extractionState" : "manual",
