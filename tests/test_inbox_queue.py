@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from backend.messaging.base import MessageChannel, MessageEnvelope
-from backend.messaging.inbox import InboxQueue, _debounce
+from backend.messaging.inbox import InboxQueue
 
 
 def _msg(
@@ -93,7 +93,13 @@ async def test_wait_and_pop_all_drains_followup_messages() -> None:
     assert [m.message_id for m in drained] == ["1", "2"]
 
 
-def test_debounce_returns_original_for_zero_or_one_message() -> None:
-    one = [_msg("1", "only")]
-    assert _debounce([]) == []
-    assert _debounce(one) == one
+@pytest.mark.asyncio
+async def test_pop_all_handles_empty_and_single_message() -> None:
+    queue = InboxQueue()
+    assert await queue.pop_all() == []
+
+    msg = _msg("1", "only")
+    await queue.push(msg)
+    drained = await queue.pop_all()
+    assert len(drained) == 1
+    assert drained[0] == msg

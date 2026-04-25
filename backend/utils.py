@@ -153,6 +153,7 @@ def serialize_value(value: Any) -> Any:
             return None
         return value.item()
     try:
+        # Scalars work with pd.isna, but arrays/other objects can raise.
         if pd.isna(value):
             return None
     except (TypeError, ValueError):
