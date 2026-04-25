@@ -157,8 +157,7 @@ def serialize_value(value: Any) -> Any:
             return None
     except (TypeError, ValueError):
         pass
-    else:
-        return value
+    return value
 
 
 def clean_dict_for_json(data: dict) -> dict:
