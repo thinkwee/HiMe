@@ -167,7 +167,12 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ #
     API_HOST: str   = "0.0.0.0"
     API_PORT: int   = 8000
-    TIMEZONE: str   = "Europe/London"  # Default timezone for agent analysis
+    # IANA timezone name (e.g. UTC, Europe/London, America/New_York,
+    # Asia/Shanghai). Used as the wall-clock for cron expressions in
+    # ``scheduled_tasks`` and for user-facing timestamps in agent prompts.
+    # Independent of the container's system clock so deployments work
+    # consistently regardless of host TZ.
+    TIMEZONE: str   = "UTC"
     CORS_ORIGINS: list[str] = [
         "http://localhost:5173",
         "http://localhost:3000",
@@ -264,6 +269,24 @@ class Settings(BaseSettings):
             )
             return False
         return True
+
+    def validate_timezone(self) -> bool:
+        """Check that ``TIMEZONE`` is a known IANA name.
+
+        Returns True if valid. On failure logs a warning and the application
+        will silently fall back to UTC via ``utils.app_timezone()``.
+        """
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        try:
+            ZoneInfo(self.TIMEZONE)
+            return True
+        except (ZoneInfoNotFoundError, ValueError) as e:
+            logger.warning(
+                "TIMEZONE=%r is not a valid IANA timezone (%s); falling back to UTC. "
+                "Set TIMEZONE in .env to e.g. Europe/London, America/New_York, Asia/Shanghai.",
+                self.TIMEZONE, e,
+            )
+            return False
 
     # ------------------------------------------------------------------ #
     # Pydantic settings

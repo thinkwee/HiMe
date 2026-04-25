@@ -162,6 +162,7 @@ Agent-generated `route.py` is validated against a denylist; generated HTML is se
 - **Frontend**: plain JSX (no TypeScript yet), 2-space indent, single quotes, no semicolons, Prettier-managed.
 - **Swift**: standard SwiftUI conventions; avoid force-unwraps unless an invariant makes it safe.
 - **Logging** (never `print()`). Configured in `backend/logging_config.py`. The agent logs every tool call, LLM round-trip, and supervisor restart to `logs/backend.log`.
+- **Time** is always tz-aware in user-facing logic. SQLite columns are stored as UTC ISO strings (`strftime('%Y-%m-%dT%H:%M:%S','now')`). Cron expressions in `scheduled_tasks` and prompt timestamps are interpreted in `settings.TIMEZONE` (any IANA name, default `UTC`) — never the container's system clock. Use `backend/utils.py` helpers (`now_utc`, `now_local`, `parse_db_iso_utc`, `app_timezone`) instead of bare `datetime.now()` for new scheduling/display code.
 - **Commit messages**: short imperative-mood subjects, lowercase, no trailing period. Body optional but encouraged for non-trivial changes — explain *why*.
 - **Tests**: pytest + pytest-asyncio (auto mode). Fixtures in `tests/conftest.py` give you mock settings, temp DBs, a fake LLM provider, and a FastAPI test client. No test is allowed to make a real LLM call.
 

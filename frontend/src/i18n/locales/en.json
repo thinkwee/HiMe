@@ -117,6 +117,7 @@
     "scheduled_tasks": "Scheduled Tasks",
     "no_scheduled_tasks": "No scheduled tasks",
     "cron_placeholder": "Cron expression (e.g. 0 8 * * *)",
+    "cron_timezone_hint": "Cron times are interpreted in {{tz}}.",
     "analysis_goal_placeholder": "Analysis goal...",
     "cron_expression": "Cron expression",
     "failed_create_task": "Failed to create task",

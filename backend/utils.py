@@ -3,6 +3,7 @@ Utility functions for safe JSON serialization of DataFrames and timestamp format
 """
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import numpy as np
 import pandas as pd
@@ -26,6 +27,58 @@ def ts_fmt(dt: datetime) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc).strftime(_TS_FMT)
+
+
+def parse_db_iso_utc(s: str | None) -> datetime | None:
+    """
+    Parse an ISO timestamp from the SQLite memory DB into a tz-aware UTC datetime.
+
+    DB columns (`created_at`, `last_run_at`, ...) are written with SQLite's
+    `strftime('%Y-%m-%dT%H:%M:%S','now')` — UTC, no offset suffix. We always
+    re-attach UTC so downstream comparisons / cron walks are unambiguous.
+    """
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s)
+    except (TypeError, ValueError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# Application timezone — single source of truth for cron scheduling and
+# user-facing wall-clock formatting. Configured via `settings.TIMEZONE`
+# (any IANA name, e.g. UTC, Europe/London, Asia/Shanghai).
+# ---------------------------------------------------------------------------
+
+
+def app_timezone() -> ZoneInfo:
+    """
+    Return the configured application timezone as a ZoneInfo.
+
+    Falls back to UTC if `settings.TIMEZONE` is unset or unknown. The
+    fallback is silent here; startup calls `settings.validate_timezone()`
+    once which logs a warning so operators see the misconfiguration.
+    """
+    from .config import settings  # lazy import: utils <- config <- ... cycle-free
+    tz_name = (settings.TIMEZONE or "UTC").strip() or "UTC"
+    try:
+        return ZoneInfo(tz_name)
+    except ZoneInfoNotFoundError:
+        return ZoneInfo("UTC")
+
+
+def now_utc() -> datetime:
+    """Current time as a tz-aware UTC datetime."""
+    return datetime.now(timezone.utc)
+
+
+def now_local() -> datetime:
+    """Current time as a tz-aware datetime in `settings.TIMEZONE`."""
+    return datetime.now(app_timezone())
 
 
 def dataframe_to_json_safe(df: pd.DataFrame) -> list[dict[str, Any]]:

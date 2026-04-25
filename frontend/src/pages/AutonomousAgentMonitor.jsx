@@ -353,6 +353,7 @@ function LogItem({ update }) {
 function ScheduledTasksPanel({ isRunning }) {
   const { t } = useTranslation()
   const [tasks, setTasks] = useState([])
+  const [serverTz, setServerTz] = useState('UTC')
   const [showAdd, setShowAdd] = useState(false)
   const [newCron, setNewCron] = useState('0 8 * * *')
   const [newGoal, setNewGoal] = useState('')
@@ -362,7 +363,10 @@ function ScheduledTasksPanel({ isRunning }) {
 
   const fetchTasks = useCallback(async () => {
     const res = await api.getScheduledTasks()
-    if (res.success) setTasks(res.tasks || [])
+    if (res.success) {
+      setTasks(res.tasks || [])
+      if (res.timezone) setServerTz(res.timezone)
+    }
   }, [])
 
   useEffect(() => {
@@ -436,6 +440,10 @@ function ScheduledTasksPanel({ isRunning }) {
           <Plus className="w-3 h-3" /> {t('common.add')}
         </button>
       </div>
+
+      <p className="-mt-2 mb-3 text-[11px] text-gray-500">
+        {t('agent.cron_timezone_hint', { tz: serverTz })}
+      </p>
 
       {showAdd && (
         <div className="mb-3 p-3 bg-gray-50 rounded border border-gray-200 space-y-2">

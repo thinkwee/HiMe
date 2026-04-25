@@ -67,7 +67,6 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ..config import settings
 from .prompt_loader import load_prompt
 from .skills.prompt import format_skills_for_prompt
 
@@ -161,15 +160,10 @@ class AgentPromptsMixin:
     # ------------------------------------------------------------------
 
     def _format_message_timestamp(self, dt: datetime) -> str:
-        import pytz
-        tz_name = getattr(settings, "TIMEZONE", "UTC")
-        try:
-            local_tz = pytz.timezone(tz_name)
-        except Exception:
-            local_tz = pytz.UTC
+        from ..utils import app_timezone
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(local_tz).strftime("%Y-%m-%d %H:%M")
+        return dt.astimezone(app_timezone()).strftime("%Y-%m-%d %H:%M")
 
     # ------------------------------------------------------------------
     # Layer composition

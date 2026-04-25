@@ -8,6 +8,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from ..config import settings
 from .agent_state import _get_or_create_memory, active_agents
 
 logger = logging.getLogger(__name__)
@@ -36,10 +37,14 @@ class ScheduledTaskUpdate(BaseModel):
 
 @tasks_router.get("/scheduled-tasks/{user_id}")
 async def list_scheduled_tasks(user_id: str):
-    """List all scheduled tasks for a user."""
+    """List all scheduled tasks for a user.
+
+    Includes ``timezone`` so the dashboard can label cron expressions with
+    the wall-clock the server actually uses.
+    """
     memory = _get_or_create_memory(user_id)
     if not memory:
-        return {"success": True, "tasks": []}
+        return {"success": True, "tasks": [], "timezone": settings.TIMEZONE}
     try:
         import sqlite3
         with sqlite3.connect(str(memory.db_file), timeout=5) as conn:
@@ -48,7 +53,11 @@ async def list_scheduled_tasks(user_id: str):
                 "SELECT id, cron_expr, prompt_goal, status, last_run_at, created_at "
                 "FROM scheduled_tasks WHERE status != 'deleted' ORDER BY id"
             ).fetchall()
-        return {"success": True, "tasks": [dict(r) for r in rows]}
+        return {
+            "success": True,
+            "tasks": [dict(r) for r in rows],
+            "timezone": settings.TIMEZONE,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

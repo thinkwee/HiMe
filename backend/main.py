@@ -3,6 +3,7 @@ import os
 import signal
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,6 +37,7 @@ from .api.stream_routes import router as stream_router
 from .config import settings
 from .logging_config import setup_logging
 from .services.streaming_service import shutdown_executor
+from .utils import app_timezone, now_utc, parse_db_iso_utc, ts_fmt
 
 # Setup logging (stdout only — start.sh redirects to logs/backend.log)
 logger = setup_logging()
@@ -67,30 +69,24 @@ def get_gateway_registry() -> GatewayRegistry:
     return _gateway_registry
 
 
-def _parse_iso(ts: str | None) -> datetime | None:
-    """Parse an ISO timestamp stored in the memory DB. Returns None on failure."""
-    if not ts:
-        return None
-    try:
-        return datetime.fromisoformat(ts)
-    except (TypeError, ValueError):
-        return None
-
-
-def _claim_due_tasks(db_file: str, now: datetime) -> list[tuple[int, str, datetime]]:
+def _claim_due_tasks(
+    db_file: str, now: datetime, app_tz: ZoneInfo,
+) -> list[tuple[int, str, datetime]]:
     """
     Atomically find and claim scheduled tasks whose next cron tick has passed.
 
-    For each active task, computes the next fire time from `last_run_at`
-    (or `created_at` if the task has never fired). If that tick is <= now,
-    the task is claimed by writing the tick back to `last_run_at` inside the
-    same transaction, and returned to the caller for execution.
+    Cron expressions are interpreted in ``app_tz`` (settings.TIMEZONE), not
+    the container's system clock. The DB stores ``last_run_at`` / ``created_at``
+    as UTC ISO strings (without offset); we parse them back as UTC and convert
+    to ``app_tz`` before feeding croniter so the wall-clock matches whatever
+    the user typed in their cron — regardless of where the container runs.
 
     Catch-up semantics: if the scheduler was down and multiple ticks were
     missed, we skip forward to the most recent missed tick and fire exactly
     once — no replay storms.
 
     Returns: list of (task_id, prompt_goal, fired_tick) for tasks to execute.
+    ``fired_tick`` is tz-aware in ``app_tz``.
     """
     import sqlite3 as _sqlite3
 
@@ -107,16 +103,21 @@ def _claim_due_tasks(db_file: str, now: datetime) -> list[tuple[int, str, dateti
             ).fetchall()
 
             for row in rows:
-                anchor = _parse_iso(row["last_run_at"]) or _parse_iso(row["created_at"]) or now
+                anchor_utc = (
+                    parse_db_iso_utc(row["last_run_at"])
+                    or parse_db_iso_utc(row["created_at"])
+                    or now
+                )
+                anchor_local = anchor_utc.astimezone(app_tz)
                 try:
-                    itr = _croniter.croniter(row["cron_expr"], anchor)
-                    next_tick = itr.get_next(datetime)
+                    itr = _croniter.croniter(row["cron_expr"], anchor_local)
+                    next_tick = itr.get_next(datetime)  # tz-aware, in app_tz
                 except Exception as e:
                     logger.warning("Scheduler: bad cron_expr for task %d: %s", row["id"], e)
                     continue
 
                 if next_tick > now:
-                    continue  # not yet due
+                    continue  # not yet due (aware-vs-aware compares correctly)
 
                 # Catch up: advance to the most recent missed tick so we fire
                 # only once even if the scheduler was down for a long time.
@@ -127,16 +128,21 @@ def _claim_due_tasks(db_file: str, now: datetime) -> list[tuple[int, str, dateti
                         break
                     fired_tick = peek
 
+                # Persist as UTC ISO seconds (DB convention — naive UTC).
                 conn.execute(
                     "UPDATE scheduled_tasks SET last_run_at = ? WHERE id = ?",
-                    (fired_tick.isoformat(), row["id"]),
+                    (ts_fmt(fired_tick), row["id"]),
                 )
                 logger.info(
-                    "Scheduler claim: pid=%d task=%d last_run_at %s -> %s (anchor=%s, now=%s)",
+                    "Scheduler claim: pid=%d task=%d last_run_at %s -> %s UTC "
+                    "(tick %s in %s; anchor=%s; now=%s UTC)",
                     os.getpid(), row["id"],
                     row["last_run_at"] or "NULL",
+                    ts_fmt(fired_tick),
                     fired_tick.isoformat(),
-                    anchor.isoformat(), now.isoformat(),
+                    app_tz.key,
+                    anchor_local.isoformat(),
+                    now.isoformat(),
                 )
                 due.append((row["id"], row["prompt_goal"], fired_tick))
 
@@ -151,12 +157,12 @@ async def _run_cron_scheduler():
     """
     Poll the memory DB and dispatch scheduled analysis tasks.
 
-    Design: state-machine driven. Each task's `last_run_at` stores the
-    scheduled cron tick it last executed for (not wall-clock time). On each
-    poll, we ask croniter "what's the next tick after last_run_at?" and fire
-    iff that tick is in the past. After firing we advance `last_run_at` to
-    that tick — which makes the whole loop idempotent, drift-free, and
-    crash-safe without any magic windows.
+    Design: state-machine driven. Each task's ``last_run_at`` stores the
+    scheduled cron tick it last executed for (in UTC, not wall-clock). On
+    each poll we ask croniter "what's the next tick after that anchor?",
+    interpreting the cron expression in ``settings.TIMEZONE``. We fire iff
+    that tick is in the past, then advance ``last_run_at`` to it — making
+    the whole loop idempotent, drift-free, DST-aware, and crash-safe.
     """
     try:
         import croniter as _croniter  # noqa: F401  (imported for availability check)
@@ -164,16 +170,19 @@ async def _run_cron_scheduler():
         logger.warning("croniter not installed — scheduled_tasks will not run. pip install croniter")
         return
 
-    logger.info("Cron scheduler started")
+    app_tz = app_timezone()
+    logger.info("Cron scheduler started (timezone=%s)", app_tz.key)
     while True:
         try:
-            now = datetime.now().replace(microsecond=0)
+            now = now_utc().replace(microsecond=0)
             for pid, info in get_active_agents_dict().items():
                 memory = get_memory_manager_for(pid)
                 if not memory:
                     continue
                 try:
-                    due = await asyncio.to_thread(_claim_due_tasks, str(memory.db_file), now)
+                    due = await asyncio.to_thread(
+                        _claim_due_tasks, str(memory.db_file), now, app_tz,
+                    )
                 except Exception as e:
                     logger.warning("Cron scheduler: DB error for %s: %s", pid, e)
                     continue
@@ -193,10 +202,10 @@ async def _run_cron_scheduler():
         except Exception as e:
             logger.error("Scheduler loop error: %s", e)
 
-        # Align to the next minute boundary.
-        now = datetime.now()
-        next_minute = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
-        await asyncio.sleep(max(0.1, (next_minute - now).total_seconds()))
+        # Align to the next minute boundary (UTC — wall clock irrelevant for sleep).
+        wall = now_utc()
+        next_minute = wall.replace(second=0, microsecond=0) + timedelta(minutes=1)
+        await asyncio.sleep(max(0.1, (next_minute - wall).total_seconds()))
 
 
 @asynccontextmanager
@@ -212,6 +221,9 @@ async def lifespan(app: FastAPI):
 
     # Validate LLM API keys early so operators see a clear warning
     settings.validate_llm_keys()
+    # Validate the configured timezone once — utils.app_timezone() will
+    # silently fall back to UTC if invalid, so we surface the warning here.
+    settings.validate_timezone()
 
     # Ensure required directories exist
     logger.info("[Startup] 2/4 Creating directories (memory, logs)...")
