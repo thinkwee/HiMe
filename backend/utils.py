@@ -144,18 +144,21 @@ def serialize_value(value: Any) -> Any:
     Returns:
         JSON-serializable value
     """
-    if pd.isna(value):
-        return None
-    elif isinstance(value, (pd.Timestamp, np.datetime64)):
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, (pd.Timestamp, np.datetime64)):
         return ts_fmt(value.to_pydatetime()) if hasattr(value, 'to_pydatetime') else str(value)
-    elif isinstance(value, (np.integer, np.floating)):
+    if isinstance(value, (np.integer, np.floating)):
         if np.isnan(value) or np.isinf(value):
             return None
         return value.item()
-    elif isinstance(value, np.ndarray):
-        return value.tolist()
-    else:
-        return value
+    try:
+        # Scalars work with pd.isna, but arrays/other objects can raise.
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    return value
 
 
 def clean_dict_for_json(data: dict) -> dict:
