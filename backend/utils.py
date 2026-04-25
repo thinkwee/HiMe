@@ -146,9 +146,9 @@ def serialize_value(value: Any) -> Any:
     """
     if isinstance(value, np.ndarray):
         return value.tolist()
-    elif isinstance(value, (pd.Timestamp, np.datetime64)):
+    if isinstance(value, (pd.Timestamp, np.datetime64)):
         return ts_fmt(value.to_pydatetime()) if hasattr(value, 'to_pydatetime') else str(value)
-    elif isinstance(value, (np.integer, np.floating)):
+    if isinstance(value, (np.integer, np.floating)):
         if np.isnan(value) or np.isinf(value):
             return None
         return value.item()
