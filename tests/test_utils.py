@@ -83,6 +83,18 @@ def test_serialize_value_handles_numpy_datetime_scalars_and_arrays() -> None:
     assert utils.serialize_value(np.array([1, 2, 3])) == [1, 2, 3]
     assert utils.serialize_value(pd.Timestamp("2026-01-02T03:04:05Z")) == "2026-01-02T03:04:05"
     assert utils.serialize_value(np.datetime64("2026-01-02T03:04:05")) == "2026-01-02T03:04:05"
+    # High-precision np.datetime64 must also normalise — proves we go through
+    # ts_fmt rather than relying on str(np.datetime64) happening to match.
+    assert utils.serialize_value(np.datetime64("2026-01-02T03:04:05.123456")) == "2026-01-02T03:04:05"
+
+
+def test_serialize_value_normalises_non_finite_python_floats() -> None:
+    # JSON can't represent inf/nan — both numpy scalars and plain Python
+    # floats must collapse to None so downstream json.dumps doesn't blow up.
+    assert utils.serialize_value(float("inf")) is None
+    assert utils.serialize_value(float("-inf")) is None
+    assert utils.serialize_value(float("nan")) is None
+    assert utils.serialize_value(1.5) == 1.5
 
 
 def test_clean_dict_for_json_recursively_serializes_nested_data() -> None:

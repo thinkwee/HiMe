@@ -1,6 +1,7 @@
 """
 Utility functions for safe JSON serialization of DataFrames and timestamp formatting.
 """
+import math
 from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -81,79 +82,27 @@ def now_local() -> datetime:
     return datetime.now(app_timezone())
 
 
-def dataframe_to_json_safe(df: pd.DataFrame) -> list[dict[str, Any]]:
-    """
-    Safely convert DataFrame to JSON-serializable list of dictionaries.
-    Handles Pandas timestamps, NaN, and Infinity values.
-
-    Args:
-        df: Pandas DataFrame
-
-    Returns:
-        List of dictionaries safe for JSON serialization
-    """
-    if df.empty:
-        return []
-
-    df = df.copy()
-
-    # Convert datetime columns to ISO strings (handles datetime64, datetime64[tz])
-    for col in df.columns:
-        if pd.api.types.is_datetime64_any_dtype(df[col]):
-            df[col] = df[col].apply(lambda x: ts_fmt(x.to_pydatetime()) if pd.notna(x) else None)
-
-    # Replace NaN and Inf with None BEFORE to_dict
-    df = df.replace([np.inf, -np.inf], None)
-    df = df.where(pd.notnull(df), None)
-
-    # Convert to records
-    records = df.to_dict(orient='records')
-
-    # AGGRESSIVE: Clean every value in every record
-    import math
-    cleaned_records = []
-    for record in records:
-        cleaned = {}
-        for key, value in record.items():
-            # Check if it's a float and is NaN/Inf
-            if isinstance(value, float):
-                if math.isnan(value) or math.isinf(value):
-                    cleaned[key] = None
-                else:
-                    cleaned[key] = value
-            elif value is None:
-                cleaned[key] = None
-            elif pd.isna(value):  # Catch pandas NA
-                cleaned[key] = None
-            elif isinstance(value, (pd.Timestamp, np.datetime64)):
-                cleaned[key] = ts_fmt(pd.Timestamp(value).to_pydatetime())
-            else:
-                cleaned[key] = value
-        cleaned_records.append(cleaned)
-
-    return cleaned_records
-
-
 def serialize_value(value: Any) -> Any:
     """
-    Serialize a single value to JSON-safe format.
+    Serialize a single value to a JSON-safe scalar / list.
 
-    Args:
-        value: Any value
-
-    Returns:
-        JSON-serializable value
+    Order matters: ``np.ndarray`` and datetime types are checked before
+    ``pd.isna``, because ``pd.isna`` returns an array (not a bool) for
+    array-like inputs and would raise inside the truthy check.
     """
     if isinstance(value, np.ndarray):
         return value.tolist()
     if isinstance(value, (pd.Timestamp, np.datetime64)):
-        return ts_fmt(value.to_pydatetime()) if hasattr(value, 'to_pydatetime') else str(value)
+        # pd.Timestamp() normalises both pd.Timestamp (any precision) and
+        # np.datetime64 (any precision) into a single Timestamp, then
+        # ts_fmt truncates to seconds — no reliance on str() formatting.
+        return ts_fmt(pd.Timestamp(value).to_pydatetime())
     if isinstance(value, (np.integer, np.floating)):
-        if np.isnan(value) or np.isinf(value):
-            return None
-        return value.item()
+        value = value.item()  # collapse to plain Python int/float
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
     try:
-        # Scalars work with pd.isna, but arrays/other objects can raise.
+        # pd.isna handles None, NaN, NaT, pd.NA. May raise on exotic objects.
         if pd.isna(value):
             return None
     except (TypeError, ValueError):
@@ -162,15 +111,7 @@ def serialize_value(value: Any) -> Any:
 
 
 def clean_dict_for_json(data: dict) -> dict:
-    """
-    Recursively clean a dictionary for JSON serialization.
-
-    Args:
-        data: Dictionary with potentially non-serializable values
-
-    Returns:
-        Clean dictionary
-    """
+    """Recursively clean a dictionary for JSON serialization."""
     result = {}
     for key, value in data.items():
         if isinstance(value, dict):
@@ -179,5 +120,24 @@ def clean_dict_for_json(data: dict) -> dict:
             result[key] = [serialize_value(v) for v in value]
         else:
             result[key] = serialize_value(value)
-
     return result
+
+
+def dataframe_to_json_safe(df: pd.DataFrame) -> list[dict[str, Any]]:
+    """
+    Safely convert DataFrame to JSON-serializable list of dictionaries.
+
+    Datetime columns are formatted column-wise (vectorised, faster than
+    per-cell), then ``clean_dict_for_json`` handles NaN/Inf/pd.NA/Timestamp
+    leftovers in object columns — same code path as ``serialize_value`` so
+    bug fixes in one place flow to the other.
+    """
+    if df.empty:
+        return []
+
+    df = df.copy()
+    for col in df.columns:
+        if pd.api.types.is_datetime64_any_dtype(df[col]):
+            df[col] = df[col].apply(lambda x: ts_fmt(x.to_pydatetime()) if pd.notna(x) else None)
+
+    return [clean_dict_for_json(row) for row in df.to_dict(orient='records')]
