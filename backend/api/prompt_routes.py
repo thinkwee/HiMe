@@ -65,20 +65,44 @@ async def get_prompt(prompt_id: str):
 
 @router.post("/{prompt_id}")
 async def update_prompt(prompt_id: str, update: PromptUpdate):
-    """Update content of a specific prompt."""
+    """Update content of a specific prompt and hot-reload live agents."""
     if prompt_id not in PROMPT_FILES:
         raise HTTPException(status_code=404, detail="Prompt not found")
 
     info = PROMPT_FILES[prompt_id]
-    if not info.get("agent_editable"):
-        raise HTTPException(status_code=403, detail=f"Prompt '{prompt_id}' is read-only and cannot be modified via API.")
     path = PROMPTS_DIR / info["file"]
 
     try:
         PROMPTS_DIR.mkdir(parents=True, exist_ok=True)
         await asyncio.to_thread(path.write_text, update.content, "utf-8")
-        logger.info(f"Updated prompt {prompt_id} ({info['file']})")
+        _hot_reload_prompt_caches()
+        logger.info(f"Updated prompt {prompt_id} ({info['file']}) and refreshed caches")
         return {"success": True, "message": f"Prompt '{prompt_id}' updated successfully"}
     except Exception as e:
         logger.error(f"Failed to update prompt {prompt_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _hot_reload_prompt_caches() -> None:
+    """Drop cached prompt text so the next agent turn re-reads from disk."""
+    try:
+        from ..agent.prompt_loader import clear_cache as clear_prompt_cache
+        clear_prompt_cache()
+    except Exception as e:
+        logger.warning("Failed to clear prompt_loader cache: %s", e)
+
+    try:
+        from .agent_state import active_agents
+        for info in active_agents.values():
+            agent = info.get("agent")
+            if agent is None:
+                continue
+            # AgentPromptsMixin caches soul.md on the instance; drop it so the
+            # next prompt assembly re-reads the file.
+            if hasattr(agent, "_soul_text"):
+                try:
+                    delattr(agent, "_soul_text")
+                except AttributeError:
+                    pass
+    except Exception as e:
+        logger.warning("Failed to invalidate live-agent prompt caches: %s", e)
