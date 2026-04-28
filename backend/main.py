@@ -45,6 +45,7 @@ logger = setup_logging()
 # Module-level reference so routes / tools can access the gateway
 _telegram_gateway = None
 _feishu_gateway = None
+_weixin_gateway = None
 
 # Shared GatewayRegistry — populated at startup with every enabled gateway
 # (Telegram, Feishu, ...). Tools like reply_user / push_report route
@@ -62,6 +63,11 @@ def get_telegram_gateway():
 def get_feishu_gateway():
     """Return the active FeishuGateway instance (or None)."""
     return _feishu_gateway
+
+
+def get_weixin_gateway():
+    """Return the active WeixinGateway instance (or None)."""
+    return _weixin_gateway
 
 
 def get_gateway_registry() -> GatewayRegistry:
@@ -214,7 +220,7 @@ async def lifespan(app: FastAPI):
     Lifespan context manager for startup and shutdown events.
     Guarantees cleanup of resources.
     """
-    global _telegram_gateway, _feishu_gateway
+    global _telegram_gateway, _feishu_gateway, _weixin_gateway
 
     # --- Startup ---
     logger.info("[Startup] 1/4 Application starting up...")
@@ -344,6 +350,47 @@ async def lifespan(app: FastAPI):
             "are not set — gateway will not start."
         )
 
+    # Start WeChat (Weixin ClawBot / iLink) Gateway if enabled. Shares the
+    # same agent-inbox routing pattern as Telegram/Feishu so all three IM
+    # channels can be active simultaneously. The gateway will refuse to
+    # start (with a clear log) if no bot_token has been produced via
+    # ``python -m backend.weixin.qr_login``.
+    if settings.WEIXIN_GATEWAY_ENABLED:
+        try:
+            from .weixin import WeixinGateway
+
+            async def _on_weixin_user_message(envelope):
+                """Route free-form WeChat messages to the active agent inbox."""
+                agents = get_active_agents_dict()
+                if not agents:
+                    logger.info(
+                        "WeChat on_user_message: no active agent — message ignored"
+                    )
+                    return
+                pid, info = next(iter(agents.items()))
+                agent = info["agent"]
+                await agent.inbox.push(envelope)
+                logger.info("WeChat on_user_message: routed to agent %s", pid)
+
+            _weixin_gateway = WeixinGateway(
+                settings=settings,
+                on_user_message=_on_weixin_user_message,
+            )
+            await _weixin_gateway.start()
+            # Only register if a bot_token was found and the underlying
+            # poller actually came up. ``WeixinGateway.start`` is a no-op
+            # otherwise (logs a warning instructing the operator to run
+            # the QR login script), so guard against registering a stub
+            # that would silently swallow outbound messages.
+            if _weixin_gateway.sender is not None:
+                _gateway_registry.register(_weixin_gateway)
+                logger.info("WeChat (Weixin) Gateway started")
+            else:
+                _weixin_gateway = None
+        except Exception as e:
+            logger.warning(f"WeChat Gateway start failed: {e}", exc_info=True)
+            _weixin_gateway = None
+
     # --- Live Background Ingestion (Phase 1) ---
     # Automatically start syncing data from watch.db to LiveUser_data.db
     # even if no agent is running.
@@ -444,6 +491,14 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Feishu Gateway stop error: {e}")
         _feishu_gateway = None
+
+    # 1c. Stop WeChat Gateway
+    if _weixin_gateway:
+        try:
+            await _weixin_gateway.stop()
+        except Exception as e:
+            logger.warning(f"WeChat Gateway stop error: {e}")
+        _weixin_gateway = None
 
     # Clear the shared registry so any lingering tool handles don't try to
     # dispatch through a torn-down gateway during shutdown.

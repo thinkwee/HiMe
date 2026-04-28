@@ -39,3 +39,7 @@ httpx==0.28.1
 
 # Feishu / Lark gateway (optional — enabled via FEISHU_GATEWAY_ENABLED)
 lark-oapi>=1.4.0  # Optional: Feishu gateway (only needed if FEISHU_GATEWAY_ENABLED=true)
+
+# WeChat (Weixin ClawBot / iLink) gateway — used by `python -m backend.weixin.qr_login`
+# to render the login QR in the terminal. Pure Python, no system deps.
+qrcode>=7.4,<9

@@ -198,6 +198,17 @@ Feishu supports two transports for receiving events, selected via `FEISHU_TRANSP
 
 Note that the **Message Card Request URL** (used by the "Show Evidence" button) is always an HTTP callback even when the message transport is WebSocket. If you have no public URL, card actions will not work, but text chat will still function over WebSocket.
 
+### 3.3. WeChat (Weixin ClawBot)
+
+WeChat goes over Tencent's iLink protocol (`ilinkai.weixin.qq.com`) and is intentionally simple:
+
+- **No public endpoint required.** The backend opens an outbound long-poll to iLink — works behind any NAT or tunnel.
+- **No developer-console setup.** Authentication is one QR scan from the operator's personal WeChat (Settings → Plugins → ClawBot). The resulting `bot_token` is persisted to `./data/weixin_bot_token.json` and reused on every restart.
+- **Text-only on the message path** in this release. Image / file / audio / video items are skipped on inbound, and `send_photo` degrades to sending the caption. Adding the AES-128-ECB CDN handshake for media is on the roadmap.
+- **Outbound replies are session-bound.** iLink rejects messages without a `context_token` from a recent inbound, so autonomous pushes only succeed after the user has messaged the bot at least once. The poller caches the latest token per user automatically.
+
+For setup, see [`docs/INSTALL.md#wechat-weixin-clawbot`](INSTALL.md#wechat-weixin-clawbot).
+
 ---
 
 ## 4. Docker Compose production notes
@@ -235,6 +246,7 @@ Compose services expose the same endpoints described in section 1.5. Point your 
 | `401 Unauthorized` from frontend | `API_AUTH_TOKEN` set but frontend missing it | Configure the token in the frontend and reload |
 | Telegram bot silent | `TELEGRAM_ALLOWED_CHAT_IDS` empty | Add your chat ID to the allow-list |
 | Feishu card actions do nothing | Message Card Request URL not set / not publicly reachable | Configure the card callback URL in the Feishu console |
+| WeChat bot silent after restart | Token file missing or expired | Re-run `python -m backend.weixin.qr_login` and re-scan; check `./data/weixin_bot_token.json` exists |
 | Agent stops after a few minutes on a laptop | OS sleep | Use `caffeinate` (macOS) or `systemd-inhibit` (Linux), or deploy on an always-on host |
 
 For anything not covered here, see [`docs/DEVELOPMENT.md`](DEVELOPMENT.md).

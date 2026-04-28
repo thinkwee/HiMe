@@ -226,6 +226,24 @@ class Settings(BaseSettings):
     FEISHU_ALLOWED_CHAT_IDS: str = ""
 
     # ------------------------------------------------------------------ #
+    # WeChat (Weixin ClawBot / iLink) Gateway
+    # ------------------------------------------------------------------ #
+    # Bidirectional WeChat gateway over the public iLink bot API. The
+    # ``bot_token`` is produced once by ``python -m backend.weixin.qr_login``
+    # (scan the ClawBot QR with WeChat → Settings → Plugins → ClawBot) and
+    # cached on disk; the gateway reads it at startup and refuses to start
+    # if absent.
+    WEIXIN_GATEWAY_ENABLED: bool = False
+    WEIXIN_BOT_TOKEN_PATH:  str  = "./data/weixin_bot_token.json"
+    # WeChat user ID (e.g. ``xxx@im.wechat``) used as the default destination
+    # for autonomous pushes. Only works while the iLink server still has a
+    # valid context_token cached for that user — proactive pushes to a user
+    # who has never messaged the bot will fail.
+    WEIXIN_DEFAULT_USER_ID: str  = ""
+    # Comma-separated user IDs allowed to interact (empty = default-deny).
+    WEIXIN_ALLOWED_USER_IDS: str = ""
+
+    # ------------------------------------------------------------------ #
     # Skills subsystem (openclaw-compatible capability packs)
     # ------------------------------------------------------------------ #
     # os.pathsep-separated list of directories containing skill packages.

@@ -53,6 +53,7 @@ data/data_stores/
 data/personalised_pages/*
 !data/personalised_pages/_shared/
 !data/personalised_pages/_shared/**
+data/weixin_bot_token.json
 ios/Server/watch*
 
 # supported dataset (too large for git)

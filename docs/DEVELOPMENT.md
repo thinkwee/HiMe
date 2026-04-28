@@ -27,6 +27,7 @@ hime/
 │   ├── messaging/               platform-agnostic BaseGateway / registry / inbox
 │   ├── telegram/                Telegram gateway implementation
 │   ├── feishu/                  Feishu (Lark) gateway implementation
+│   ├── weixin/                  WeChat (Weixin ClawBot / iLink) gateway implementation
 │   └── services/                streaming, connection manager
 ├── frontend/                 React 18 + Vite SPA
 ├── ios/                      iPhone + watchOS apps + WatchExporter
@@ -182,6 +183,9 @@ All settings live in `.env`. The most important ones:
 | `API_AUTH_TOKEN` | _(empty)_ | If set, all `/api/*` routes require `Authorization: Bearer <token>`. Leave empty for localhost. |
 | `TELEGRAM_GATEWAY_ENABLED` | `false` | Turn on bidirectional Telegram chat. |
 | `TELEGRAM_ALLOWED_CHAT_IDS` | _(empty)_ | Comma-separated whitelist. **Empty = deny all inbound** (default-deny). |
+| `FEISHU_GATEWAY_ENABLED` | `false` | Turn on bidirectional Feishu chat. |
+| `WEIXIN_GATEWAY_ENABLED` | `false` | Turn on the WeChat ClawBot gateway. Requires a one-time `python -m backend.weixin.qr_login` to issue the bot_token. |
+| `WEIXIN_ALLOWED_USER_IDS` | _(empty)_ | Comma-separated whitelist. **Empty = trust the QR scanner** (allow-all is safe here because ClawBot has no shareable handle). |
 | `AUTO_RESTORE_AGENT` | `false` | Re-launch the last running agent on backend startup. |
 
 For the complete list, see [`.env.example`](../.env.example).

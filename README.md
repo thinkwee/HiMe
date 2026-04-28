@@ -11,6 +11,7 @@
   <a href="docs/DEVELOPMENT.md"><img alt="Developer docs" src="https://img.shields.io/badge/docs-development-green"></a>
   <a href="docs/INSTALL.md#im-gateway-setup"><img alt="Telegram Support" src="https://img.shields.io/badge/Telegram-supported-26A5E4?logo=telegram&logoColor=white"></a>
   <a href="docs/INSTALL.md#im-gateway-setup"><img alt="Feishu Support" src="https://img.shields.io/badge/Feishu-supported-00D6B9?logo=lark&logoColor=white"></a>
+  <a href="docs/INSTALL.md#wechat-weixin-clawbot"><img alt="WeChat Support" src="https://img.shields.io/badge/WeChat-supported-07C160?logo=wechat&logoColor=white"></a>
   <br/>
 </p>
 
@@ -49,7 +50,7 @@ HiMe (Health Intelligence Management Engine) is a self-hosted, fully local, secu
 - Real-time wearable data ingestion from Apple Watch + iPhone, including heart rate, HRV, SpO2, sleep stages, workouts, mobility, and 50+ metrics more.
 - iOS and watchOS companion apps for easy syncing health data and controlling the agent.
 - Autonomous AI analysis with scheduled checks and event triggers.
-- OpenClaw-style chat over Telegram or Feishu, with evidence-backed responses.
+- OpenClaw-style chat over Telegram, Feishu, or WeChat (via the official ClawBot plugin), with evidence-backed responses.
 - Agent-generated personalised pages on demand for repeated workflows or personalised interaction. Generate your app, not learn to use it.
 - Skills system for reusable analysis playbooks.
 - Strong self-hosted privacy posture.
@@ -60,10 +61,11 @@ Three steps. Total time: ~10 minutes.
 
 ### 1. Get IM credentials
 
-HiMe chats with you over **Telegram** or **Feishu**. Pick one and grab the credentials before you start the server (the setup wizard will ask for them).
+HiMe chats with you over **Telegram**, **Feishu**, or **WeChat**. Pick one and grab the credentials before you start the server (the setup wizard will ask for them).
 
 - **Telegram**: create a bot with [@BotFather](https://t.me/BotFather) → save the token. Send `/start` to [@userinfobot](https://t.me/userinfobot) → save your chat_id.
 - **Feishu**: create a custom app at [open.feishu.cn](https://open.feishu.cn) → grab APP_ID + APP_SECRET. Invite the bot to a group → grab the open_chat_id.
+- **WeChat**: no developer console needed — set `WEIXIN_GATEWAY_ENABLED=true` in `.env`, then run `python -m backend.weixin.qr_login` (or `docker exec -it hime-backend python -m backend.weixin.qr_login`) and scan the QR with WeChat → Settings → Plugins → ClawBot.
 
 Detailed walkthrough: [`docs/INSTALL.md#im-gateway-setup`](docs/INSTALL.md#im-gateway-setup).
 

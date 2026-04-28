@@ -10,6 +10,7 @@ The README's Quick Start covers the happy path. This document covers everything 
 - [IM gateway setup](#im-gateway-setup)
   - [Telegram](#telegram)
   - [Feishu (Lark)](#feishu-lark)
+  - [WeChat (Weixin ClawBot)](#wechat-weixin-clawbot)
 - [iOS app](#ios-app)
 - [Customization](#customization)
   - [Switching LLM providers](#switching-llm-providers)
@@ -65,7 +66,7 @@ Full nginx + Caddy examples: [`docs/DEPLOYMENT.md`](DEPLOYMENT.md).
 
 ## IM gateway setup
 
-HiMe chats with you exclusively through an IM gateway. The web dashboard does not have a chat UI. Pick Telegram or Feishu (or set up both, but most people pick one).
+HiMe chats with you exclusively through an IM gateway. The web dashboard does not have a chat UI. Pick Telegram, Feishu, or WeChat (or set up multiple, but most people pick one).
 
 ### Telegram
 
@@ -99,6 +100,37 @@ HiMe chats with you exclusively through an IM gateway. The web dashboard does no
    FEISHU_ALLOWED_CHAT_IDS=oc_xxx
    FEISHU_TRANSPORT=ws
    ```
+
+### WeChat (Weixin ClawBot)
+
+WeChat support is provided through Tencent's official **ClawBot** plugin (the iLink bot protocol at `ilinkai.weixin.qq.com`). No developer console, no API keys — just one QR scan from your personal WeChat. Limitations: text-only messages (no images yet), and proactive pushes require the user to have messaged the bot at least once.
+
+1. In `.env`, enable the gateway:
+
+   ```bash
+   WEIXIN_GATEWAY_ENABLED=true
+   ```
+
+   You can leave `WEIXIN_ALLOWED_USER_IDS` and `WEIXIN_DEFAULT_USER_ID` blank — by default the bot trusts whoever scanned the QR.
+
+2. From the host running HiMe, generate a `bot_token` by scanning a QR:
+
+   ```bash
+   # Native install
+   python -m backend.weixin.qr_login
+
+   # Docker install — run inside the backend container so the token lands
+   # at the path the gateway reads (./data/weixin_bot_token.json).
+   docker exec -it hime-backend python -m backend.weixin.qr_login
+   ```
+
+   The script prints both a URL and an ANSI-rendered QR (install `qrcode` if it's missing, but it ships in `requirements.txt`). On your phone open **WeChat → Settings → Plugins → ClawBot** and scan. The script will progress through `wait → scaned → confirmed` and write the token to `./data/weixin_bot_token.json`.
+
+3. Restart HiMe — `./hime.sh restart` for native, `docker compose restart hime-backend` for Docker. The backend log should print `WeChat (Weixin) Gateway started`.
+
+4. In WeChat, search for the ClawBot you just bound (it appears as a regular contact named "微信Claw" or similar) and send a message. The agent replies in the same chat.
+
+The token is long-lived; re-run step 2 only if the backend log starts reporting `iLink: 401 Unauthorized`.
 
 ## iOS app
 
@@ -172,5 +204,8 @@ The agent can generate single-page apps on demand using the `create_page` tool. 
 | `401 Unauthorized` from API | `API_AUTH_TOKEN` mismatch | Set the same value in iOS app's Settings → Auth Token |
 | Telegram bot silent | `TELEGRAM_ALLOWED_CHAT_IDS` empty | Add your chat_id to the allowlist (setup.sh handles this) |
 | Feishu card buttons do nothing | Feishu Card Request URL not set | Set the public callback URL in Feishu console — see [`docs/DEPLOYMENT.md`](DEPLOYMENT.md) |
+| WeChat bot silent after restart | Token file missing or expired | Re-run `python -m backend.weixin.qr_login` and re-scan; check that `./data/weixin_bot_token.json` exists |
+| WeChat `iLink: 401 Unauthorized` in logs | `bot_token` revoked | Re-run the QR login; bot tokens stay valid until you log out from WeChat → Settings → Plugins → ClawBot |
+| WeChat agent never sees the message | Gateway disabled or not loaded | `docker exec hime-backend env \| grep WEIXIN_GATEWAY_ENABLED` — must be `true`; trailing `# comments` after `=` get treated as the value, strip them |
 
 For deeper debugging see logs in `./logs/backend.log` (or `docker compose logs backend`).

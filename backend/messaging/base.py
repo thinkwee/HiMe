@@ -19,6 +19,7 @@ class MessageChannel(str, Enum):
 
     TELEGRAM = "telegram"
     FEISHU = "feishu"
+    WEIXIN = "weixin"
     WEB = "web"
     API = "api"
     BENCHMARK = "benchmark"

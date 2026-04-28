@@ -11,6 +11,7 @@
   <a href="docs/DEVELOPMENT.md"><img alt="Developer docs" src="https://img.shields.io/badge/docs-development-green"></a>
   <a href="docs/INSTALL.md#im-gateway-setup"><img alt="Telegram Support" src="https://img.shields.io/badge/Telegram-supported-26A5E4?logo=telegram&logoColor=white"></a>
   <a href="docs/INSTALL.md#im-gateway-setup"><img alt="Feishu Support" src="https://img.shields.io/badge/Feishu-supported-00D6B9?logo=lark&logoColor=white"></a>
+  <a href="docs/INSTALL.md#wechat-weixin-clawbot"><img alt="WeChat Support" src="https://img.shields.io/badge/WeChat-supported-07C160?logo=wechat&logoColor=white"></a>
   <br/>
 </p>
 
@@ -49,7 +50,7 @@ HiMe（Health Intelligence Management Engine）是一款自托管、完全本地
 - 实时接入 Apple Watch + iPhone 的可穿戴数据，包括心率、HRV、血氧、睡眠阶段、运动、活动能力等 50+ 项指标。
 - iOS 与 watchOS 配套 App，轻松同步健康数据并控制 Agent。
 - 自主式 AI 分析，支持定时检查与事件触发。
-- OpenClaw 风格的聊天体验，支持 Telegram 或飞书，回复均附带证据来源。
+- OpenClaw 风格的聊天体验，支持 Telegram、飞书或微信（通过官方 ClawBot 插件），回复均附带证据来源。
 - Agent 按需生成个性化页面，用于重复工作流与个性化交互。让 Agent 为你生成应用，而不是让你学习使用应用。
 - Skills 系统，复用分析 playbook。
 - 强隐私的自托管部署。
@@ -60,10 +61,11 @@ HiMe（Health Intelligence Management Engine）是一款自托管、完全本地
 
 ### 1. 获取 IM 凭证
 
-HiMe 通过 **Telegram** 或 **飞书** 与你对话。任选其一，并在启动服务前准备好凭证（setup 向导会询问）。
+HiMe 通过 **Telegram**、**飞书** 或 **微信** 与你对话。任选其一，并在启动服务前准备好凭证（setup 向导会询问）。
 
 - **Telegram**：通过 [@BotFather](https://t.me/BotFather) 创建 bot → 保存 token。向 [@userinfobot](https://t.me/userinfobot) 发送 `/start` → 保存你的 chat_id。
 - **飞书**：在 [open.feishu.cn](https://open.feishu.cn) 创建自建应用 → 获取 APP_ID + APP_SECRET。将 bot 邀请进群 → 获取 open_chat_id。
+- **微信**：无需开发者后台 — 在 `.env` 设 `WEIXIN_GATEWAY_ENABLED=true`，运行 `python -m backend.weixin.qr_login`（Docker：`docker exec -it hime-backend python -m backend.weixin.qr_login`），用 微信 → 设置 → 插件 → ClawBot 扫码即可。
 
 详细步骤：[`docs/INSTALL.md#im-gateway-setup`](docs/INSTALL.md#im-gateway-setup)。
 
