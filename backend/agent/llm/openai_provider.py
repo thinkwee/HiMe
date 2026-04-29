@@ -61,6 +61,12 @@ class OpenAIProvider(BaseLLMProvider):
     # Used to apply vLLM-specific workarounds (e.g. GLM thinking disable).
     _is_vllm: bool = False
 
+    # Flag for the DeepSeek V4 backend. DeepSeek shares the OpenAI
+    # ChatCompletions surface but takes a distinct thinking-mode toggle
+    # (``extra_body.thinking``) and a different ``reasoning_effort`` value
+    # set (high/max only). Set to True in ``DeepSeekProvider``.
+    _is_deepseek: bool = False
+
     def __init__(
         self,
         model: str = "gpt-5.4-mini",
@@ -120,6 +126,20 @@ class OpenAIProvider(BaseLLMProvider):
                     kwargs["extra_body"]["chat_template_kwargs"] = {
                         "enable_thinking": False,
                     }
+            elif self._is_deepseek:
+                # DeepSeek V4 (flash/pro): dual-mode reasoning is toggled via
+                # ``extra_body.thinking`` and ``reasoning_effort`` accepts only
+                # high/max (low/medium silently map to "high" server-side).
+                # Do NOT forward OPENAI_REASONING_EFFORT here — the OpenAI-only
+                # value "minimal" is rejected by DeepSeek with HTTP 400.
+                from backend.config import settings
+                thinking = (settings.DEEPSEEK_THINKING or "").strip().lower()
+                if thinking in ("enabled", "disabled"):
+                    kwargs.setdefault("extra_body", {})
+                    kwargs["extra_body"]["thinking"] = {"type": thinking}
+                ds_effort = (settings.DEEPSEEK_REASONING_EFFORT or "").strip()
+                if ds_effort:
+                    kwargs["reasoning_effort"] = ds_effort
             else:
                 # Cloud OpenAI / Azure OpenAI: forward the configured reasoning
                 # effort to GPT-5 / o-series reasoning models. Skipped for vLLM
@@ -186,7 +206,7 @@ class OpenAIProvider(BaseLLMProvider):
                         thoughts_tokens = getattr(details, "reasoning_tokens", None)
                         if thoughts_tokens is None and isinstance(details, dict):
                             thoughts_tokens = details.get("reasoning_tokens")
-                    # Prompt cache hits — OpenAI/vLLM/DeepSeek expose this as
+                    # Prompt cache hits — OpenAI / vLLM expose this as
                     # ``prompt_tokens_details.cached_tokens`` on the usage block.
                     prompt_details = getattr(chunk.usage, "prompt_tokens_details", None)
                     if prompt_details is not None:
@@ -195,6 +215,17 @@ class OpenAIProvider(BaseLLMProvider):
                             cached = prompt_details.get("cached_tokens")
                         if cached is not None:
                             cache_read_tokens = cached
+                    # DeepSeek surfaces cache stats directly on usage as
+                    # ``prompt_cache_hit_tokens`` / ``prompt_cache_miss_tokens``.
+                    # Prefer this when present — it is the authoritative count
+                    # for the DeepSeek backend.
+                    if cache_read_tokens is None:
+                        ds_hit = getattr(chunk.usage, "prompt_cache_hit_tokens", None)
+                        if ds_hit is None:
+                            extra_usage = getattr(chunk.usage, "model_extra", None) or {}
+                            ds_hit = extra_usage.get("prompt_cache_hit_tokens")
+                        if ds_hit is not None:
+                            cache_read_tokens = ds_hit
 
                 choice = chunk.choices[0] if chunk.choices else None
                 if choice is None:
@@ -400,8 +431,25 @@ class GroqProvider(OpenAIProvider):
 
 
 class DeepSeekProvider(OpenAIProvider):
-    """DeepSeek API provider."""
-    def __init__(self, model: str = "deepseek-chat", api_key: str | None = None, **kwargs) -> None:
+    """DeepSeek API provider — V4 lineup (April 2026).
+
+    Supported models:
+      - ``deepseek-v4-flash`` (default; 284B total / 13B active, 1M ctx)
+      - ``deepseek-v4-pro``   (1.6T total / 49B active, 1M ctx, 384K max output)
+
+    Both models support dual modes (thinking / non-thinking), tool calling,
+    JSON output and prompt caching. Mode is toggled with ``DEEPSEEK_THINKING``
+    in ``.env`` (``enabled`` / ``disabled``), reasoning depth with
+    ``DEEPSEEK_REASONING_EFFORT`` (``high`` / ``max``).
+
+    ``deepseek-chat`` and ``deepseek-reasoner`` route to V4-Flash and will be
+    fully retired after 2026-07-24 15:59 UTC. New deployments should use the
+    ``deepseek-v4-*`` model IDs directly.
+    """
+
+    _is_deepseek: bool = True
+
+    def __init__(self, model: str = "deepseek-v4-flash", api_key: str | None = None, **kwargs) -> None:
         super().__init__(model=model, api_key=api_key, base_url="https://api.deepseek.com", **kwargs)
 
 

@@ -18,7 +18,7 @@ Supported providers and default (mid-tier) models — April 2026
 - ``anthropic``      → claude-sonnet-4-6                   (alt: claude-haiku-4-5 / claude-opus-4-7)
 - ``mistral``        → mistral-medium-latest               (alt: mistral-small-latest / mistral-large-latest)
 - ``groq``           → llama-3.3-70b-versatile             (alt: meta-llama/llama-4-{scout,maverick}-...)
-- ``deepseek``       → deepseek-chat (V3.2 non-thinking)   (alt: deepseek-reasoner = R2 thinking)
+- ``deepseek``       → deepseek-v4-flash                   (alt: deepseek-v4-pro; both 1M ctx, dual-mode thinking)
 - ``xai``            → grok-4-1-fast-reasoning             (alt: grok-code-fast-1 / grok-4.20-reasoning)
 - ``openrouter``     → anthropic/claude-sonnet-4-6         (alt: google/gemini-3-flash / anthropic/claude-opus-4-7)
 - ``perplexity``     → sonar-pro                           (alt: sonar / sonar-reasoning / sonar-deep-research)

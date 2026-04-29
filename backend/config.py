@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     DEFAULT_MODEL_ANTHROPIC:      str = "claude-sonnet-4-6"
     DEFAULT_MODEL_MISTRAL:        str = "mistral-medium-latest"
     DEFAULT_MODEL_GROQ:           str = "llama-3.3-70b-versatile"
-    DEFAULT_MODEL_DEEPSEEK:       str = "deepseek-chat"
+    DEFAULT_MODEL_DEEPSEEK:       str = "deepseek-v4-flash"
     DEFAULT_MODEL_XAI:            str = "grok-4-1-fast-reasoning"
     DEFAULT_MODEL_OPENROUTER:     str = "anthropic/claude-sonnet-4-6"
     DEFAULT_MODEL_PERPLEXITY:     str = "sonar-pro"
@@ -101,6 +101,23 @@ class Settings(BaseSettings):
     # NOTE: ``minimal`` requires parallel tool calls to be disabled — HIME
     # automatically sets ``parallel_tool_calls=False`` in that case.
     OPENAI_REASONING_EFFORT: str | None = "minimal"
+
+    # DeepSeek V4 (deepseek-v4-flash / deepseek-v4-pro) — both models support
+    # dual modes (thinking / non-thinking) plus tool calls and a 1M context.
+    #   DEEPSEEK_THINKING (default = "disabled" — fast/cheap for tool-calling
+    #   agentic loops; flip to "enabled" only when deep reasoning is required):
+    #     "disabled"→ forces extra_body.thinking = {"type": "disabled"}
+    #     "enabled" → forces extra_body.thinking = {"type": "enabled"}
+    #     ""        → API default (V4 server-side default = thinking on)
+    #   DEEPSEEK_REASONING_EFFORT (only meaningful when thinking is enabled):
+    #     ""     → unset (server default)
+    #     "high" → standard reasoning depth
+    #     "max"  → deepest reasoning (slower, costlier)
+    #     low/medium are silently mapped to "high" by DeepSeek; we forward them
+    #     verbatim. "minimal" is OpenAI-only and is NOT forwarded to DeepSeek.
+    DEEPSEEK_THINKING:        str | None = "disabled"
+    DEEPSEEK_REASONING_EFFORT: str | None = None
+
     AUTO_RESTORE_AGENT:   bool = False   # restore last agent on startup
     AGENT_MAX_ITERATIONS: int  = 100     # hard safety limit for loop iterations
     AGENT_CONTEXT_WINDOW_SIZE: int = 20  # turn groups to keep in full context (rest auto-summarized)
