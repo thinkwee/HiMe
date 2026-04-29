@@ -19,7 +19,6 @@ import pytest
 from backend.agent.llm.openai_provider import DeepSeekProvider, OpenAIProvider
 from backend.agent.llm_providers import create_provider
 
-
 # ---------------------------------------------------------------------------
 # Fake streaming helper
 # ---------------------------------------------------------------------------
@@ -195,12 +194,11 @@ def test_deepseek_thinking_default_is_disabled():
 async def test_deepseek_default_settings_disable_thinking():
     """End-to-end check on a freshly-instantiated Settings: the default config
     causes ``extra_body.thinking={'type': 'disabled'}`` to be sent."""
+    import backend.config as cfg
     from backend.config import Settings
-    import backend.agent.llm.openai_provider as deepseek_module
 
     fresh = Settings(DEEPSEEK_API_KEY="test-key")
     # Patch the module-local settings handle the provider reads from.
-    import backend.config as cfg
     original = cfg.settings
     cfg.settings = fresh
     try:
