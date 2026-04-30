@@ -233,10 +233,48 @@
 
   // ---------------- Chart (line / bar / area on plain canvas) ----------------
 
-  /** Draw a chart into `sel`. spec: {type, labels, datasets:[{label,data,color?}]}. */
-  function chart(sel, spec) {
+  /** Draw a chart into `sel`. spec: {type, labels, datasets:[{label,data,color?,type?,axis?}]}.
+   *  NOT Chart.js — see create_page_guide.md "HimeUI.drawChart" for the supported subset.
+   *
+   *  Per-dataset extensions (all optional, all backwards-compatible):
+   *    - type: 'line' | 'bar' | 'area' — overrides the chart-level type, enabling
+   *            mixed bar+line in a single chart.
+   *    - axis: 'left' | 'right' (default 'left') — when any dataset has axis:'right',
+   *            a second Y axis is drawn on the right with its own scale. */
+  function drawChart(sel, spec) {
     const host = (typeof sel === 'string') ? mustEl(sel) : sel;
     if (!host) return;
+    // Common mistake: passing a <canvas> element or a 2D rendering context (Chart.js
+    // muscle memory). HimeUI.drawChart owns its own canvas — `sel` must be a container DIV.
+    // Fail loudly with an actionable message instead of rendering nothing.
+    if (typeof CanvasRenderingContext2D !== 'undefined' && host instanceof CanvasRenderingContext2D) {
+      console.error('[HimeUI.drawChart] sel is a CanvasRenderingContext2D. HimeUI.drawChart is NOT Chart.js — pass a <div> selector or element instead, e.g. HimeUI.drawChart("#myChart", {...}). The function will create its own <canvas> inside that div.');
+      return;
+    }
+    if (host instanceof HTMLCanvasElement) {
+      console.error('[HimeUI.drawChart] sel is a <canvas>. HimeUI.drawChart is NOT Chart.js — replace <canvas id="x"> with <div id="x"> and pass that. The function injects its own canvas inside the div.');
+      return;
+    }
+    if (!(host instanceof HTMLElement)) {
+      console.error('[HimeUI.drawChart] sel must be a selector string or HTMLElement; got', host);
+      return;
+    }
+    // Warn (don't fail) on Chart.js-style spec residue — the chart will still render
+    // with palette defaults, but ignored fields are confusing without a hint.
+    if (spec && !drawChart._loggedSpecHint) {
+      const stray = [];
+      if (spec.options) stray.push('options');
+      if (spec.data) stray.push('data (use top-level labels/datasets)');
+      const ds0 = spec.datasets && spec.datasets[0];
+      if (ds0) {
+        ['backgroundColor','borderColor','borderWidth','pointRadius','tension','fill','yAxisID','borderDash','pointBackgroundColor']
+          .forEach(k => { if (k in ds0) stray.push('datasets[].' + k); });
+      }
+      if (stray.length) {
+        drawChart._loggedSpecHint = true;
+        console.warn('[HimeUI.drawChart] ignoring Chart.js-only fields:', stray.join(', '), '— HimeUI.drawChart only honors {type, labels, datasets:[{label, data, color?, type?, axis?}]}. See create_page_guide.md.');
+      }
+    }
     const labels = (spec && spec.labels) || [];
     const datasets = (spec && spec.datasets) || [];
     const type = (spec && spec.type) || 'line';
@@ -252,7 +290,8 @@
       '<div class="hime-chart-legend">' +
         datasets.map((ds, i) => {
           const c = resolveColor(ds.color, COLOR_HEX[PALETTE[i % PALETTE.length]]);
-          return '<span><span class="swatch" style="background:' + c + '"></span>' + esc(ds.label || ('Series ' + (i+1))) + '</span>';
+          const axisTag = ds.axis === 'right' ? ' <span class="hime-axis-tag">R</span>' : '';
+          return '<span><span class="swatch" style="background:' + c + '"></span>' + esc(ds.label || ('Series ' + (i+1))) + axisTag + '</span>';
         }).join('') +
       '</div>';
 
@@ -265,7 +304,19 @@
     }
   }
 
-  /** Internal: render `type` chart onto a canvas using labels + datasets. */
+  /** Deprecated alias for drawChart. Kept for backwards compatibility with older
+   *  pages — emits a one-time console warning so authors migrate when they touch
+   *  the page next. */
+  function chart(sel, spec) {
+    if (!chart._deprecationLogged) {
+      chart._deprecationLogged = true;
+      console.warn('[HimeUI.chart] is deprecated; use HimeUI.drawChart instead (same signature). The "chart" name collides with Chart.js and has caused confusion.');
+    }
+    return drawChart(sel, spec);
+  }
+
+  /** Internal: render `type` chart onto a canvas using labels + datasets.
+   *  Supports per-dataset `type` (mixed bar+line) and per-dataset `axis` (dual Y). */
   function _drawChart(canvas, type, labels, datasets) {
     const dpr = window.devicePixelRatio || 1;
     const W = canvas.clientWidth || 320;
@@ -276,26 +327,35 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
 
-    const padL = 36, padR = 12, padT = 12, padB = 24;
+    // Detect dual-axis and reserve right gutter only if needed.
+    const hasRight = datasets.some(ds => ds.axis === 'right');
+    const padL = 36, padR = hasRight ? 36 : 12, padT = 12, padB = 24;
     const plotW = W - padL - padR;
     const plotH = H - padT - padB;
 
-    // Auto-scale Y across all datasets.
-    let lo = Infinity, hi = -Infinity;
-    datasets.forEach(ds => (ds.data || []).forEach(v => {
-      const n = Number(v);
-      if (isFinite(n)) { if (n < lo) lo = n; if (n > hi) hi = n; }
-    }));
-    if (!isFinite(lo) || !isFinite(hi)) { lo = 0; hi = 1; }
-    if (lo === hi) { lo -= 1; hi += 1; }
-    const range = hi - lo;
-    lo -= range * 0.05; hi += range * 0.05;
+    // Auto-scale Y per axis (separate ranges for left and right).
+    function rangeOf(filterFn) {
+      let lo = Infinity, hi = -Infinity;
+      datasets.forEach(ds => {
+        if (!filterFn(ds)) return;
+        (ds.data || []).forEach(v => {
+          const n = Number(v);
+          if (isFinite(n)) { if (n < lo) lo = n; if (n > hi) hi = n; }
+        });
+      });
+      if (!isFinite(lo) || !isFinite(hi)) { lo = 0; hi = 1; }
+      if (lo === hi) { lo -= 1; hi += 1; }
+      const range = hi - lo;
+      return [lo - range * 0.05, hi + range * 0.05];
+    }
+    const [loL, hiL] = rangeOf(ds => ds.axis !== 'right');
+    const [loR, hiR] = hasRight ? rangeOf(ds => ds.axis === 'right') : [0, 1];
 
     const isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
     const axisColor = isDark ? 'rgba(235,235,245,0.3)' : 'rgba(60,60,67,0.3)';
     const gridColor = isDark ? 'rgba(235,235,245,0.12)' : 'rgba(60,60,67,0.08)';
 
-    // Y grid (4 lines) + value labels.
+    // Y grid (4 lines). Left labels always; right labels only when dual-axis.
     ctx.strokeStyle = gridColor;
     ctx.fillStyle = axisColor;
     ctx.font = '10px -apple-system, system-ui, sans-serif';
@@ -303,8 +363,12 @@
     for (let i = 0; i <= 4; i++) {
       const y = padT + (plotH * i) / 4;
       ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(padL + plotW, y); ctx.stroke();
-      const val = hi - ((hi - lo) * i) / 4;
-      ctx.fillText(_axisFmt(val), 4, y + 3);
+      const valL = hiL - ((hiL - loL) * i) / 4;
+      ctx.fillText(_axisFmt(valL), 4, y + 3);
+      if (hasRight) {
+        const valR = hiR - ((hiR - loR) * i) / 4;
+        ctx.fillText(_axisFmt(valR), padL + plotW + 4, y + 3);
+      }
     }
 
     // X labels (sparse).
@@ -315,21 +379,33 @@
     }
 
     const xAt = (i) => labels.length === 1 ? padL + plotW / 2 : padL + (plotW * i) / (labels.length - 1);
-    const yAt = (v) => padT + plotH * (1 - (v - lo) / (hi - lo));
+    const yAtL = (v) => padT + plotH * (1 - (v - loL) / (hiL - loL));
+    const yAtR = (v) => padT + plotH * (1 - (v - loR) / (hiR - loR));
+
+    // Bar grouping: only bar-typed datasets share group width, so a mixed
+    // bar+line chart doesn't leave gaps for the line series.
+    const barIdxList = [];
+    datasets.forEach((ds, i) => { if ((ds.type || type) === 'bar') barIdxList.push(i); });
+    const barCount = barIdxList.length;
 
     datasets.forEach((ds, di) => {
       const color = resolveColor(ds.color, COLOR_HEX[PALETTE[di % PALETTE.length]]);
       const data = (ds.data || []).map(Number);
+      const dsType = ds.type || type;
+      const onRight = ds.axis === 'right';
+      const yAt = onRight ? yAtR : yAtL;
+      const axisLo = onRight ? loR : loL;
 
-      if (type === 'bar') {
+      if (dsType === 'bar') {
         const groupW = plotW / labels.length;
-        const barW = Math.max(2, (groupW * 0.7) / datasets.length);
+        const barSlot = barIdxList.indexOf(di);
+        const barW = Math.max(2, (groupW * 0.7) / Math.max(1, barCount));
         ctx.fillStyle = color;
         data.forEach((v, i) => {
           if (!isFinite(v)) return;
-          const x = padL + groupW * i + (groupW - barW * datasets.length) / 2 + di * barW;
+          const x = padL + groupW * i + (groupW - barW * barCount) / 2 + barSlot * barW;
           const y = yAt(v);
-          const baseY = yAt(Math.max(lo, 0));
+          const baseY = yAt(Math.max(axisLo, 0));
           ctx.fillRect(x, Math.min(y, baseY), barW - 1, Math.abs(baseY - y));
         });
       } else {
@@ -341,7 +417,7 @@
           const x = xAt(i), y = yAt(v);
           if (first) { ctx.moveTo(x, y); first = false; } else { ctx.lineTo(x, y); }
         });
-        if (type === 'area') {
+        if (dsType === 'area') {
           const lastX = xAt(data.length - 1), firstX = xAt(0);
           ctx.lineTo(lastX, padT + plotH);
           ctx.lineTo(firstX, padT + plotH);
@@ -386,7 +462,9 @@
 
   // ---------------- MetricGrid ----------------
 
-  /** Render a 2-column grid of stat cards. items: [{label,value,unit?,icon?,color?,trend?}]. */
+  /** Render a 2-column grid of stat cards. items: [{label,value,unit?,icon?,color?,trend?,wide?}].
+   *  Set `wide: true` on an item to make it span both columns (useful for hero metrics
+   *  like "best day" or "weekly summary"). */
   function MetricGrid(sel, items) {
     const host = mustEl(sel);
     if (!host) return;
@@ -403,14 +481,48 @@
                      : (typeof it.trend === 'string' && it.trend.startsWith('+')) ? 'up' : '';
       const trendHtml = it.trend ? '<div class="hime-metric-trend ' + trendDir + '">' + esc(it.trend) + '</div>' : '';
       const unitHtml = it.unit ? '<span class="hime-metric-unit">' + esc(it.unit) + '</span>' : '';
+      const wideCls = it.wide ? ' hime-metric-card-wide' : '';
       return (
-        '<div class="hime-metric-card">' +
+        '<div class="hime-metric-card' + wideCls + '">' +
           '<div class="hime-metric-header"><span>' + esc(it.label || '') + '</span>' + iconHtml + '</div>' +
           '<div class="hime-metric-value">' + esc(it.value === undefined ? '—' : it.value) + unitHtml + '</div>' +
           trendHtml +
         '</div>'
       );
     }).join('');
+  }
+
+  // ---------------- Section ----------------
+
+  /** Render a section header (with optional badge) and a body container into `sel`.
+   *  Eliminates the boilerplate of writing <div class="hime-section-title">…</div>
+   *  followed by a container div on every dashboard.
+   *
+   *  opts: {title, icon?, badge?, badgeColor?, cardTitle?}
+   *    - title: section heading text (uppercase eyebrow per iOS list style).
+   *    - icon: optional emoji or short prefix prepended to title.
+   *    - badge / badgeColor: optional pill rendered next to the title.
+   *    - cardTitle: when present, body is wrapped in a `.hime-card` with this
+   *                 title above it; pass empty string for a card without a title.
+   *
+   *  Returns: { bodySelector, bodyEl } — feed bodySelector to other components:
+   *    const s = HimeUI.Section('#summary', {title:'Today', badge:'live'});
+   *    HimeUI.MetricGrid(s.bodySelector, items); */
+  function Section(sel, opts) {
+    const host = mustEl(sel);
+    if (!host) return null;
+    opts = opts || {};
+    const bodyId = 'hime_sec_' + Math.random().toString(36).slice(2, 9);
+    const iconHtml = opts.icon ? esc(opts.icon) + ' ' : '';
+    const badgeHtml = opts.badge ? ' ' + badge(opts.badge, opts.badgeColor || 'gray') : '';
+    const wrapped = opts.cardTitle !== undefined;
+    const cardTitleHtml = (wrapped && opts.cardTitle)
+      ? '<div class="hime-card-title">' + esc(opts.cardTitle) + '</div>' : '';
+    const bodyHtml = '<div id="' + bodyId + '"></div>';
+    host.innerHTML =
+      '<div class="hime-section-title">' + iconHtml + esc(opts.title || '') + badgeHtml + '</div>' +
+      (wrapped ? '<div class="hime-card">' + cardTitleHtml + bodyHtml + '</div>' : bodyHtml);
+    return { bodySelector: '#' + bodyId, bodyEl: document.getElementById(bodyId) };
   }
 
   // ---------------- DetailList ----------------
@@ -527,7 +639,7 @@
       try {
         const raw = await fetchData(opts.pageId, { period });
         const mapped = dataMap(raw) || {};
-        chart(body, { type: opts.type || 'line', labels: mapped.labels || [], datasets: mapped.datasets || [] });
+        drawChart(body, { type: opts.type || 'line', labels: mapped.labels || [], datasets: mapped.datasets || [] });
       } catch (e) {
         body.innerHTML = '<div class="hime-chart-empty">' + esc(e.message || 'Failed to load') + '</div>';
       }
@@ -745,10 +857,12 @@
 
   window.HimeUI = {
     // Components
-    MetricGrid, DetailList, ChartView, InputForm, Tracker,
+    MetricGrid, Section, DetailList, ChartView, InputForm, Tracker,
     // Utilities
     showSheet, hideSheet, toast, renderError,
-    chart, progressRing, badge, progress, table,
-    formatTime, formatNum, fetchData
+    drawChart, progressRing, badge, progress, table,
+    formatTime, formatNum, fetchData,
+    // Deprecated aliases (kept for backwards compatibility — see definitions above)
+    chart
   };
 })();

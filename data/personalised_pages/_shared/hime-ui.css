@@ -115,6 +115,13 @@ html, body {
   margin-bottom: 16px;
 }
 
+.hime-card-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--hime-label);
+  margin-bottom: 12px;
+}
+
 /* ---------------- MetricGrid ---------------- */
 
 .hime-metric-grid {
@@ -133,6 +140,10 @@ html, body {
   flex-direction: column;
   gap: 6px;
   min-height: 96px;
+}
+
+.hime-metric-card-wide {
+  grid-column: 1 / -1;
 }
 
 .hime-metric-header {
@@ -384,6 +395,18 @@ html, body {
   height: 10px;
   border-radius: 3px;
   margin-right: 6px;
+  vertical-align: middle;
+}
+
+.hime-axis-tag {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--hime-fill);
+  color: var(--hime-label-secondary);
   vertical-align: middle;
 }
 

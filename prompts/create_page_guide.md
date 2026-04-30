@@ -34,8 +34,10 @@ Common derivations:
 
 **1. MetricGrid** — health stat cards (2-column grid)
 ```js
-HimeUI.MetricGrid(sel, [{label, value, unit?, icon?, color?, trend?}])
+HimeUI.MetricGrid(sel, [{label, value, unit?, icon?, color?, trend?, wide?}])
 // Colors: blue/green/red/orange/purple/pink/teal/indigo
+// wide: true → card spans both columns (use for hero metrics like "best day", "weekly summary").
+//   Prefer this over building a custom grid layout — keeps styling consistent across pages.
 ```
 
 **2. DetailList** — iOS grouped list with push navigation
@@ -65,7 +67,47 @@ HimeUI.InputForm(sel, {pageId, fields:[{name,type,label,placeholder?,value?,min?
 HimeUI.Tracker(sel, {pageId, fields, submitLabel?, historyKey?'history', historyRender:item=>{icon?,iconColor?,title,subtitle?,right?}, emptyText?})
 ```
 
-**Other utilities**: `HimeUI.showSheet(html, {title?})`, `HimeUI.hideSheet()`, `HimeUI.toast(msg, 'success'|'error')`, `HimeUI.chart(sel, {type,labels,datasets})`, `HimeUI.progressRing(value,max,{size?,color?,label?})`, `HimeUI.badge(text,color)`, `HimeUI.progress(value,max,color)`, `HimeUI.table(headers,rows)`, `HimeUI.formatTime(ts,'short'|'time'|'date'|'relative')`, `HimeUI.formatNum(n,decimals)`
+**6. Section** — section header + body container (use to avoid hand-writing eyebrow/card markup on every dashboard)
+```js
+const s = HimeUI.Section(sel, {title, icon?, badge?, badgeColor?, cardTitle?})
+// Renders an iOS-style section header into `sel` and creates a body div underneath.
+// Returns { bodySelector, bodyEl } — pass bodySelector to whichever component fills the section:
+//   const s = HimeUI.Section('#summary', {title:'TODAY', badge:'live'});
+//   HimeUI.MetricGrid(s.bodySelector, items);
+// cardTitle (any string, including ''): wraps the body in a .hime-card with that title.
+//   Omit `cardTitle` entirely for a plain (un-carded) body.
+```
+
+**7. HimeUI.drawChart** — minimal multi-series chart (use this for static multi-chart dashboards; use `ChartView` if you want a single chart with a period switcher)
+```js
+HimeUI.drawChart(sel, {
+  type: 'line'|'bar'|'area',          // chart-level default; per-dataset `type` overrides it
+  labels: [...],
+  datasets: [{label, data, color?, type?, axis?}]
+})
+// sel: a selector string or a <div> ELEMENT — NOT a <canvas>, NOT a 2D context.
+//   The function injects its own <canvas> inside the host div.
+// color: palette name (blue/green/red/orange/purple/pink/teal/indigo/yellow) OR any CSS color string.
+// dataset.type:  'line'|'bar'|'area' — override the chart-level type for one series,
+//                  enabling mixed bar+line in a single chart.
+// dataset.axis:  'left' (default) | 'right' — when ANY dataset uses 'right', a second
+//                  Y axis is drawn on the right with its own auto-scaled range. Right-axis
+//                  series get an "R" tag in the legend.
+//
+// THIS IS NOT CHART.JS. The following Chart.js fields are silently ignored (the lib will
+// log a one-time console warning if it sees them):
+//   - top-level `options` (no scales/plugins/legend/interaction config)
+//   - per-dataset Chart.js fields: backgroundColor, borderColor, borderWidth, pointRadius,
+//     tension, fill, yAxisID, borderDash, pointBackgroundColor, …
+// Stacking is not supported. Do NOT add a Chart.js CDN — the page must stay zero-dep.
+//
+// Common bug: passing `getContext('2d')` (or the <canvas> element) as `sel`. The chart
+// will fail to render and log an actionable error. Always pass a <div> selector.
+```
+
+**Other utilities**: `HimeUI.showSheet(html, {title?})`, `HimeUI.hideSheet()`, `HimeUI.toast(msg, 'success'|'error')`, `HimeUI.progressRing(value,max,{size?,color?,label?})`, `HimeUI.badge(text,color)`, `HimeUI.progress(value,max,color)`, `HimeUI.table(headers,rows)`, `HimeUI.formatTime(ts,'short'|'time'|'date'|'relative')`, `HimeUI.formatNum(n,decimals)`
+
+> Deprecated: `HimeUI.chart` still works as an alias for `drawChart` but emits a console warning. The `chart` name collided with Chart.js and caused authors to write Chart.js-style specs. Always use `drawChart` in new pages.
 
 ## Page structure
 
@@ -103,7 +145,7 @@ Returning a nested chart response **without** a matching `dataMap` is the single
 
 In the page's `<script>` block, declare a page-id constant whose value matches the `page_id` you pass to `create_page`, then mount components following these rules:
 
-- **Read-only components** (`MetricGrid`, `DetailList`, `HimeUI.chart`, `progressRing`, `table`, `badge`, …) must be mounted **after** `await HimeUI.fetchData(<page_id>)` resolves — they need the backend data to render.
+- **Read-only components** (`MetricGrid`, `Section`, `DetailList`, `HimeUI.drawChart`, `progressRing`, `table`, `badge`, …) must be mounted **after** `await HimeUI.fetchData(<page_id>)` resolves — they need the backend data to render.
 - **Form components** (`InputForm`, `Tracker`) are mounted **synchronously**, passing `pageId: <page_id>`. They manage their own POST round-trip against the same `route.py` and render their own initial state from its response.
 - **`ChartView`** is mounted **synchronously** with `pageId: <page_id>` and optionally `periods`, `defaultPeriod`, `dataMap`. It manages its own fetch and re-fetch on period change. Do not `await fetchData` first unless another component on the same page also needs that payload.
 
@@ -116,5 +158,6 @@ Before returning from `create_page`, verify:
 - The `page_id` referenced in the `<script>` block matches the `page_id` passed to `create_page`.
 - Every component has its container div present in the HTML before its mount call.
 - If `ChartView` shares `/data` with other components, either period-branching in `route_handler` or a `dataMap` prop on `ChartView` is in place.
+- If using `HimeUI.drawChart`, every chart container is a `<div>` (not a `<canvas>`) and the spec contains only `{type, labels, datasets:[{label, data, color?, type?, axis?}]}` — no Chart.js `options`/`backgroundColor`/`yAxisID`/etc.
 - Every `query_memory` / `write_memory` on a page-owned table is preceded by `ensure_table(...)` inside the same handler.
 - `route_handler` returns a plain dict — not a string, tuple, coroutine, or response object.
