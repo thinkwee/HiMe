@@ -13,7 +13,7 @@ pyyaml>=6.0,<7
 # Data processing
 pandas==2.1.4
 numpy==1.26.3
-pyarrow==14.0.2
+pyarrow==24.0.0
 
 # Scientific analysis (available in code tool)
 scipy>=1.11,<2
