@@ -134,7 +134,15 @@ class ReplyUserTool(BaseTool):
                         "reply_user photo sent via %s to %s",
                         gateway.channel.value, target,
                     )
-                    if len(message) <= 1024:
+                    # Skip the text follow-up only when the gateway baked
+                    # the caption into the photo message AND the caption
+                    # wasn't truncated. WeChat (supports_inline_caption=
+                    # False) sends image-only, so the text follow-up below
+                    # is what actually delivers the message body.
+                    if (
+                        getattr(gateway, "supports_inline_caption", True)
+                        and len(message) <= 1024
+                    ):
                         return {"success": True, "message": "Photo with caption sent."}
                 else:
                     logger.warning("Photo send failed, falling back to text-only")

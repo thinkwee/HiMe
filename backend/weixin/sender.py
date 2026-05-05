@@ -19,14 +19,25 @@ Design notes:
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import logging
 import time
 import uuid
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
 
+from .cdn import (
+    UploadedImage,
+    aes_ecb_padded_size,
+    encrypt_aes_ecb,
+    new_aeskey,
+    new_filekey,
+    upload_ciphertext,
+)
 from .qr_login import CHANNEL_VERSION, common_headers
 
 logger = logging.getLogger(__name__)
@@ -160,6 +171,144 @@ class WeixinSender:
             "base_info": {"channel_version": CHANNEL_VERSION},
         }
         return await self._post("/ilink/bot/sendmessage", payload)
+
+    async def send_photo(
+        self,
+        photo_path: str,
+        user_id: str | None = None,
+        context_token: str | None = None,
+    ) -> bool:
+        """Upload a local image to the iLink CDN and emit it as an image
+        message. Returns True on success.
+
+        Note: WeChat has no native "photo with caption" surface — the image
+        and any accompanying text must be separate ``sendmessage`` items.
+        Callers that want a caption should emit a follow-up ``send_message``
+        themselves (or rely on :class:`WeixinGateway.send_photo` which does
+        nothing extra — see the gateway for the rationale).
+        """
+        target = user_id or self._default_user_id
+        if not target:
+            logger.warning("WeixinSender.send_photo: no user_id available")
+            return False
+        token = self._resolve_context(target, context_token)
+        if not token:
+            logger.warning(
+                "WeixinSender.send_photo: no context_token for user %s — "
+                "iLink rejects unsolicited messages.", target,
+            )
+            return False
+        path = Path(photo_path)
+        if not path.is_file():
+            logger.warning(
+                "WeixinSender.send_photo: file not found: %s", photo_path,
+            )
+            return False
+        try:
+            uploaded = await self._upload_image(path, target, token)
+        except Exception as exc:
+            logger.warning(
+                "WeixinSender.send_photo: CDN upload failed (%s): %s",
+                photo_path, exc,
+            )
+            return False
+        # ``aes_key`` in the wire format is base64 of the *hex* representation
+        # of the AES key (not base64 of the raw bytes). This double-encoding
+        # matches what the public SDKs do and is what the receiving WeChat
+        # client expects when decrypting the CDN download.
+        aes_key_field = base64.b64encode(
+            uploaded.aeskey_hex.encode("ascii"),
+        ).decode("ascii")
+        payload = {
+            "msg": {
+                "from_user_id": "",
+                "to_user_id": target,
+                "client_id": uuid.uuid4().hex,
+                "message_type": 2,
+                "message_state": 2,
+                "context_token": token,
+                "item_list": [
+                    {
+                        "type": 2,
+                        "image_item": {
+                            "media": {
+                                "encrypt_query_param": uploaded.encrypt_query_param,
+                                "aes_key": aes_key_field,
+                                "encrypt_type": 1,
+                            },
+                            "mid_size": uploaded.ciphertext_size,
+                        },
+                    },
+                ],
+            },
+            "base_info": {"channel_version": CHANNEL_VERSION},
+        }
+        return await self._post("/ilink/bot/sendmessage", payload)
+
+    async def _upload_image(
+        self, path: Path, to_user_id: str, context_token: str,
+    ) -> UploadedImage:
+        """Run the full getuploadurl → CDN POST pipeline for one image."""
+        plaintext = path.read_bytes()
+        rawsize = len(plaintext)
+        rawmd5 = hashlib.md5(plaintext, usedforsecurity=False).hexdigest()
+        ciphersize = aes_ecb_padded_size(rawsize)
+        filekey = new_filekey()
+        aeskey = new_aeskey()
+        upload_payload = {
+            "filekey": filekey,
+            "media_type": 1,  # IMAGE
+            "to_user_id": to_user_id,
+            "rawsize": rawsize,
+            "rawfilemd5": rawmd5,
+            "filesize": ciphersize,
+            "no_need_thumb": True,
+            "aeskey": aeskey.hex(),
+            "context_token": context_token,
+            "base_info": {"channel_version": CHANNEL_VERSION},
+        }
+        client = self._client or httpx.AsyncClient(timeout=30.0)
+        owns_client = self._client is None
+        try:
+            resp = await client.post(
+                f"{ILINK_BASE}/ilink/bot/getuploadurl",
+                json=upload_payload,
+                headers=common_headers(self._token),
+                timeout=30.0,
+            )
+            if resp.status_code != 200:
+                raise RuntimeError(
+                    f"getuploadurl HTTP {resp.status_code}: {resp.text[:200]}",
+                )
+            data = resp.json()
+            ret = data.get("ret")
+            if ret not in (None, 0):
+                raise RuntimeError(
+                    f"getuploadurl ret={ret} err_msg={data.get('err_msg', '')!r}",
+                )
+            ciphertext = encrypt_aes_ecb(plaintext, aeskey)
+            # CDN POST is allowed to take longer than the 15s default —
+            # large images on slow networks routinely need 30s+.
+            cdn_client = httpx.AsyncClient(timeout=60.0, follow_redirects=True)
+            try:
+                download_ref = await upload_ciphertext(
+                    cdn_client,
+                    upload_full_url=data.get("upload_full_url"),
+                    upload_param=data.get("upload_param"),
+                    filekey=filekey,
+                    ciphertext=ciphertext,
+                )
+            finally:
+                await cdn_client.aclose()
+            return UploadedImage(
+                encrypt_query_param=download_ref,
+                aeskey_hex=aeskey.hex(),
+                plaintext_size=rawsize,
+                ciphertext_size=ciphersize,
+            )
+        finally:
+            if owns_client:
+                await client.aclose()
 
     async def send_typing(
         self,

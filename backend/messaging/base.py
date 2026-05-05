@@ -105,6 +105,14 @@ class BaseGateway(abc.ABC):
     #: Whitelist of chat IDs allowed to interact (``None``/empty => deny all).
     allowed_chat_ids: set[str] | None = None
 
+    #: Whether ``send_photo`` natively renders the ``caption`` argument as
+    #: part of the photo message (Telegram, Feishu). False means the gateway
+    #: will *only* send the image and the caller is responsible for emitting
+    #: a separate text message if they want one — used by
+    #: ``reply_user_tool`` to decide whether the post-photo text follow-up
+    #: would be a duplicate or a necessary completion.
+    supports_inline_caption: bool = True
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------

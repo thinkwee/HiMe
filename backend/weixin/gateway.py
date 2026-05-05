@@ -36,6 +36,9 @@ class WeixinGateway(BaseGateway):
     """Bidirectional WeChat ClawBot gateway."""
 
     channel = MessageChannel.WEIXIN
+    # iLink represents image and text as separate ``MessageItem`` entries —
+    # there is no native "photo with caption" surface. See ``send_photo``.
+    supports_inline_caption = False
 
     def __init__(
         self,
@@ -171,17 +174,23 @@ class WeixinGateway(BaseGateway):
         chat_id: str | None = None,
         reply_markup: dict[str, Any] | None = None,
     ) -> bool:
-        # iLink media upload requires AES-128-ECB CDN handshake — not yet
-        # implemented. Degrade to sending the caption as plain text so the
-        # report tool surfaces *something* instead of dropping silently.
-        logger.warning(
-            "WeixinGateway.send_photo: image upload not yet supported; "
-            "sending caption as text instead (path=%s)", photo_path,
-        )
-        return await self.send_message(
-            text=caption or "[image]",
-            chat_id=chat_id,
-            reply_markup=reply_markup,
+        if self.sender is None:
+            logger.warning("WeixinGateway.send_photo: gateway not started")
+            return False
+        target = chat_id or self.default_chat_id
+        if not target:
+            logger.warning("WeixinGateway.send_photo: no user_id available")
+            return False
+        # ``caption`` is intentionally ignored on WeChat: image and text are
+        # always separate iLink message items, so a caption-with-photo does
+        # not exist as a native concept. Callers that want a caption either
+        # rely on the agent loop's text follow-up (see reply_user_tool) or
+        # call ``send_message`` themselves. ``supports_inline_caption`` on
+        # this gateway is False so reply_user_tool knows not to short-circuit
+        # the text follow-up after a successful photo send.
+        return await self.sender.send_photo(
+            photo_path=photo_path,
+            user_id=target,
         )
 
     async def edit_message(
