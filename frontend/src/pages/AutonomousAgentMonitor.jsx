@@ -104,6 +104,19 @@ function eventToMessage(ev) {
       }
       break
     }
+    case 'chat_verification':
+    case 'analysis_verification':
+    case 'quick_verification':
+    case 'verification_result':
+      msg = {
+        text: d.preview || '',
+        type: 'verification',
+        verifierStatus: d.status || 'verified',
+        verifierDetail: d.detail || '',
+        verifierEvidenceCount: typeof d.evidence_count === 'number' ? d.evidence_count : 0,
+        verifierTool: d.tool || 'reply_user',
+      }
+      break
     case 'agent_thinking':
       msg = d.content?.trim() ? { text: `💭 ${d.content}`, rawDelta: d.content, type: 'thinking', isStreaming: true } : null
       break
@@ -267,6 +280,50 @@ function LogItem({ update }) {
   const sqlData = isObj ? msg.sqlData : null
   const badge = TASK_TYPE_BADGE[taskType] || TASK_TYPE_BADGE.analysis
   const theme = toolName ? (TOOL_THEME[toolName] || DEFAULT_TOOL_THEME) : null
+
+  // ── Fact-verifier verdict ──────────────────────────────────────────────
+  if (type === 'verification') {
+    const status = isObj ? msg.verifierStatus : 'verified'
+    const detail = isObj ? msg.verifierDetail : ''
+    const evidenceCount = isObj ? msg.verifierEvidenceCount : 0
+    const verifierTool = isObj ? msg.verifierTool : 'reply_user'
+    const VERIFIER_THEME = {
+      verified:           { icon: '🛡️✅', cls: 'bg-emerald-100/70 text-emerald-800 border-emerald-200', textCls: 'text-emerald-700' },
+      fabricated:         { icon: '🛡️🚫', cls: 'bg-red-100/70 text-red-800 border-red-200',             textCls: 'text-red-700 font-semibold' },
+      unverified:         { icon: '🛡️⚠️', cls: 'bg-amber-100/70 text-amber-800 border-amber-200',       textCls: 'text-amber-700 font-medium' },
+      no_evidence_needed: { icon: '🛡️·',  cls: 'bg-gray-100/70 text-gray-700 border-gray-200',         textCls: 'text-gray-600' },
+    }
+    const vt = VERIFIER_THEME[status] || VERIFIER_THEME.verified
+    const statusLabelKey = `agent.verifier_status_${status}`
+    return (
+      <div className="mb-1.5 pb-1 border-b border-gray-100/50 last:border-0">
+        <span className="text-gray-400 select-none mr-1.5">[{update.time}]</span>
+        <span className={`inline-block text-[9px] font-bold px-1.5 py-0 rounded mr-1.5 ${badge.cls}`}>{t(badge.labelKey)}</span>
+        <span className={`inline-block text-[9px] font-bold px-1.5 py-0.5 rounded mr-1 border ${vt.cls}`}>
+          {vt.icon} {t('agent.verifier_label')}
+        </span>
+        <span className={`text-[10px] ${vt.textCls}`}>
+          {t(statusLabelKey, t('agent.verifier_status_verified'))}
+          {evidenceCount > 0 && (
+            <span className="ml-1.5 text-gray-500 font-normal">
+              · {t('agent.verifier_evidence_count', { count: evidenceCount })}
+            </span>
+          )}
+          {verifierTool && verifierTool !== 'reply_user' && (
+            <span className="ml-1.5 text-gray-400 font-normal">· {verifierTool}</span>
+          )}
+        </span>
+        {text && (
+          <div className="mt-1 text-[10px] text-gray-500 pl-4 truncate" title={text}>
+            "{text}"
+          </div>
+        )}
+        {detail && (
+          <div className="mt-1 text-[10px] text-gray-600 italic pl-4">{detail}</div>
+        )}
+      </div>
+    )
+  }
 
   // ── Tool call ──────────────────────────────────────────────────────────
   if (type === 'tool_call' && theme) {
@@ -870,50 +927,63 @@ export default function AutonomousAgentMonitor() {
   const chatStateKeyRef = useRef(null)
   const analysisLocalStartRef = useRef(null)
   const chatLocalStartRef = useRef(null)
-  const streamBufferRef = useRef({ content: '', thinking: '' })
+  // Streaming chunks bucketed by taskType (analysis/chat/quick/scheduled) so
+  // concurrent loops don't interleave their chunks into the same string.
+  const streamBufferRef = useRef({})
+  const lastStreamTaskRef = useRef('analysis')
 
   const stripToolCallXml = (text) => (text || '').replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '').trim()
 
-  // Flush accumulated streaming content into a single log entry
-  const flushStreamBuffer = useCallback(() => {
-    const buf = streamBufferRef.current
+  // Flush accumulated streaming content. If taskType is given, flush only that
+  // bucket; otherwise flush every bucket.
+  const flushStreamBuffer = useCallback((taskType) => {
+    const buckets = streamBufferRef.current
+    const targets = taskType ? [taskType] : Object.keys(buckets)
+    const time = new Date().toLocaleTimeString()
     const toAdd = []
-    if (buf.thinking) {
-      toAdd.push({ text: `💭 ${buf.thinking}`, type: 'thinking', taskType: buf.taskType || 'analysis' })
-    }
-    const contentStripped = stripToolCallXml(buf.content)
-    if (contentStripped) {
-      toAdd.push({ text: `🤖 Assistant: ${contentStripped}`, type: 'content', taskType: buf.taskType || 'analysis' })
+    for (const tt of targets) {
+      const buf = buckets[tt]
+      if (!buf) continue
+      if (buf.thinking) {
+        toAdd.push({ id: crypto.randomUUID(), time, message: { text: `💭 ${buf.thinking}`, type: 'thinking', taskType: tt } })
+      }
+      const contentStripped = stripToolCallXml(buf.content)
+      if (contentStripped) {
+        toAdd.push({ id: crypto.randomUUID(), time, message: { text: `🤖 Assistant: ${contentStripped}`, type: 'content', taskType: tt } })
+      }
+      buf.content = ''
+      buf.thinking = ''
     }
     if (toAdd.length > 0) {
-      const time = new Date().toLocaleTimeString()
-      setLogUpdates((prev) => [...toAdd.map((m) => ({ time, message: m })), ...prev.slice(0, 499)])
+      setLogUpdates((prev) => [...toAdd, ...prev.slice(0, 499)])
     }
-    buf.content = ''
-    buf.thinking = ''
-    buf.taskType = 'analysis'
     setLiveStream({ thinking: '', content: '' })
   }, [])
 
   const addStatusUpdate = useCallback((msgObj) => {
     const { taskType, ...message } = msgObj
-    const buf = streamBufferRef.current
+    const tt = taskType || 'analysis'
+    const buckets = streamBufferRef.current
+    if (!buckets[tt]) buckets[tt] = { content: '', thinking: '' }
+    const buf = buckets[tt]
 
     if (message.isStreaming) {
       const delta = message.rawDelta ?? message.text?.replace(/^💭 |^🤖 Assistant: /, '') ?? ''
-      buf.taskType = taskType || 'analysis'
+      lastStreamTaskRef.current = tt
       if (message.type === 'thinking') {
-        if (buf.content) { flushStreamBuffer(); buf.content = '' }
+        if (buf.content) flushStreamBuffer(tt)
         buf.thinking += delta
       } else if (message.type === 'content') {
-        if (buf.thinking) { flushStreamBuffer(); buf.thinking = '' }
+        if (buf.thinking) flushStreamBuffer(tt)
         buf.content += delta
       }
       return
     }
 
-    flushStreamBuffer()
-    const update = { time: new Date().toLocaleTimeString(), message: { ...message, taskType: taskType || 'analysis' } }
+    // Non-streaming event: flush only its own bucket so concurrent loops keep
+    // their in-flight streaming text intact.
+    flushStreamBuffer(tt)
+    const update = { id: crypto.randomUUID(), time: new Date().toLocaleTimeString(), message: { ...message, taskType: tt } }
     setLogUpdates((prev) => [update, ...prev.slice(0, 499)])
   }, [flushStreamBuffer])
 
@@ -940,10 +1010,12 @@ export default function AutonomousAgentMonitor() {
     return () => clearInterval(timer)
   }, [])
 
-  // Timer to sync streaming buffer to live preview state (real-time display)
+  // Timer to sync streaming buffer to live preview state (real-time display).
+  // Single-channel preview shows the most recently active bucket.
   useEffect(() => {
     const timer = setInterval(() => {
-      const buf = streamBufferRef.current
+      const tt = lastStreamTaskRef.current || 'analysis'
+      const buf = streamBufferRef.current[tt] || { thinking: '', content: '' }
       setLiveStream({ thinking: buf.thinking || '', content: buf.content || '' })
     }, 150)
     return () => clearInterval(timer)
@@ -1033,6 +1105,7 @@ export default function AutonomousAgentMonitor() {
           if (!msg) return
           if (msg.isStreaming) return
           items.push({
+            id: crypto.randomUUID(),
             time: ev.created_at ? parseBackendDate(ev.created_at).toLocaleTimeString() : '',
             message: msg,
           })
@@ -1106,16 +1179,19 @@ export default function AutonomousAgentMonitor() {
             cache_creation_tokens: data.cache_creation_tokens,
           }
           addCumulativeTokens(tokenUsage)
-          const buf = streamBufferRef.current
+          const tt = isChat ? 'chat' : 'analysis'
+          const buckets = streamBufferRef.current
+          if (!buckets[tt]) buckets[tt] = { content: '', thinking: '' }
+          const buf = buckets[tt]
           const time = new Date().toLocaleTimeString()
           setLiveStream({ thinking: '', content: '' })
           const toPrepend = []
           if (buf.thinking) {
-            toPrepend.push({ time, message: { text: `💭 ${buf.thinking}`, type: 'thinking', taskType: buf.taskType || 'analysis' } })
+            toPrepend.push({ id: crypto.randomUUID(), time, message: { text: `💭 ${buf.thinking}`, type: 'thinking', taskType: tt } })
           }
           const contentStripped = stripToolCallXml(buf.content)
           if (contentStripped) {
-            toPrepend.push({ time, message: { text: `🤖 Assistant: ${contentStripped}`, type: 'content', taskType: buf.taskType || 'analysis' } })
+            toPrepend.push({ id: crypto.randomUUID(), time, message: { text: `🤖 Assistant: ${contentStripped}`, type: 'content', taskType: tt } })
           }
           buf.thinking = ''
           buf.content = ''
@@ -1132,7 +1208,7 @@ export default function AutonomousAgentMonitor() {
             }
             const tokenLine = formatTokenUsage(tokenUsage)
             if (tokenLine) {
-              return [{ time, message: { text: tokenLine, type: 'token_usage', tokenUsage, taskType: isChat ? 'chat' : 'analysis' } }, ...withFlushed.slice(0, 199)]
+              return [{ id: crypto.randomUUID(), time, message: { text: tokenLine, type: 'token_usage', tokenUsage, taskType: isChat ? 'chat' : 'analysis' } }, ...withFlushed.slice(0, 199)]
             }
             return withFlushed.slice(0, 500)
           })
@@ -1142,7 +1218,8 @@ export default function AutonomousAgentMonitor() {
           } else if (data.type === 'agent_started') {
             // Mark startup complete (step 8 = past the last step)
             setStartupModal((prev) => prev ? { step: 8, error: null } : null)
-            streamBufferRef.current = { content: '', thinking: '', taskType: 'analysis' }
+            streamBufferRef.current = {}
+            lastStreamTaskRef.current = 'analysis'
             setLiveStream({ thinking: '', content: '' })
           } else if (data.type === 'startup_error') {
             setStartupModal((prev) => ({ step: prev?.step || 0, error: data.error || 'Unknown error' }))
@@ -1547,7 +1624,7 @@ export default function AutonomousAgentMonitor() {
               {isRunning ? t('agent.waiting_events') : t('agent.start_to_see')}
             </div>
           ) : (
-            filteredLogs.map((update, idx) => (<LogItem key={`${update.time}_${update.message?.type}_${update.message?.text?.slice(0, 40)}_${idx}`} update={update} />))
+            filteredLogs.map((update) => (<LogItem key={update.id} update={update} />))
           )}
         </div>
       </div>

@@ -259,11 +259,12 @@ async def get_dashboard_data(minutes: int = Query(1440, ge=10, le=43200)):
         async def _load_feature(ft: str):
             try:
                 df = await asyncio.to_thread(
-                    lambda _ft=ft: reader.load_feature_data(["LiveUser"], _ft, minutes=minutes)
+                    lambda _ft=ft: reader.load_feature_data(
+                        ["LiveUser"], _ft, minutes=minutes, limit=_MAX_POINTS_PER_FEATURE
+                    )
                 )
                 if df.empty:
                     return ft, []
-                df = df.tail(_MAX_POINTS_PER_FEATURE)
                 points = [
                     {"ts": float(row["ts"]), "v": float(row["value"])}
                     for _, row in df.iterrows()

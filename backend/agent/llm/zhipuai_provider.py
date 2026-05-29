@@ -49,7 +49,7 @@ class ZhipuAIProvider(BaseLLMProvider):
         tools: list[dict] | None = None,
         stream: bool = True,
         temperature: float = 0.7,
-        max_tokens: int = 8192,
+        max_tokens: int | None = None,
         thinking: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """
@@ -68,13 +68,16 @@ class ZhipuAIProvider(BaseLLMProvider):
             kwargs: dict[str, Any] = {
                 "model": self.model,
                 "messages": messages,
-                "max_tokens": max_tokens,
                 "temperature": temperature,
                 "stream": True,  # Always stream for consistency
                 "thinking": {
                     "type": resolved_thinking,
                 },
             }
+            # AGENT_MAX_TOKENS defaults to 0 -> None at the call site; only send
+            # max_tokens when actually set (and never compare against None below).
+            if max_tokens is not None:
+                kwargs["max_tokens"] = max_tokens
             if tools:
                 kwargs["tools"] = tools
                 kwargs["tool_choice"] = "auto"
@@ -201,7 +204,11 @@ class ZhipuAIProvider(BaseLLMProvider):
             if prompt_tokens is not None or completion_tokens is not None:
                 truncated = (
                     finish_reason == "length"
-                    or (completion_tokens is not None and completion_tokens >= max_tokens)
+                    or (
+                        completion_tokens is not None
+                        and max_tokens is not None
+                        and completion_tokens >= max_tokens
+                    )
                 )
                 yield {
                     "type": "token_usage",

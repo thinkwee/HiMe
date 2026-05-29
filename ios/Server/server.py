@@ -295,7 +295,7 @@ async def handle_ingest(request: web.Request) -> web.Response:
         return web.json_response({"ok": True, "inserted": n})
     except Exception as e:
         log.warning(f"HTTP ingest error: {e}")
-        return web.json_response({"ok": False, "error": str(e)}, status=400)
+        return web.json_response({"ok": False, "error": "ingest failed"}, status=400)
 
 
 _sync_enabled: bool = True
@@ -334,7 +334,8 @@ async def handle_sync_control(request: web.Request) -> web.Response:
         _log_connection(f"Sync Control: {'ENABLED' if _sync_enabled else 'DISABLED'}")
         return web.json_response({"ok": True, "sync_enabled": _sync_enabled})
     except Exception as e:
-        return web.json_response({"ok": False, "error": str(e)}, status=400)
+        log.warning(f"sync-control error: {e}")
+        return web.json_response({"ok": False, "error": "bad request"}, status=400)
 
 
 async def handle_ping(request: web.Request) -> web.Response:

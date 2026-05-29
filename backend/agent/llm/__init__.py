@@ -152,6 +152,10 @@ _csv_lock = threading.Lock()
 
 def _get_log_path() -> Path:
     from ...config import settings  # local import to avoid circular deps
+    if settings.LLM_USAGE_CSV_PATH is not None:
+        path = settings.LLM_USAGE_CSV_PATH
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
     settings.AGENT_LOGS_PATH.mkdir(parents=True, exist_ok=True)
     return settings.AGENT_LOGS_PATH / "llm_api.csv"
 
@@ -429,25 +433,47 @@ def provider_write_log(
     tool_calls_list: list[dict],
     response_texts: list[str],
 ) -> None:
-    """Shared log writer for all LLM providers. Wraps write_usage_log with error handling."""
+    """Shared log writer for all LLM providers.
+
+    Offloads the actual file write to a default-executor thread so the asyncio
+    event loop is never blocked by sync file I/O — important because the CSV
+    may live on a network FS (CephFS) where ``open()`` / ``writerow()`` can
+    stall for seconds. The threading.Lock inside ``write_usage_log`` still
+    serializes concurrent writers correctly because executor threads share it.
+
+    Falls back to inline (sync) writing when no event loop is running.
+    """
     resp_text = "\n".join(response_texts)
     if not resp_text and tool_calls_list:
         resp_text = "[Tool calls] " + ", ".join(tc.get("name", "?") for tc in tool_calls_list)
+
+    def _do_write() -> None:
+        try:
+            write_usage_log(
+                provider=provider,
+                model=model,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                thoughts_tokens=thoughts_tokens,
+                response_tokens=response_tokens,
+                cache_read_tokens=cache_read_tokens,
+                cache_creation_tokens=cache_creation_tokens,
+                duration_ms=duration_ms,
+                tool_definitions_str=format_tool_definitions(tools) if tools else "",
+                input_summary=format_input_summary(messages),
+                tool_calls_str=format_tool_calls(tool_calls_list),
+                response_text=resp_text,
+            )
+        except Exception as exc:
+            logger.warning("Failed to write LLM usage log: %s", exc)
+
     try:
-        write_usage_log(
-            provider=provider,
-            model=model,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            thoughts_tokens=thoughts_tokens,
-            response_tokens=response_tokens,
-            cache_read_tokens=cache_read_tokens,
-            cache_creation_tokens=cache_creation_tokens,
-            duration_ms=duration_ms,
-            tool_definitions_str=format_tool_definitions(tools) if tools else "",
-            input_summary=format_input_summary(messages),
-            tool_calls_str=format_tool_calls(tool_calls_list),
-            response_text=resp_text,
-        )
-    except Exception as exc:
-        logger.warning("Failed to write LLM usage log: %s", exc)
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _do_write()
+        return
+
+    fut = loop.run_in_executor(None, _do_write)
+    # Suppress "Future exception was never retrieved" — _do_write swallows
+    # its own exceptions so this is just defensive cleanup.
+    fut.add_done_callback(lambda f: f.exception())

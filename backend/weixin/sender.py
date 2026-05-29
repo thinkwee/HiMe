@@ -19,6 +19,7 @@ Design notes:
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import logging
@@ -249,7 +250,8 @@ class WeixinSender:
         self, path: Path, to_user_id: str, context_token: str,
     ) -> UploadedImage:
         """Run the full getuploadurl → CDN POST pipeline for one image."""
-        plaintext = path.read_bytes()
+        # Offload the blocking file read off the event loop.
+        plaintext = await asyncio.to_thread(path.read_bytes)
         rawsize = len(plaintext)
         rawmd5 = hashlib.md5(plaintext, usedforsecurity=False).hexdigest()
         ciphersize = aes_ecb_padded_size(rawsize)
@@ -286,7 +288,8 @@ class WeixinSender:
                 raise RuntimeError(
                     f"getuploadurl ret={ret} err_msg={data.get('err_msg', '')!r}",
                 )
-            ciphertext = encrypt_aes_ecb(plaintext, aeskey)
+            # AES-encrypting a multi-MB image is CPU-bound — keep it off the loop.
+            ciphertext = await asyncio.to_thread(encrypt_aes_ecb, plaintext, aeskey)
             # CDN POST is allowed to take longer than the 15s default —
             # large images on slow networks routinely need 30s+.
             cdn_client = httpx.AsyncClient(timeout=60.0, follow_redirects=True)

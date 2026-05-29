@@ -82,6 +82,24 @@ def now_local() -> datetime:
     return datetime.now(app_timezone())
 
 
+def local_tz_line() -> str:
+    """Render the current local-TZ context line for LLM prompts.
+
+    Format: ``Local TZ: <IANA name> (UTC±HH:MM, <abbrev>)``. The abbrev/offset
+    come from the live local time so DST is reflected automatically. Used to
+    give the LLM a concrete, current offset on every chat turn — UTC is what
+    the DB stores, this is what the LLM should quote to the user.
+    """
+    from .config import settings
+    tz = app_timezone()
+    now = datetime.now(tz)
+    raw = now.strftime("%z")  # e.g. "+0100"
+    offset = f"{raw[:3]}:{raw[3:]}" if raw else "+00:00"
+    abbrev = now.strftime("%Z") or tz.key  # e.g. "BST"
+    name = (settings.TIMEZONE or "UTC").strip() or "UTC"
+    return f"Local TZ: {name} (UTC{offset}, {abbrev})"
+
+
 def serialize_value(value: Any) -> Any:
     """
     Serialize a single value to a JSON-safe scalar / list.

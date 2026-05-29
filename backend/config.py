@@ -173,6 +173,10 @@ class Settings(BaseSettings):
     DATA_STORE_PATH:        Path = Path("./data/data_stores")
     # logs/  — all log files (backend, frontend, LLM API CSV)
     AGENT_LOGS_PATH:        Path = Path("./logs")
+    # Optional override for the LLM API usage CSV. Defaults to
+    # ``AGENT_LOGS_PATH / "llm_api.csv"``. Point it at a fast local disk
+    # (not a network FS) so a hiccup can't stall the writer thread.
+    LLM_USAGE_CSV_PATH:     Path | None = None
     # memory/ — all agent memory (SQLite DBs, state JSON, last config)
     MEMORY_DB_PATH:         Path = Path("./memory")
     AGENT_STATES_PATH:      Path = Path("./memory/agent_states")

@@ -62,7 +62,9 @@ class WeixinPoller:
         self._cursor: str = ""
         self._running = False
         self._client: httpx.AsyncClient | None = None
-        self._seen_ids: set[str] = set()
+        # insertion-ordered (dict) so trimming evicts the OLDEST ids, not an
+        # arbitrary half (set iteration order is hash-based, not insertion order)
+        self._seen_ids: dict[str, None] = {}
         self._MAX_SEEN = 500
         self._last_context: dict[str, str] = {}
 
@@ -157,11 +159,11 @@ class WeixinPoller:
         if msg_id and msg_id in self._seen_ids:
             return
         if msg_id:
-            self._seen_ids.add(msg_id)
+            self._seen_ids[msg_id] = None
             if len(self._seen_ids) > self._MAX_SEEN:
-                self._seen_ids = set(
-                    list(self._seen_ids)[self._MAX_SEEN // 2 :]
-                )
+                # evict the oldest half (dict preserves insertion order)
+                for old in list(self._seen_ids)[: self._MAX_SEEN // 2]:
+                    del self._seen_ids[old]
 
         from_user = str(update.get("from_user_id") or "")
         if not from_user:
@@ -183,10 +185,16 @@ class WeixinPoller:
         if not text:
             return
 
-        ts_raw = update.get("timestamp") or update.get("ts") or 0
-        try:
-            ts = datetime.fromtimestamp(int(ts_raw), tz=timezone.utc)
-        except (TypeError, ValueError, OSError):
+        # iLink updates don't always carry a timestamp; fall back to wall time
+        # rather than 0, which would resolve to 1970-01-01 and poison the
+        # chat-history timestamp prefix the agent uses to ground "today".
+        ts_raw = update.get("timestamp") or update.get("ts")
+        if ts_raw:
+            try:
+                ts = datetime.fromtimestamp(int(ts_raw), tz=timezone.utc)
+            except (TypeError, ValueError, OSError):
+                ts = datetime.now(timezone.utc)
+        else:
             ts = datetime.now(timezone.utc)
 
         envelope = MessageEnvelope(

@@ -197,6 +197,8 @@ class AgentToolsMixin:
                 tool._current_user_message = user_message
             if tool and hasattr(tool, "_current_chat_history"):
                 tool._current_chat_history = list(chat_history or [])
+            if tool and hasattr(tool, "_event_emitter"):
+                tool._event_emitter = self._emit
 
     async def _execute_tool(
         self, tool_name: str, arguments: dict,

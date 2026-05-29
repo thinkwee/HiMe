@@ -21,10 +21,16 @@ cd "$PROJECT_ROOT"
 # ── Configuration ──────────────────────────────────────────────
 # Load environment variables from .env if it exists
 if [ -f ".env" ]; then
-    while IFS='=' read -r key value || [ -n "$key" ]; do
+    # Read the whole line and split on the FIRST '=' manually. Using
+    # `IFS='=' read` strips trailing IFS chars and would corrupt base64
+    # values ending in '=' (e.g. a 32-byte API token).
+    while IFS= read -r line || [ -n "$line" ]; do
         # Skip comments and empty lines
-        [[ $key =~ ^[[:space:]]*# ]] && continue
-        [[ -z $key ]] && continue
+        [[ $line =~ ^[[:space:]]*# ]] && continue
+        [[ -z $line ]] && continue
+        [[ $line != *=* ]] && continue
+        key="${line%%=*}"
+        value="${line#*=}"
         # Remove trailing comments from value and any surrounding quotes
         value="${value%%#*}"
         value="${value%"${value##*[![:space:]]}"}" # trim trailing whitespace
@@ -260,10 +266,14 @@ _native_start() {
         fi
     fi
 
-    # Source .env again just in case it was created
-    while IFS='=' read -r key value || [ -n "$key" ]; do
-        [[ $key =~ ^[[:space:]]*# ]] && continue
-        [[ -z $key ]] && continue
+    # Source .env again just in case it was created. Split on first '=' (see
+    # the loader near the top) so base64 values ending in '=' survive intact.
+    while IFS= read -r line || [ -n "$line" ]; do
+        [[ $line =~ ^[[:space:]]*# ]] && continue
+        [[ -z $line ]] && continue
+        [[ $line != *=* ]] && continue
+        key="${line%%=*}"
+        value="${line#*=}"
         value="${value%%#*}"
         value="${value%"${value##*[![:space:]]}"}"
         value="${value#\"}"; value="${value%\"}"

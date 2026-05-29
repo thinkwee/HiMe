@@ -73,7 +73,7 @@ class AnthropicProvider(BaseLLMProvider):
         tools: list[dict] | None = None,
         stream: bool = True,
         temperature: float = 0.7,
-        max_tokens: int = 8192,
+        max_tokens: int | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         _t0 = time.perf_counter()
         try:
@@ -82,7 +82,9 @@ class AnthropicProvider(BaseLLMProvider):
             request_kwargs: dict[str, Any] = {
                 "model":      self.model,
                 "messages":   filtered_messages,
-                "max_tokens": max_tokens,
+                # Anthropic requires max_tokens; fall back when caller passes None
+                # (AGENT_MAX_TOKENS defaults to 0 -> None at the call site).
+                "max_tokens": max_tokens if max_tokens is not None else 8192,
             }
             if system_prompt:
                 # Mark the entire system prompt as cacheable so subsequent
@@ -216,7 +218,11 @@ class AnthropicProvider(BaseLLMProvider):
             if prompt_tokens is not None or completion_tokens is not None:
                 truncated = (
                     stop_reason == "max_tokens"
-                    or (completion_tokens is not None and completion_tokens >= max_tokens)
+                    or (
+                        completion_tokens is not None
+                        and max_tokens is not None
+                        and completion_tokens >= max_tokens
+                    )
                 )
                 yield {
                     "type": "token_usage",

@@ -85,6 +85,19 @@ def _get_memory_conn() -> sqlite3.Connection:
     return conn
 
 
+def _get_memory_ro_conn() -> sqlite3.Connection:
+    """Get a read-only connection to the memory database.
+
+    Used by ``query_memory`` so the read path is enforced read-only at the
+    SQLite driver level — a prefix check alone is bypassable (e.g.
+    ``WITH x AS (SELECT 1) DELETE FROM t`` starts with WITH but mutates, and
+    runs in autocommit so the change persists). ``mode=ro`` rejects any write.
+    """
+    conn = sqlite3.connect(f"file:{MEMORY_DB_PATH}?mode=ro", uri=True, timeout=10)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
 def query_health(
     feature_types: "str | list[str]",
     days: int = 7,
@@ -164,7 +177,7 @@ def query_memory(sql: str, params: list | None = None) -> list[dict]:
         List of dicts
     """
     _validate_sql(sql, allowed_starts=("SELECT", "WITH"))
-    conn = _get_memory_conn()
+    conn = _get_memory_ro_conn()
     try:
         rows = conn.execute(sql, params or []).fetchall()
         return [dict(r) for r in rows]

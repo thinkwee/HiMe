@@ -398,10 +398,13 @@ class TestChatHistoryFormat:
 
     async def test_format_tag_not_stored_in_history(self):
         """
-        User messages stored in chat history must not contain the '[TELEGRAM MESSAGE ...]' prefix.
-        Only the per-turn message sent to the LLM carries the metadata marker;
-        history stores the clean text only.
+        User messages stored in chat history must not contain the verbose
+        '[TELEGRAM MESSAGE ...]' channel/format marker (which the LLM could
+        mimic). History entries are prefixed with a compact
+        '[YYYY-MM-DD HH:MM]' timestamp (used for day-rollover detection),
+        followed by the raw user text verbatim.
         """
+        import re as _re
         agent = self._make_minimal_agent()
         user_text = "How many steps today?"
         envelope = self._make_envelope(user_text)
@@ -425,10 +428,15 @@ class TestChatHistoryFormat:
         assert len(user_msgs) >= 1, "History should contain at least one user message"
         for msg in user_msgs:
             assert "[TELEGRAM MESSAGE" not in msg["content"], (
-                f"User message stored in history contains the format marker (should not be stored):\n{msg['content']}"
+                f"User message stored in history contains the verbose channel format marker:\n{msg['content']}"
             )
-            assert msg["content"] == user_text, (
-                f"User message stored in history should be the raw text '{user_text}', "
+            # Raw text must follow a compact [YYYY-MM-DD HH:MM] timestamp prefix.
+            assert msg["content"].endswith(user_text), (
+                f"Stored user message should end with the raw text '{user_text}', "
+                f"got: '{msg['content']}'"
+            )
+            assert _re.match(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\] ", msg["content"]), (
+                f"Stored user message should carry a [YYYY-MM-DD HH:MM] prefix, "
                 f"got: '{msg['content']}'"
             )
 

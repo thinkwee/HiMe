@@ -74,6 +74,20 @@ def _filter_data_evidence(tool_results: list[dict]) -> list[dict]:
 
 
 
+def _derive_quick_message(findings: str, max_len: int = 80) -> str:
+    """Best-effort cat-avatar caption when the LLM didn't supply ``metadata.message``.
+
+    Pulls the first non-blank line from sub-analysis findings, strips Markdown
+    bullet/heading prefixes, and trims to ``max_len`` chars. Falls back to a
+    calm default if findings are empty.
+    """
+    for line in (findings or "").splitlines():
+        s = line.strip().lstrip("#-* \t").strip()
+        if s:
+            return s[:max_len].rstrip()
+    return "Looking healthy at the moment."
+
+
 def _hash_tool_calls(tool_calls: list[dict]) -> str:
     """Hash tool call names + arguments for duplicate detection."""
     sig = json.dumps(
@@ -996,7 +1010,7 @@ class AgentLoopsMixin:
                     allowed_tools={"sql", "push_report"},
                     extra_tools={"push_report"},
                 ),
-                timeout=30.0,
+                timeout=300.0,
             )
         except asyncio.TimeoutError:
             return {
@@ -1009,14 +1023,18 @@ class AgentLoopsMixin:
 
         # --- Extract cat state from report_args.metadata ---
         result_state = "relaxed"
-        result_message = "Unable to interpret current health state."
+        # Defaults are derived from the sub-agent's findings rather than a
+        # generic "Unable to interpret..." string, so iOS shows something
+        # human-sounding even when the LLM forgets to populate metadata.
+        findings = sub_result.get("findings", "") or ""
+        result_message = _derive_quick_message(findings)
 
         if sub_result.get("report_pushed"):
             # LLM called push_report — read state/message from metadata
             report_args = sub_result.get("report_args", {})
             meta = report_args.get("metadata")
             if isinstance(meta, dict):
-                result_state = meta.get("state", "relaxed") or "relaxed"
+                result_state = meta.get("state", result_state) or result_state
                 result_message = meta.get("message", result_message) or result_message
 
             self.pushed_report_in_cycle = True
@@ -1027,8 +1045,9 @@ class AgentLoopsMixin:
                 "timestamp": ts_now(),
             })
         else:
-            # Fallback: LLM didn't call push_report — push programmatically
-            findings = sub_result.get("findings", "") or ""
+            # Fallback: LLM didn't call push_report — push programmatically.
+            # Pass metadata.state/message so the saved row stays consistent
+            # with what we hand back to iOS.
             evidence = _filter_data_evidence(sub_result.get("evidence", []))
             now_iso = ts_now()
             try:
@@ -1040,6 +1059,7 @@ class AgentLoopsMixin:
                     "time_range_end": now_iso,
                     "alert_level": "info",
                     "source": "quick_analysis",
+                    "metadata": {"state": result_state, "message": result_message},
                 }
                 push_result = await asyncio.wait_for(
                     self._execute_tool("push_report", push_args, evidence_trail=evidence),
@@ -1128,9 +1148,10 @@ class AgentLoopsMixin:
         # Single source of truth for prompt assembly: agent_prompts.py.
         system_prompt = await asyncio.to_thread(self.build_sub_analysis_prompt)
 
+        from ..utils import local_tz_line
         messages: list[dict] = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": goal},
+            {"role": "user", "content": f"[{local_tz_line()}]\n{goal}"},
         ]
 
         sub_tools = self._get_sub_analysis_tool_definitions(extra_tools=extra_tools)
@@ -1219,10 +1240,18 @@ class AgentLoopsMixin:
                     "arguments": arguments,
                 }))
 
-                # push_report needs the evidence trail for fact verification
+                # push_report needs the evidence trail for fact verification.
+                # Also stamp the correct ``source`` based on this sub-analysis's
+                # caller — the LLM doesn't see ``source`` in the schema, so
+                # without this every direct LLM push falls back to the
+                # PushReportTool default ("scheduled_analysis") regardless of
+                # whether it came from iOS quick or autonomous analysis.
                 evidence_kw: dict = {}
                 if tool_name == "push_report":
                     evidence_kw["evidence_trail"] = _filter_data_evidence(all_evidence)
+                    arguments["source"] = (
+                        "quick_analysis" if source == "quick" else "scheduled_analysis"
+                    )
 
                 try:
                     result = await asyncio.wait_for(
@@ -1296,9 +1325,10 @@ class AgentLoopsMixin:
         # Single source of truth for prompt assembly: agent_prompts.py.
         system_prompt = await asyncio.to_thread(self.build_sub_manage_prompt)
 
+        from ..utils import local_tz_line
         messages: list[dict] = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": goal},
+            {"role": "user", "content": f"[{local_tz_line()}]\n{goal}"},
         ]
 
         sub_tools = self._get_sub_manage_tool_definitions()
@@ -1445,14 +1475,29 @@ class AgentLoopsMixin:
             self._get_system_prompt, mode="chat"
         )
         history = self._chat_histories.get(history_key, [])
-        ts_str = self._format_message_timestamp(envelope.timestamp)
+        # Guard against upstream gateways handing us an epoch-zero (1970) or
+        # otherwise nonsensical timestamp — those would poison the history's
+        # date prefix and anchor the LLM to a stale "today".
+        envelope_ts = envelope.timestamp
+        if envelope_ts is None or envelope_ts.year < 2000:
+            from datetime import datetime as _dt
+            from datetime import timezone as _tz
+            envelope_ts = _dt.now(_tz.utc)
+        ts_str = self._format_message_timestamp(envelope_ts)
+        from ..utils import local_tz_line, now_local
+        tz_line = local_tz_line()
+        now_str = now_local().strftime("%Y-%m-%d %H:%M")
         user_msg_for_llm: dict = {
             "role": "user",
-            "content": f"[{channel.upper()} MESSAGE from {sender} at {ts_str}]: {envelope.content}",
+            "content": (
+                f"[{tz_line}]\n"
+                f"[Current local time: {now_str}]\n"
+                f"[{channel.upper()} MESSAGE from {sender} at {ts_str}]: {envelope.content}"
+            ),
         }
         user_msg_for_history: dict = {
             "role": "user",
-            "content": envelope.content,
+            "content": f"[{ts_str}] {envelope.content}",
         }
 
         chat_messages = [
@@ -1466,8 +1511,13 @@ class AgentLoopsMixin:
         # Inject the current envelope into the reply tool so it can route the
         # outbound message to the correct gateway (Telegram / Feishu / ...).
         _reply_tool = self.tool_registry.get_tool("reply_user")
-        if _reply_tool is not None and hasattr(_reply_tool, "_current_envelope"):
-            _reply_tool._current_envelope = envelope
+        # Also inject the emitter so fact-verifier verdicts surface on the
+        # monitor stream (chat_verification events).
+        if _reply_tool is not None:
+            if hasattr(_reply_tool, "_current_envelope"):
+                _reply_tool._current_envelope = envelope
+            if hasattr(_reply_tool, "_event_emitter"):
+                _reply_tool._event_emitter = self._emit
 
         reply_text: str | None = None
         original_user_content = user_msg_for_llm["content"]
@@ -1507,26 +1557,36 @@ class AgentLoopsMixin:
                 if not has_replied and clean and clean not in ("(tools)", "(done)", "(no response)"):
                     # LLM wrote text but didn't call reply_user — send it
                     logger.info("Chat turn %d: no tool calls, auto-replying with text", turn)
-                    sent = await self._auto_reply(clean, chat_id, all_evidence, user_message=envelope.content, chat_history=history)
-                    if sent:
+                    ar = await self._auto_reply(clean, chat_id, all_evidence, user_message=envelope.content, chat_history=history)
+                    if ar["sent"]:
                         has_replied = True
                         reply_text = clean
                         finished = True
                         break
-                    # Auto-reply was blocked (e.g. fabricated operation claim).
-                    # Give the agent one retry: inject feedback so it can use
-                    # actual tools instead of just claiming it did something.
+                    # Auto-reply was blocked (typically by fact verifier).
+                    # Give the agent one retry: feed back the verifier's
+                    # specific detail so it can fix the exact issue (e.g.
+                    # "fabricated step count without querying database").
                     if not getattr(self, "_chat_fabrication_retried", False):
                         self._chat_fabrication_retried = True
-                        logger.info("Chat turn %d: auto-reply blocked, injecting retry feedback", turn)
+                        block_detail = ar.get("error", "") or "(no detail)"
+                        logger.info(
+                            "Chat turn %d: auto-reply blocked, injecting retry feedback: %s",
+                            turn, block_detail[:160],
+                        )
                         chat_messages.append(_build_assistant_msg(clean, [], sig))
                         chat_messages.append({
                             "role": "user",
                             "content": (
-                                "[System: Your reply was blocked because it claimed to perform an action "
-                                "(e.g. setting a schedule, creating a page) without actually calling the "
-                                "required tool. Please use your tools (sql, analyze, reply_user, etc.) "
-                                "to perform the action first, then reply.]"
+                                f"[System] Your previous reply was BLOCKED by the fact verifier: "
+                                f"{block_detail}\n\n"
+                                f"You MUST call the appropriate tool to obtain real data BEFORE replying. "
+                                f"For health/activity questions (steps, distance, energy, sleep, heart rate, "
+                                f"stand time, etc.) call `sql` on the `health_data` database or `code`. "
+                                f"For write/action claims (create_page, update_md, schedule, memory writes) "
+                                f"call that tool first. Do NOT cite specific numbers, dates, or outcomes "
+                                f"from memory or prior turns — re-query for the current request. After the "
+                                f"tool returns, reply using only the values it produced."
                             ),
                         })
                         continue
@@ -1566,9 +1626,9 @@ class AgentLoopsMixin:
                     if not has_replied:
                         clean = _strip_meta_markers(text)
                         if clean:
-                            sent = await self._auto_reply(clean, chat_id, all_evidence, user_message=envelope.content, chat_history=history)
-                            has_replied = sent
-                            if sent:
+                            ar = await self._auto_reply(clean, chat_id, all_evidence, user_message=envelope.content, chat_history=history)
+                            has_replied = ar["sent"]
+                            if ar["sent"]:
                                 reply_text = clean
                     break
             else:
@@ -1739,11 +1799,24 @@ class AgentLoopsMixin:
 
         self._set_state("chat_complete", loop="chat")
         hist = self._chat_histories.setdefault(history_key, [])
+        # Find date of the previous user turn (before we append this one) so
+        # we can mark a day rollover on the assistant reply without paying the
+        # per-turn token cost of stamping every assistant message.
+        today_date = ts_str[:10]  # ts_str: "YYYY-MM-DD HH:MM"
+        prev_user_date: str | None = None
+        for m in reversed(hist):
+            if m.get("role") == "user":
+                mt = re.match(r"^\[(\d{4}-\d{2}-\d{2})", m.get("content", ""))
+                if mt:
+                    prev_user_date = mt.group(1)
+                break
         hist.append(user_msg_for_history)
         if reply_text:
-            # Store reply as plain text — no brackets, timestamps, or markers
-            # that the LLM could mimic in subsequent turns.
-            hist.append({"role": "assistant", "content": reply_text})
+            if prev_user_date != today_date:
+                stored_reply = f"({today_date}) {reply_text}"
+            else:
+                stored_reply = reply_text
+            hist.append({"role": "assistant", "content": stored_reply})
         if len(hist) > self._max_chat_history:
             hist = hist[-self._max_chat_history:]
             self._chat_histories[history_key] = hist
@@ -1757,19 +1830,21 @@ class AgentLoopsMixin:
         tool_results: list[dict] | None = None,
         user_message: str = "",
         chat_history: list[dict] | None = None,
-    ) -> bool:
+    ) -> dict:
         """Send text as a reply_user on behalf of the LLM.
 
         When *tool_results* are provided, evidence is attached so the
         "Show Evidence" button appears on the outbound message.
 
-        Returns True if the message was actually sent, False otherwise.
+        Returns ``{"sent": bool, "error": str}``. On a fact-verifier block the
+        ``error`` carries the verifier's specific detail so callers can inject
+        it into the retry prompt.
         """
         # Safety net: never send raw tool-call markup to users
         if _contains_raw_tool_call(text):
             text = _strip_raw_tool_calls(text)
         if not text:
-            return False
+            return {"sent": False, "error": ""}
         try:
             reply_tool = self.tool_registry.get_tool("reply_user")
             if reply_tool:
@@ -1782,6 +1857,8 @@ class AgentLoopsMixin:
                     reply_tool._current_user_message = user_message
                 if hasattr(reply_tool, "_current_chat_history"):
                     reply_tool._current_chat_history = chat_history or []
+                if hasattr(reply_tool, "_event_emitter"):
+                    reply_tool._event_emitter = self._emit
                 result = await reply_tool.execute(message=text, chat_id=str(chat_id))
                 if result.get("success"):
                     await self._emit({
@@ -1790,10 +1867,12 @@ class AgentLoopsMixin:
                         "chat_id": str(chat_id),
                         "auto": True,
                     })
-                    return True
+                    return {"sent": True, "error": ""}
                 else:
-                    logger.warning("Auto-reply failed: %s", result.get("error", "")[:120])
-                    return False
+                    err = str(result.get("error", ""))
+                    logger.warning("Auto-reply failed: %s", err[:120])
+                    return {"sent": False, "error": err}
         except Exception as e:
             logger.error("Auto-reply failed: %s", e)
-        return False
+            return {"sent": False, "error": str(e)}
+        return {"sent": False, "error": ""}

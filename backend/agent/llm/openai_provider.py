@@ -77,6 +77,15 @@ class OpenAIProvider(BaseLLMProvider):
         self._extra = kwargs  # forwarded to AsyncOpenAI constructor
         try:
             from openai import AsyncOpenAI  # type: ignore
+            import httpx  # type: ignore
+            # Wall-clock timeouts on every phase so a stalled connection
+            # raises promptly instead of hanging the agent indefinitely.
+            # ``read=120`` is the inter-chunk timeout for streaming responses
+            # (the API normally emits a chunk every few seconds).
+            kwargs.setdefault(
+                "timeout",
+                httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0),
+            )
             self._client = AsyncOpenAI(api_key=api_key, **kwargs)
         except ImportError as exc:
             raise ImportError(

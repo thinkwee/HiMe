@@ -47,23 +47,20 @@ class AmazonBedrockProvider(BaseLLMProvider):
         tools: list[dict] | None = None,
         stream: bool = True,
         temperature: float = 0.7,
-        max_tokens: int = 8192,
+        max_tokens: int | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
-        # Simplify: Bedrock Converse API format is slightly different but follows a pattern.
-        # This implementation is a placeholder for the actual Converse API call.
-        # Since we don't have boto3 installed in this environment to test,
-        # we'll provide a structurally correct implementation.
         _t0 = time.perf_counter()
         bedrock_messages = self._convert_messages(messages)
         bedrock_tools = self._convert_tools(tools) if tools else None
 
+        inference_config: dict[str, Any] = {"temperature": temperature}
+        # AWS Converse rejects a null maxTokens — only send it when set.
+        if max_tokens is not None:
+            inference_config["maxTokens"] = max_tokens
         kwargs = {
             "modelId": self.model,
             "messages": bedrock_messages,
-            "inferenceConfig": {
-                "temperature": temperature,
-                "maxTokens": max_tokens,
-            }
+            "inferenceConfig": inference_config,
         }
         if bedrock_tools:
             kwargs["toolConfig"] = {"tools": bedrock_tools}
@@ -79,26 +76,36 @@ class AmazonBedrockProvider(BaseLLMProvider):
             # blocking the event loop on per-chunk network I/O.
             def _consume_stream(resp):
                 content_parts = []
-                tool_calls = []
+                # Tool-use blocks keyed by contentBlockIndex: Bedrock streams the
+                # tool input as partial JSON via contentBlockDelta.toolUse.input,
+                # so deltas must accumulate against the block opened by the
+                # matching contentBlockStart.
+                tool_blocks: dict[int, dict] = {}
                 prompt_tokens = completion_tokens = None
                 stop_reason = None
 
                 for event in resp.get("stream"):
                     if "messageStart" in event:
                         pass
-                    elif "contentBlockDelta" in event:
-                        delta = event["contentBlockDelta"]["delta"]
-                        if "text" in delta:
-                            content_parts.append(delta["text"])
                     elif "contentBlockStart" in event:
-                        block = event["contentBlockStart"]["start"]
+                        cbs = event["contentBlockStart"]
+                        idx = cbs.get("contentBlockIndex")
+                        block = cbs.get("start", {})
                         if "toolUse" in block:
                             tu = block["toolUse"]
-                            tool_calls.append({
-                                "id": tu["toolUseId"],
-                                "name": tu["name"],
+                            tool_blocks[idx] = {
+                                "id": tu.get("toolUseId", ""),
+                                "name": tu.get("name", ""),
                                 "input_buf": "",
-                            })
+                            }
+                    elif "contentBlockDelta" in event:
+                        cbd = event["contentBlockDelta"]
+                        idx = cbd.get("contentBlockIndex")
+                        delta = cbd["delta"]
+                        if "text" in delta:
+                            content_parts.append(delta["text"])
+                        elif "toolUse" in delta and idx in tool_blocks:
+                            tool_blocks[idx]["input_buf"] += delta["toolUse"].get("input", "")
                     elif "messageStop" in event:
                         stop_reason = event["messageStop"].get("stopReason")
                     elif "metadata" in event:
@@ -106,6 +113,21 @@ class AmazonBedrockProvider(BaseLLMProvider):
                         if usage:
                             prompt_tokens = usage.get("inputTokens")
                             completion_tokens = usage.get("outputTokens")
+
+                # Parse the accumulated tool-input JSON for each block.
+                tool_calls = []
+                for _idx in sorted(tool_blocks):
+                    tb = tool_blocks[_idx]
+                    buf = tb["input_buf"]
+                    try:
+                        args = json.loads(buf) if buf else {}
+                    except json.JSONDecodeError:
+                        logger.warning(
+                            "Could not parse Bedrock tool arguments for %s: %s",
+                            tb["name"], buf[:200],
+                        )
+                        args = {"_raw": buf}
+                    tool_calls.append({"id": tb["id"], "name": tb["name"], "arguments": args})
 
                 return {
                     "content_parts": content_parts,
@@ -117,6 +139,7 @@ class AmazonBedrockProvider(BaseLLMProvider):
 
             result = await asyncio.to_thread(_consume_stream, response)
             content_parts = result["content_parts"]
+            tool_calls = result["tool_calls"]
             prompt_tokens = result["prompt_tokens"]
             completion_tokens = result["completion_tokens"]
             stop_reason = result["stop_reason"]
@@ -125,11 +148,20 @@ class AmazonBedrockProvider(BaseLLMProvider):
             for text in content_parts:
                 yield {"type": "content", "content": text}
 
+            # Yield any tool calls the model requested (flat format consumed by
+            # agent_loops._consume and normalised by _build_assistant_msg).
+            for tc in tool_calls:
+                yield {"type": "tool_call", **tc}
+
             # Yield token usage with truncation flag
             if prompt_tokens is not None or completion_tokens is not None:
                 truncated = (
                     stop_reason == "max_tokens"
-                    or (completion_tokens is not None and completion_tokens >= max_tokens)
+                    or (
+                        completion_tokens is not None
+                        and max_tokens is not None
+                        and completion_tokens >= max_tokens
+                    )
                 )
                 yield {
                     "type": "token_usage",
@@ -139,9 +171,6 @@ class AmazonBedrockProvider(BaseLLMProvider):
                     "max_tokens": max_tokens,
                 }
 
-            # Finalize tool calls
-            # (Note: simpler for now, real implementation would accumulate input_buf)
-
             provider_write_log(
                 provider="amazon_bedrock",
                 model=self.model,
@@ -150,7 +179,7 @@ class AmazonBedrockProvider(BaseLLMProvider):
                 duration_ms=int((time.perf_counter() - _t0) * 1000),
                 tools=tools,
                 messages=messages,
-                tool_calls_list=[],
+                tool_calls_list=tool_calls,
                 response_texts=content_parts,
             )
 

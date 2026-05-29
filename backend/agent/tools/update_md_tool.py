@@ -47,6 +47,16 @@ _FILE_CONFIG = {
             "> running on this user's data — surprising data quirks, gotchas you\n"
             "> hit and the workaround, schema details that aren't in\n"
             "> `data_schema.md`, edge cases worth remembering next time.\n\n"
+            "## Default behaviour rule (applies to every user — do not edit)\n\n"
+            "**When the user expresses doubt about, disputes, or asks you to\n"
+            "re-check an answer, re-invoke the data tools and re-derive the answer\n"
+            "from fresh tool results in that same turn.** Do not just paraphrase or\n"
+            "restate the response being questioned — that response is the thing\n"
+            "under dispute. Claiming to have re-checked without an accompanying\n"
+            "`sql` / `code` / `analyze` call in the same turn is fabrication.\n"
+            "This holds even when the disputed numbers appear earlier in the chat\n"
+            "history: prior history is not evidence for the current turn when the\n"
+            "user is challenging it — only a fresh tool call is.\n\n"
             "<!-- Agent: append your real learnings below this line. -->\n"
         ),
     },

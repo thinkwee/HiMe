@@ -24,6 +24,7 @@ class BaseTool(ABC):
     _llm_provider: Any = None
     _current_tool_results: list[dict[str, Any]] = []
     _current_user_message: str = ""  # user's original message for fabrication context
+    _event_emitter: Any = None  # async callable: agent's _emit, injected per call
 
     # --- Input validation (optional, subclass sets this) ---
     input_schema: type[BaseModel] | None = None
@@ -152,10 +153,42 @@ class BaseTool(ABC):
                         }
                     ]]
                 }
+            await self._emit_verification_event(
+                status=status, detail=detail, msg_hash=msg_hash,
+                message_text=message_text,
+            )
             return {"status": status, "detail": detail, "reply_markup": reply_markup}
         except Exception as exc:
             logger.debug("Evidence verification failed: %s", exc)
             return {"status": "verified", "detail": "", "reply_markup": None}
+
+    async def _emit_verification_event(
+        self, *, status: str, detail: str, msg_hash: str, message_text: str,
+    ) -> None:
+        """Stream the fact-verifier verdict to the agent monitor.
+
+        Best-effort: any failure is swallowed so monitor wiring never breaks
+        the user-facing reply path.
+        """
+        emitter = getattr(self, "_event_emitter", None)
+        if emitter is None:
+            return
+        evidence_count = len(self._current_tool_results or [])
+        scenario = "chat" if evidence_count == 0 else "data_or_op"
+        payload = {
+            "type": "chat_verification",
+            "tool": getattr(self, "name", "unknown"),
+            "scenario": scenario,
+            "status": status,
+            "detail": (detail or "")[:300],
+            "evidence_count": evidence_count,
+            "message_hash": msg_hash,
+            "preview": (message_text or "")[:200],
+        }
+        try:
+            await emitter(payload)
+        except Exception as exc:
+            logger.debug("verification event emit failed: %s", exc)
 
     @abstractmethod
     def get_definition(self) -> dict:

@@ -94,7 +94,35 @@
                     },
                     "metadata": {
                         "type": "object",
-                        "description": "Optional extra metadata to attach to the report."
+                        "description": "Extra metadata. **For iOS quick-analysis (cat avatar): MUST include `state` and `message`** — they drive the cat sprite and caption. For other analyses: optional.",
+                        "properties": {
+                            "state": {
+                                "type": "string",
+                                "enum": [
+                                    "energetic",
+                                    "tired",
+                                    "stressed",
+                                    "sad",
+                                    "relaxed",
+                                    "curious",
+                                    "happy",
+                                    "focused",
+                                    "sleepy",
+                                    "recovering",
+                                    "sick",
+                                    "zen",
+                                    "proud",
+                                    "alert",
+                                    "adventurous"
+                                ],
+                                "description": "iOS cat avatar state. Required when this is a quick-analysis (iOS Home cat) call; ignored otherwise."
+                            },
+                            "message": {
+                                "type": "string",
+                                "maxLength": 80,
+                                "description": "Short first-person caption shown under the cat. Under 80 chars, must include a specific number from the data. Required for quick-analysis."
+                            }
+                        }
                     }
                 },
                 "required": [

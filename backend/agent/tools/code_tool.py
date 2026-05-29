@@ -86,10 +86,13 @@ class CodeTool(BaseTool):
 
             # Bootstrap: pre-import libraries; health data is NOT loaded here —
             # call refresh_df() after init to populate `df` with fresh data.
-            bootstrap = textwrap.dedent("""\
+            from ...config import settings as _bootstrap_settings
+            _local_tz_name = (_bootstrap_settings.TIMEZONE or "UTC").strip() or "UTC"
+            bootstrap = textwrap.dedent(f"""\
                 import pandas as pd
                 import numpy as np
                 from datetime import datetime, timedelta, timezone
+                from zoneinfo import ZoneInfo as _ZoneInfo, ZoneInfoNotFoundError as _TZErr
                 import sqlite3
 
                 # Matplotlib (non-interactive backend for chart generation)
@@ -118,6 +121,24 @@ class CodeTool(BaseTool):
                 # Pre-loaded health data — populated by refresh_df() before each cycle
                 # columns: timestamp (datetime64[ns]), feature_type (str), value (float64)
                 df = pd.DataFrame(columns=['timestamp', 'feature_type', 'value'])
+
+                # Timezone helpers — DB stores UTC; user-facing display uses
+                # settings.TIMEZONE. Use these when quoting wall-clock times.
+                try:
+                    _LOCAL_TZ = _ZoneInfo({_local_tz_name!r})
+                except _TZErr:
+                    _LOCAL_TZ = timezone.utc
+
+                def to_local(ts):
+                    \"\"\"Convert a UTC timestamp/string/datetime to user's local TZ.\"\"\"
+                    t = pd.Timestamp(ts)
+                    if t.tz is None:
+                        t = t.tz_localize('UTC')
+                    return t.tz_convert(_LOCAL_TZ)
+
+                def local_now():
+                    \"\"\"Current time as a tz-aware pd.Timestamp in user's local TZ.\"\"\"
+                    return pd.Timestamp.now(tz=_LOCAL_TZ)
             """)
 
             result = shell.run_cell(bootstrap, silent=True, store_history=False)

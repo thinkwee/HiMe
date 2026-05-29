@@ -99,22 +99,32 @@ class DataStoreReader(BaseDataReader):
 
         minutes = kwargs.get('minutes', 60)
         since_ts = kwargs.get('since_ts')
+        # Optional row cap, pushed into SQL so a wide window (e.g. the iOS
+        # dashboard's 30-day request) never materialises the full result set
+        # in memory. When set we take the newest N rows and reverse to ascending.
+        limit = kwargs.get('limit')
 
         if since_ts:
             from datetime import datetime, timezone
 
             from ..utils import ts_fmt
             since_dt = ts_fmt(datetime.fromtimestamp(since_ts, tz=timezone.utc))
-            query = "SELECT timestamp as date, value FROM samples WHERE feature_type = ? AND timestamp > ? ORDER BY timestamp"
-            params = (feature_type, since_dt)
+            base = "SELECT timestamp as date, value FROM samples WHERE feature_type = ? AND timestamp > ?"
+            params = [feature_type, since_dt]
         else:
             from datetime import datetime, timedelta, timezone
 
             from ..utils import ts_fmt
             now = datetime.now(timezone.utc)
             since_dt = ts_fmt(now - timedelta(minutes=minutes))
-            query = "SELECT timestamp as date, value FROM samples WHERE feature_type = ? AND timestamp > ? ORDER BY timestamp"
-            params = (feature_type, since_dt)
+            base = "SELECT timestamp as date, value FROM samples WHERE feature_type = ? AND timestamp > ?"
+            params = [feature_type, since_dt]
+
+        if limit:
+            query = base + " ORDER BY timestamp DESC LIMIT ?"
+            params.append(int(limit))
+        else:
+            query = base + " ORDER BY timestamp"
 
         try:
             db_path = self._get_db_path(pid)
@@ -123,6 +133,10 @@ class DataStoreReader(BaseDataReader):
 
             if df.empty:
                 return pd.DataFrame()
+
+            if limit:
+                # SQL returned newest-first; restore ascending-by-time order.
+                df = df.iloc[::-1].reset_index(drop=True)
 
             df['date'] = pd.to_datetime(df['date'], format='mixed', utc=True)
             df['feature_type'] = feature_type
