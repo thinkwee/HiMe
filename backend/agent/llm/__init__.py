@@ -17,6 +17,7 @@ import random
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -148,6 +149,26 @@ _CSV_COLUMNS = [
     "tool_definitions", "input", "tool_calls", "tool_results", "response",
 ]
 _csv_lock = threading.Lock()
+
+# Dedicated single-worker thread for usage-log writes. Deliberately NOT the
+# asyncio loop's default executor: tying writes to a loop means a closed loop
+# (per-test loops under pytest-asyncio, or shutdown in production) leaves
+# dangling loop-bound futures and "Event loop is closed" errors. One daemon
+# worker keeps writes off the event loop, serialises them, and outlives any
+# individual loop. Lazily created so import is side-effect-free.
+_log_executor: ThreadPoolExecutor | None = None
+_log_executor_lock = threading.Lock()
+
+
+def _get_log_executor() -> ThreadPoolExecutor:
+    global _log_executor
+    if _log_executor is None:
+        with _log_executor_lock:
+            if _log_executor is None:
+                _log_executor = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="llm-usage-log",
+                )
+    return _log_executor
 
 
 def _get_log_path() -> Path:
@@ -435,13 +456,16 @@ def provider_write_log(
 ) -> None:
     """Shared log writer for all LLM providers.
 
-    Offloads the actual file write to a default-executor thread so the asyncio
-    event loop is never blocked by sync file I/O — important because the CSV
-    may live on a network FS (CephFS) where ``open()`` / ``writerow()`` can
-    stall for seconds. The threading.Lock inside ``write_usage_log`` still
-    serializes concurrent writers correctly because executor threads share it.
+    Offloads the actual file write to a dedicated single-worker thread (see
+    ``_get_log_executor``) so the asyncio event loop is never blocked by sync
+    file I/O — important because the CSV may live on a network FS (CephFS)
+    where ``open()`` / ``writerow()`` can stall for seconds. The executor is
+    independent of any event loop, so closing a loop (per-test under
+    pytest-asyncio, or shutdown) can't strand the write or corrupt loop state.
+    The threading.Lock inside ``write_usage_log`` still serialises writers.
 
-    Falls back to inline (sync) writing when no event loop is running.
+    Falls back to inline (sync) writing if the executor can't be scheduled
+    (e.g. interpreter shutdown).
     """
     resp_text = "\n".join(response_texts)
     if not resp_text and tool_calls_list:
@@ -468,12 +492,7 @@ def provider_write_log(
             logger.warning("Failed to write LLM usage log: %s", exc)
 
     try:
-        loop = asyncio.get_running_loop()
+        _get_log_executor().submit(_do_write)
     except RuntimeError:
+        # Executor rejected the job (interpreter shutting down) — write inline.
         _do_write()
-        return
-
-    fut = loop.run_in_executor(None, _do_write)
-    # Suppress "Future exception was never retrieved" — _do_write swallows
-    # its own exceptions so this is just defensive cleanup.
-    fut.add_done_callback(lambda f: f.exception())
