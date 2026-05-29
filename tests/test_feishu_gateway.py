@@ -281,7 +281,7 @@ def test_default_deny_empty_allowed_chat_ids() -> None:
         },
     }
 
-    asyncio.get_event_loop().run_until_complete(transport.dispatch_event(event))
+    asyncio.run(transport.dispatch_event(event))
     assert received == [], "default-deny should reject inbound messages"
 
 
@@ -313,7 +313,7 @@ def test_allowed_chat_id_passes() -> None:
         },
     }
 
-    asyncio.get_event_loop().run_until_complete(transport.dispatch_event(event))
+    asyncio.run(transport.dispatch_event(event))
     assert len(received) == 1
     assert received[0].channel == MessageChannel.FEISHU
     assert received[0].chat_id == "oc_allowed"
@@ -367,9 +367,7 @@ def test_feishu_gateway_constructs_with_mocked_sdk() -> None:
         return True
 
     gw.sender.send_message = _fake_send  # type: ignore[attr-defined]
-    ok = asyncio.get_event_loop().run_until_complete(
-        gw.send_message("hello", chat_id="oc_default"),
-    )
+    ok = asyncio.run(gw.send_message("hello", chat_id="oc_default"))
     assert ok is True
 
 
