@@ -76,8 +76,8 @@ class OpenAIProvider(BaseLLMProvider):
         super().__init__(model, api_key)
         self._extra = kwargs  # forwarded to AsyncOpenAI constructor
         try:
-            from openai import AsyncOpenAI  # type: ignore
             import httpx  # type: ignore
+            from openai import AsyncOpenAI  # type: ignore
             # Wall-clock timeouts on every phase so a stalled connection
             # raises promptly instead of hanging the agent indefinitely.
             # ``read=120`` is the inter-chunk timeout for streaming responses
