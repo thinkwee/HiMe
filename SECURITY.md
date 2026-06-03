@@ -29,7 +29,7 @@ HiMe processes sensitive personal health data and runs an autonomous LLM agent t
 - SQL injection or path traversal in any tool or API endpoint.
 - Leakage of secrets from `.env`, memory DBs, or logs.
 - Cross-site scripting in agent-generated HTML served by `/api/personalised-pages/`.
-- Messaging gateway authorization issues — unauthorized `chat_id`s interacting with the agent on either Telegram or Feishu, or bypass of the default-deny allowlist.
+- Messaging gateway authorization issues — unauthorized `chat_id`s on Telegram / Feishu / WeChat, or bypass of IM default-deny allowlists; unauthorized access to another user's in-app chat history or `chat-image` assets (bearer auth / per-user `image_store` checks).
 - **Prompt injection / jailbreak** attacks against the agent that steer it into calling tools in unintended ways — for example, a malicious string in synced health data or user-supplied text coercing the agent to run harmful Python through the `code` tool, write to unauthorised memory tables, or exfiltrate data.
 - **Tool-definition fuzzing** — malformed tool arguments (SQL payloads, unsafe imports in `create_page`, resource-exhausting inputs to `code`) that bypass the validation in `backend/agent/tools/` or `page_helpers.py`.
 - **Resource-exhaustion / DoS** via agent loops — unbounded `code` execution, runaway `sql` queries, or context-overflow retry storms.
@@ -43,6 +43,6 @@ HiMe processes sensitive personal health data and runs an autonomous LLM agent t
 
 ## Privacy notes for operators
 
-HiMe is designed to be self-hosted. By default it stores all health data, agent memory, and chat history locally on the operator's machine. The platform does not phone home. If you enable the Telegram gateway, messages are routed through Telegram's infrastructure under the terms of your bot.
+HiMe is designed to be self-hosted. By default it stores all health data, agent memory, and chat history (including the in-app iOS transcript in the memory DB) locally on the operator's machine. The platform does not phone home. Optional IM gateways (Telegram, Feishu, WeChat) route messages through those providers' infrastructure. Optional APNs push sends notification metadata to Apple's servers when configured.
 
 If you intend to expose HiMe beyond `localhost`, you **must** configure authentication (`API_AUTH_TOKEN`) and tighten `CORS_ORIGINS`. See `docs/DEPLOYMENT.md` for guidance.

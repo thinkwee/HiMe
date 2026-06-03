@@ -100,6 +100,27 @@ def local_tz_line() -> str:
     return f"Local TZ: {name} (UTC{offset}, {abbrev})"
 
 
+def language_directive(sample_text: str, default_lang: str = "en") -> str:
+    """One-line instruction telling the model which language to write
+    user-facing output in, inferred from a sample of the user's OWN recent
+    messages (CJK present → Chinese). Chat turns infer language from the
+    incoming message, but proactive reports have no such signal — this gives
+    them one. Falls back to *default_lang* when there's no chat history yet.
+    """
+    text = sample_text or ""
+    cjk = sum(1 for ch in text if "一" <= ch <= "鿿")
+    if cjk >= 2:
+        lang = "Chinese"
+    elif any(ch.isascii() and ch.isalpha() for ch in text):
+        lang = "English"
+    else:
+        lang = "Chinese" if (default_lang or "en").lower().startswith("zh") else "English"
+    return (
+        f"Language: write everything the user will see — the report title, "
+        f"content and digest — in {lang}, matching how the user talks to you."
+    )
+
+
 def serialize_value(value: Any) -> Any:
     """
     Serialize a single value to a JSON-safe scalar / list.

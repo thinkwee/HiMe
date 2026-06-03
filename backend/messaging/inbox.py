@@ -126,6 +126,9 @@ def _debounce(messages: list[MessageEnvelope]) -> list[MessageEnvelope]:
         else:
             # Merge content with newlines
             combined_text = "\n".join(m.content for m in group)
+            combined_attachments: list = []
+            for m in group:
+                combined_attachments.extend(m.attachments)
             merged = MessageEnvelope(
                 message_id=group[0].message_id,
                 channel=group[0].channel,
@@ -137,6 +140,7 @@ def _debounce(messages: list[MessageEnvelope]) -> list[MessageEnvelope]:
                 conversation_id=group[0].conversation_id,
                 platform_message_id=group[0].platform_message_id,
                 metadata=group[0].metadata,
+                attachments=combined_attachments,
             )
             result.append(merged)
     return result

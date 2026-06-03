@@ -265,6 +265,31 @@ class Settings(BaseSettings):
     WEIXIN_ALLOWED_USER_IDS: str = ""
 
     # ------------------------------------------------------------------ #
+    # In-app iOS channel (native chat — alternative to the IM gateways)
+    # ------------------------------------------------------------------ #
+    # When enabled, the iOS app talks to the agent directly: inbound chat via
+    # POST /api/agent/chat, outbound replies over the /api/stream/agent
+    # WebSocket, proactive push via APNs (see below). No bot binding is
+    # required — the app authenticates with the API bearer token (if any).
+    IOS_GATEWAY_ENABLED: bool = True
+    # Inbound user→agent image uploads (needs a vision-capable LLM). Ships
+    # off so it can be enabled once a vision provider is in use.
+    IOS_VISION_ENABLED: bool = False
+    # Max accepted inbound image size (bytes) for POST /api/agent/chat.
+    IOS_MAX_IMAGE_BYTES: int = 5 * 1024 * 1024
+
+    # APNs (Apple Push Notification service) — proactive push to a closed app.
+    # Disabled by default; the operator drops a .p8 auth key and fills these
+    # in to enable real push (otherwise replies are delivered when the app
+    # next opens). Requires `pip install aioapns`.
+    APNS_ENABLED:   bool = False
+    APNS_KEY_PATH:  str  = ""          # path to the AuthKey_XXXX.p8 file
+    APNS_KEY_ID:    str  = ""          # 10-char APNs Key ID
+    APNS_TEAM_ID:   str  = ""          # 10-char Apple Developer Team ID
+    APNS_BUNDLE_ID: str  = ""          # app bundle id (APNs topic)
+    APNS_ENV:       str  = "production"  # "production" | "sandbox"
+
+    # ------------------------------------------------------------------ #
     # Skills subsystem (openclaw-compatible capability packs)
     # ------------------------------------------------------------------ #
     # os.pathsep-separated list of directories containing skill packages.

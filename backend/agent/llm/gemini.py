@@ -22,6 +22,7 @@ from typing import Any
 
 from . import (
     BaseLLMProvider,
+    parse_image_data_uri,
     provider_write_log,
     retry_async,
 )
@@ -54,6 +55,9 @@ class GeminiProvider(BaseLLMProvider):
     # ------------------------------------------------------------------
 
     def supports_tools(self) -> bool:
+        return True
+
+    def supports_vision(self) -> bool:
         return True
 
     async def complete(
@@ -328,7 +332,24 @@ class GeminiProvider(BaseLLMProvider):
                 sig_bytes = self._decode_signature(signature)
                 if sig_bytes:
                     parts.append(types.Part(thought_signature=sig_bytes))
-            if content:
+            if isinstance(content, list):
+                # Multimodal user content (text + image) from the iOS channel.
+                for b in content:
+                    if not isinstance(b, dict):
+                        parts.append(types.Part(text=str(b)))
+                    elif b.get("type") == "image_url":
+                        mime, data = parse_image_data_uri(
+                            (b.get("image_url") or {}).get("url", "")
+                        )
+                        if data:
+                            try:
+                                parts.append(types.Part.from_bytes(
+                                    data=base64.b64decode(data), mime_type=mime))
+                            except Exception as e:
+                                logger.warning("Gemini image part failed: %s", e)
+                    elif b.get("text"):
+                        parts.append(types.Part(text=b["text"]))
+            elif content:
                 parts.append(types.Part(text=content))
             if parts:
                 contents.append(types.Content(role=gemini_role, parts=parts))

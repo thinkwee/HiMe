@@ -34,6 +34,9 @@ struct ReportsView: View {
 
 struct ReportsListSection: View {
     @ObservedObject var viewModel: DashboardViewModel
+    /// When set (from a chat "view full report" tap), the matching row opens
+    /// expanded. nil in the normal Reports tab.
+    var expandTargetId: Int? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -73,7 +76,9 @@ struct ReportsListSection: View {
                 ReportsEmptyView()
             } else {
                 ForEach(viewModel.reports) { report in
-                    ReportRow(report: report, viewModel: viewModel)
+                    ReportRow(report: report, viewModel: viewModel,
+                              forceExpand: report.id == expandTargetId)
+                        .id("report-\(report.id)")
                 }
             }
         }
@@ -106,6 +111,8 @@ struct ReportsEmptyView: View {
 struct ReportRow: View {
     let report: AgentReport
     @ObservedObject var viewModel: DashboardViewModel
+    /// Open expanded on first appearance (deep-linked from a chat report bubble).
+    var forceExpand: Bool = false
     @State private var isExpanded: Bool = false
     @State private var showDeleteConfirm: Bool = false
 
@@ -169,10 +176,7 @@ struct ReportRow: View {
             if isExpanded {
                 Divider()
 
-                Text(cleanMarkdown(report.content))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .lineSpacing(3)
+                MarkdownView(text: report.content, foreground: .secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 HStack {
@@ -217,6 +221,18 @@ struct ReportRow: View {
         } message: {
             Text("This will remove the report from your server. This cannot be undone.")
         }
+        .onAppear { applyForceExpand() }
+        .onChange(of: forceExpand) { _, expand in if expand { applyForceExpand() } }
+    }
+
+    /// Expand this row when it was deep-linked from a chat report bubble, and
+    /// consume the routing request so it doesn't re-fire.
+    private func applyForceExpand() {
+        guard forceExpand else { return }
+        if !isExpanded {
+            withAnimation(.easeInOut(duration: 0.2)) { isExpanded = true }
+        }
+        AppRouter.shared.pendingReportId = nil
     }
 
     private func formatTimestamp(_ ts: String) -> String {
@@ -250,28 +266,5 @@ struct ReportRow: View {
             return relative.localizedString(for: date, relativeTo: Date())
         }
         return String(ts.prefix(16))
-    }
-
-    /// Simple markdown cleanup: convert **bold** to plain text, keep bullet points
-    private func cleanMarkdown(_ text: String) -> String {
-        var result = text
-        // Remove ** bold markers
-        result = result.replacingOccurrences(of: "**", with: "")
-        // Remove # headers markers but keep text
-        let lines = result.split(separator: "\n", omittingEmptySubsequences: false)
-        result = lines.map { line in
-            var l = String(line)
-            while l.hasPrefix("#") {
-                l = String(l.dropFirst())
-            }
-            if l.hasPrefix(" ") { l = String(l.dropFirst()) }
-            return l
-        }.joined(separator: "\n")
-        // Convert - bullets to bullet character
-        result = result.replacingOccurrences(of: "\n- ", with: "\n\u{2022} ")
-        if result.hasPrefix("- ") {
-            result = "\u{2022} " + String(result.dropFirst(2))
-        }
-        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

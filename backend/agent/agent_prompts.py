@@ -105,6 +105,15 @@ LAYER_PLAN: dict[str, tuple[tuple[str, str], ...]] = {
         ("data_schema.md",   "data schema"),
         ("experience.md",    "experience"),
     ),
+    "plan_designer": (
+        # One-shot personalised-plan designer fired after onboarding. It both
+        # reads health data (data_schema) AND writes scheduled_tasks / memory
+        # notes via the sql tool (memory_guide), then publishes a plan report.
+        ("data_schema.md",   "data schema"),
+        ("memory_guide.md",  "memory guide"),
+        ("user.md",          "user profile"),
+        ("experience.md",    "experience"),
+    ),
     "sub_manage": (
         # Sub-manage is the chat path's write executor: memory CRUD,
         # ``update_md``, and personalised pages.  It needs memory_guide
@@ -258,6 +267,22 @@ class AgentPromptsMixin:
         result = self._append_layers(base, "sub_analysis")
         result = self._append_skills_block(result, "sub_analysis")
         return result
+
+    # ------------------------------------------------------------------
+    # Plan-designer builder: one-shot onboarding plan + task setup
+    # ------------------------------------------------------------------
+
+    def build_plan_designer_prompt(self) -> str:
+        """Build the plan-designer system prompt.
+
+        Fired once after onboarding to turn the user's goal survey into a
+        concrete plan: it reads health data (data_schema), writes
+        ``scheduled_tasks`` and a memory note via the ``sql`` tool
+        (memory_guide), and publishes a plan report via ``push_report``.
+        Unlike sub_analysis it is explicitly allowed to write.
+        """
+        base = load_prompt("plan_designer.md")
+        return self._append_layers(base, "plan_designer")
 
     # ------------------------------------------------------------------
     # Sub-manage builder: write executor for the chat path

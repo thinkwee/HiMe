@@ -287,6 +287,19 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
     async def _emit(self, event: dict) -> None:
         await self._event_queue.put(event)
 
+    def _chat_memory(self):
+        """Lazily-constructed MemoryManager for chat-history persistence.
+
+        The agent persists its own state via ``state_repo``; chat-history
+        persistence opens its own handle to the same memory DB on first use.
+        """
+        mm = getattr(self, "_chat_memory_mgr", None)
+        if mm is None:
+            from .memory_manager import MemoryManager
+            mm = MemoryManager(self.memory_db_path, self.user_id)
+            self._chat_memory_mgr = mm
+        return mm
+
     # ==================================================================
     # run_forever — single event loop
     # ==================================================================

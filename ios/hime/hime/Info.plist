@@ -6,6 +6,8 @@
 	<array>
 		<string>com.hime.healthkit.refresh</string>
 	</array>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save chat images and charts to your photo library.</string>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>tg</string>
@@ -15,6 +17,7 @@
 	<array>
 		<string>fetch</string>
 		<string>processing</string>
+		<string>remote-notification</string>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict>

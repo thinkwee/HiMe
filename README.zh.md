@@ -49,8 +49,10 @@ HiMe（Health Intelligence Management Engine）是一款自托管、完全本地
 
 - 实时接入 Apple Watch + iPhone 的可穿戴数据，包括心率、HRV、血氧、睡眠阶段、运动、活动能力等 50+ 项指标。
 - iOS 与 watchOS 配套 App，轻松同步健康数据并控制 Agent。
-- 自主式 AI 分析，支持定时检查与事件触发。
-- OpenClaw 风格的聊天体验，支持 Telegram、飞书或微信（通过官方 ClawBot 插件），回复均附带证据来源。
+- 原生 App 内聊天 — 直接在 iOS App 里与 Agent 对话：流式回复、图片收发、附带证据来源的回答，App 关闭时还能通过 APNs 主动推送。无需绑定任何机器人。
+- 个性化健康计划 — 引导阶段的简短目标问卷后，Agent 自动为你设计并排定周期性健康检查（随时可在设置里重新设计）。
+- 自主式 AI 分析，支持定时检查与事件触发，输出图文并茂的报告。
+- 可选的 IM 网关 — 也可通过 Telegram、飞书或微信（官方 ClawBot 插件）聊天，替代或与 App 内聊天并用。
 - Agent 按需生成个性化页面，用于重复工作流与个性化交互。让 Agent 为你生成应用，而不是让你学习使用应用。
 - Skills 系统，复用分析 playbook。
 - 强隐私的自托管部署。
@@ -59,9 +61,9 @@ HiMe（Health Intelligence Management Engine）是一款自托管、完全本地
 
 三步搞定，总耗时约 10 分钟。
 
-### 1. 获取 IM 凭证
+### 1.（可选）获取 IM 凭证
 
-HiMe 通过 **Telegram**、**飞书** 或 **微信** 与你对话。任选其一，并在启动服务前准备好凭证（setup 向导会询问）。
+**如果使用内置的 App 内聊天，可跳过此步** — iOS App 直接与 Agent 通信，无需任何机器人。若你更想通过 IM 应用聊天，HiMe 也支持 **Telegram**、**飞书** 或 **微信**。任选其一，并在启动服务前准备好凭证（setup 向导会询问）。
 
 - **Telegram**：通过 [@BotFather](https://t.me/BotFather) 创建 bot → 保存 token。向 [@userinfobot](https://t.me/userinfobot) 发送 `/start` → 保存你的 chat_id。
 - **飞书**：在 [open.feishu.cn](https://open.feishu.cn) 创建自建应用 → 获取 APP_ID + APP_SECRET。将 bot 邀请进群 → 获取 open_chat_id。
@@ -90,7 +92,7 @@ cd HiMe
 - **简单方式**：从 App Store 安装 [HiMe](https://apps.apple.com/app/id6762160735)。打开 设置 → Server URL → 填入你的主机地址（如 `localhost`、Mac 的局域网 IP 或 `homelab.local`）。
 - **源码构建**：参见 [`docs/INSTALL.md#ios-app`](docs/INSTALL.md#ios-app)。
 
-完成。向 bot 发一条消息，Agent 就会回复。
+完成。在 App 的 **Chat** 标签页里给 Hime 发消息 —— 或者向你配置的 IM 机器人发消息 —— Agent 就会回复。
 
 ## 更新 HiMe
 

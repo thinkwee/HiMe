@@ -6,6 +6,7 @@ import Charts
 struct DashboardView: View {
     @StateObject private var viewModel = DashboardViewModel()
     @StateObject private var tasksVM = TasksViewModel()
+    @ObservedObject private var router = AppRouter.shared
     @State private var hasStarted = false
     @State private var selectedSection = 0  // 0=Overview, 1=Reports, 2=Tasks
 
@@ -21,22 +22,37 @@ struct DashboardView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
 
-            ScrollView {
-                VStack(spacing: 16) {
-                    switch selectedSection {
-                    case 0:
-                        AgentStatusCard(viewModel: viewModel)
-                        HealthChartSection(viewModel: viewModel)
-                    case 1:
-                        ReportsListSection(viewModel: viewModel)
-                    case 2:
-                        TasksContentView(vm: tasksVM)
-                    default:
-                        EmptyView()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 16) {
+                        switch selectedSection {
+                        case 0:
+                            AgentStatusCard(viewModel: viewModel)
+                            HealthChartSection(viewModel: viewModel)
+                        case 1:
+                            ReportsListSection(viewModel: viewModel,
+                                               expandTargetId: router.pendingReportId)
+                        case 2:
+                            TasksContentView(vm: tasksVM)
+                        default:
+                            EmptyView()
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                }
+                // A chat "view full report" tap sets pendingReportId: jump to the
+                // Reports section, scroll to that report, and let the row auto-expand.
+                .onReceive(router.$pendingReportId) { id in
+                    guard let id else { return }
+                    selectedSection = 1
+                    // Best-effort scroll; the matching row also auto-expands and
+                    // clears pendingReportId itself, so this works even if the
+                    // reports list is still loading when the tap arrives.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        withAnimation { proxy.scrollTo("report-\(id)", anchor: .top) }
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
             }
         }
         .background(Color(.systemGroupedBackground))

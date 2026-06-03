@@ -63,6 +63,41 @@ struct ServerConfig {
         set { UserDefaults.standard.set(newValue, forKey: "serverAuthToken") }
     }
 
+    // MARK: - Deferred onboarding survey
+    //
+    // The goal survey is captured during onboarding, BEFORE the user enters an
+    // auth token (that happens later, in Settings). Posting it at capture time
+    // would be unauthenticated → 401 → silently lost. So we stash the payload
+    // locally and flush it the moment an auth token exists (SettingsView calls
+    // flushPendingSurvey after the token is saved; ContentView flushes on launch).
+    private static let pendingSurveyKey = "hime.pendingGoalSurvey"
+
+    static var hasPendingSurvey: Bool {
+        UserDefaults.standard.data(forKey: pendingSurveyKey) != nil
+    }
+
+    /// Persist the survey payload (`["goals": …, "answers": …]`) locally.
+    static func stashPendingSurvey(_ payload: [String: Any]) {
+        if let data = try? JSONSerialization.data(withJSONObject: payload) {
+            UserDefaults.standard.set(data, forKey: pendingSurveyKey)
+        }
+    }
+
+    /// Re-POST a stashed survey once a token is available. No-op if nothing is
+    /// pending or there is still no token. Clears the stash only on a 2xx.
+    static func flushPendingSurvey() async {
+        guard !authToken.isEmpty,
+              let data = UserDefaults.standard.data(forKey: pendingSurveyKey) else { return }
+        let cfg = load()
+        guard let url = URL(string: "\(cfg.apiBaseURL)/api/agent/onboarding-survey") else { return }
+        var req = APIClient.request(url, method: "POST")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = data
+        guard let (_, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else { return }
+        UserDefaults.standard.removeObject(forKey: pendingSurveyKey)
+    }
+
     // MARK: - Persistence
 
     private static let key = "serverBaseAddress"

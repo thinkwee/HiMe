@@ -18,8 +18,11 @@ never blocked.  Gateway sends happen through the async ``GatewayRegistry``.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
+import mimetypes
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -38,6 +41,69 @@ except ImportError:
     sqlite3 = None  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+# Inlining charts into the report ----------------------------------------------
+# The analysis agent saves charts to local files (e.g. /tmp/sleep.png) and refs
+# them inline with standard Markdown image syntax. We replace each local image
+# src with a self-contained base64 ``data:`` URI so the chart is embedded in the
+# report content itself — it survives a restart, needs no extra endpoint, and is
+# stored at rest with the rest of the report. Remote (http) and already-inline
+# (data:) srcs are left untouched.
+_IMG_RE = re.compile(r"!\[([^\]]*)\]\(\s*([^)\s]+)\s*\)")
+_IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+_MAX_IMG_BYTES = 2_000_000      # per chart
+_MAX_EMBEDDED = 8               # charts per report
+
+
+def _file_to_data_uri(src: str) -> str | None:
+    """Return a ``data:`` URI for a local image file, or None if it's not a
+    safe, in-bounds image. Guards on extension + size so a stray non-image path
+    can never be slurped into a report."""
+    try:
+        path = Path(src).expanduser()
+        if path.suffix.lower() not in _IMG_EXTS or not path.is_file():
+            return None
+        if path.stat().st_size > _MAX_IMG_BYTES:
+            logger.warning("push_report: chart %s exceeds %d bytes — skipping", src, _MAX_IMG_BYTES)
+            return None
+        mime = mimetypes.guess_type(str(path))[0] or "image/png"
+        b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+        return f"data:{mime};base64,{b64}"
+    except Exception as exc:
+        logger.warning("push_report: failed to embed chart %s: %s", src, exc)
+        return None
+
+
+def _embed_local_charts(content: str, extra_paths: list[str] | None) -> str:
+    """Inline any local-file chart references in *content* as data URIs, then
+    append any *extra_paths* not already referenced. Caps total embeds."""
+    embedded = 0
+
+    def _repl(m: re.Match) -> str:
+        nonlocal embedded
+        alt, src = m.group(1), m.group(2)
+        if src.startswith(("data:", "http://", "https://")) or embedded >= _MAX_EMBEDDED:
+            return m.group(0)
+        uri = _file_to_data_uri(src)
+        if uri is None:
+            return m.group(0)
+        embedded += 1
+        return f"![{alt}]({uri})"
+
+    out = _IMG_RE.sub(_repl, content or "")
+
+    for p in (extra_paths or []):
+        if embedded >= _MAX_EMBEDDED:
+            break
+        # Skip ones already inlined above (same basename referenced in content).
+        if Path(p).name in out:
+            continue
+        uri = _file_to_data_uri(p)
+        if uri is None:
+            continue
+        embedded += 1
+        out += f"\n\n![chart]({uri})"
+    return out
 
 
 class PushReportTool(BaseTool):
@@ -91,6 +157,7 @@ class PushReportTool(BaseTool):
         tags: list[str] | None = None,
         metadata: dict[str, Any] | None = None,
         source: str = "scheduled_analysis",
+        image_paths: list[str] | None = None,
     ) -> dict:
         """
         Persist report and notify subscribers.
@@ -99,6 +166,10 @@ class PushReportTool(BaseTool):
             source: Origin of the report. One of "scheduled_analysis" or
                     "quick_analysis". Stored in the report's ``source`` column
                     and ``metadata.source`` so the frontend can display it.
+            image_paths: Optional local chart files to embed. Charts are usually
+                    referenced inline in ``content`` (``![caption](/tmp/x.png)``)
+                    and inlined automatically; anything listed here that isn't
+                    already referenced is appended to the end of the report.
         """
         # Require at least title and content — the rest can be defaulted
         if not title or not content:
@@ -107,6 +178,11 @@ class PushReportTool(BaseTool):
                 "error": "push_report requires at least 'title' and 'content'. "
                          "Also provide: im_digest, time_range_start, time_range_end.",
             }
+
+        # Inline chart files as self-contained data URIs so the report renders
+        # 图文并茂 in the dashboard / iOS app. Only touches ``content`` — the
+        # short ``im_digest`` sent to IM channels stays text-only.
+        content = _embed_local_charts(content, image_paths)
         # Default missing time range to now
         if not time_range_start:
             time_range_start = ts_now()
@@ -265,6 +341,26 @@ class PushReportTool(BaseTool):
     # User notification (fully async, never blocks)
     # ------------------------------------------------------------------
 
+    async def _persist_ios_history(
+        self, message: str, reply_markup: dict | None, report_id: int | None = None
+    ) -> None:
+        """Store a proactive report as an assistant turn in the iOS chat history
+        (history_key ``ios:<uid>``) so it shows in the in-app conversation, with
+        the evidence hash so "Show evidence" works just like a chat reply, and
+        the ``report_id`` so the bubble's "view full report" deep-link survives
+        a history reload."""
+        try:
+            from ...ios_gateway.gateway import extract_message_hash
+            from ..memory_manager import MemoryManager
+            msg_hash = extract_message_hash(reply_markup)
+            mem = MemoryManager(self.memory_db_file.parent, self.user_id)
+            await mem.persist_chat_turn(
+                f"ios:{self.user_id}", "assistant", message,
+                message_hash=msg_hash, report_id=report_id,
+            )
+        except Exception as exc:
+            logger.debug("iOS chat-history persist for proactive report skipped: %s", exc)
+
     async def _notify_user(self, report: dict[str, Any]) -> None:
         """Push the report to every configured messaging gateway.
 
@@ -281,10 +377,15 @@ class PushReportTool(BaseTool):
             message = f"{emoji} **{report['title']}**\n\n{body}"
 
         reply_markup = report.get("_reply_markup")
+        report_id = report.get("id")
 
         # Preferred path: dispatch via GatewayRegistry (all enabled channels)
         if self._gateway_registry is not None and len(self._gateway_registry) > 0:
+            has_ios = False
             for gw in self._gateway_registry.all():
+                is_ios = getattr(getattr(gw, "channel", None), "value", None) == "ios"
+                if is_ios:
+                    has_ios = True
                 target = getattr(gw, "default_chat_id", None)
                 if not target:
                     continue
@@ -295,11 +396,12 @@ class PushReportTool(BaseTool):
                             gw.channel.value, report.get("title", "?"),
                         )
                         continue
-                    ok = await gw.send_message(
-                        text=message,
-                        chat_id=target,
-                        reply_markup=reply_markup,
-                    )
+                    # Only the iOS gateway carries report_id (for the in-app
+                    # "view full report" deep-link); IM gateways don't accept it.
+                    send_kwargs = {"text": message, "chat_id": target, "reply_markup": reply_markup}
+                    if is_ios:
+                        send_kwargs["report_id"] = report_id
+                    ok = await gw.send_message(**send_kwargs)
                     if ok:
                         logger.info(
                             "Notification sent via %s for report '%s'",
@@ -312,6 +414,13 @@ class PushReportTool(BaseTool):
                         )
                 except Exception as exc:
                     logger.warning("%s notification error: %s", gw.channel.value, exc)
+            # Proactive reports go out over the iOS WS as a live chat_reply, but
+            # (unlike chat-loop turns) nothing persists them — so they'd vanish
+            # from the in-app conversation on reload, surviving only in the
+            # Reports tab. Persist the digest as an assistant chat turn so every
+            # scheduled / triggered report is a durable in-app message too.
+            if has_ios:
+                await self._persist_ios_history(message, reply_markup, report_id=report_id)
             return
 
         # Legacy path: shared TelegramSender directly (backward compat for tests)

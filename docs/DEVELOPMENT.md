@@ -25,16 +25,18 @@ hime/
 │   ├── api/                     FastAPI routers
 │   ├── data_readers/            live + digested data readers
 │   ├── messaging/               platform-agnostic BaseGateway / registry / inbox
+│   ├── ios_gateway/             native in-app iOS channel (WebSocket downlink + APNs)
 │   ├── telegram/                Telegram gateway implementation
 │   ├── feishu/                  Feishu (Lark) gateway implementation
 │   ├── weixin/                  WeChat (Weixin ClawBot / iLink) gateway implementation
+│   ├── api/event_hub.py         agent event fan-out (multi WebSocket subscribers)
 │   └── services/                streaming, connection manager
 ├── frontend/                 React 18 + Vite SPA
 ├── ios/                      iPhone + watchOS apps + WatchExporter
 │   ├── hime/hime/                  iPhone SwiftUI app
 │   ├── hime/himewatch/            watchOS SwiftUI app
 │   └── Server/                     WatchExporter (port 8765)
-├── prompts/                  layered prompt files (soul/job/exp/user)
+├── prompts/                  layered prompt files (soul, rules_chat, sub_analysis, plan_designer, …)
 ├── tests/                    pytest tests
 ├── docs/                     this folder
 ├── hime.sh                   unified dev CLI
@@ -111,9 +113,9 @@ HiMe is a **single-agent, event-driven** system. One agent processes work items 
 ┌─────────────┐  WatchConnectivity  ┌─────────────┐  WS / HTTP  ┌─────────────────────┐
 │ Apple Watch │ ─────────────────▶  │  iOS App    │ ──────────▶ │  WatchExporter      │
 │  (HealthKit)│ ◀─────────────────  │  (SwiftUI)  │  samples    │  (aiohttp :8765)    │
-└─────────────┘  cat-state updates  └─────────────┘             └─────────┬───────────┘
-                                                                          │ WatchDBReader
-                                                                          ▼
+└─────────────┘  cat-state updates  └──────┬──────┘             └─────────┬───────────┘
+                                           │ chat + agent stream           │ WatchDBReader
+                                           │ (POST /chat, WS /stream)      ▼
 ┌─────────────┐    REST + WebSocket    ┌──────────────────────────────────────────────┐
 │  React SPA  │ ◀─────────────────────▶│  FastAPI Backend (:8000)                     │
 │  (Vite      │   dashboard / monitor  │                                              │
@@ -121,13 +123,15 @@ HiMe is a **single-agent, event-driven** system. One agent processes work items 
 └─────────────┘                        │   │  AutonomousHealthAgent             │     │
                                        │   │  • Chat queue (shared InboxQueue)  │     │
 ┌─────────────┐     Bot APIs           │   │  • Analysis queue (cron + trigger) │     │
-│  Telegram / │ ◀─────────────────────▶│   │  • Two-tier chat: orchestrator +   │     │
-│  Feishu     │   chat + reports       │   │    sub-analysis agent              │     │
-│  gateways   │                        │   └────────────────────────────────────┘     │
+│  Telegram / │ ◀─────────────────────▶│   │  • Chat: orchestrator + subs       │     │
+│  Feishu /   │   optional IM chat     │   └────────────────────────────────────┘     │
+│  WeChat     │                        │   EventHub (fan-out agent events to N WS)    │
 └─────────────┘                        │   Cron / TriggerEvaluator / FactVerifier     │
                                        │   Background data ingestion (independent)    │
                                        └──────────────────────────────────────────────┘
 ```
+
+**In-app iOS chat** (default, `IOS_GATEWAY_ENABLED=true`): the iPhone app sends messages with `POST /api/agent/chat` and receives streaming replies on `WS /api/stream/agent/LiveUser?client=ios`. Outbound agent text is emitted as `chat_reply` / `chat_image` events on that socket; when the app is backgrounded (socket closed), optional APNs alerts (`APNS_*` + `aioapns`) nudge the user. Conversation scrollback is stored in the memory DB (`chat_history` table, key `ios:LiveUser`) and loaded via `GET /api/agent/chat-history`.
 
 The agent is built on three design principles: (1) single-agent sequential execution with no lock contention, (2) event-driven work via priority queues (chat > trigger > cron), and (3) layered prompts assembled from `prompts/` files at runtime. For provider-specific quirks, see the individual modules under `backend/agent/llm/`.
 
@@ -186,6 +190,11 @@ All settings live in `.env`. The most important ones:
 | `FEISHU_GATEWAY_ENABLED` | `false` | Turn on bidirectional Feishu chat. |
 | `WEIXIN_GATEWAY_ENABLED` | `false` | Turn on the WeChat ClawBot gateway. Requires a one-time `python -m backend.weixin.qr_login` to issue the bot_token. |
 | `WEIXIN_ALLOWED_USER_IDS` | _(empty)_ | Comma-separated whitelist. **Empty = trust the QR scanner** (allow-all is safe here because ClawBot has no shareable handle). |
+| `IOS_GATEWAY_ENABLED` | `true` | Native in-app chat channel (no bot binding). Set `false` if you only use IM gateways. |
+| `IOS_VISION_ENABLED` | `false` | Accept inbound images on `POST /api/agent/chat` (needs a vision-capable LLM). |
+| `IOS_MAX_IMAGE_BYTES` | `5242880` | Max inbound image size (bytes) for in-app chat uploads. |
+| `APNS_ENABLED` | `false` | Proactive push when the iOS app has no live stream socket. Requires `aioapns` + `.p8` key. |
+| `CHAT_HISTORY_SIZE` | `20` | In-memory sliding window per chat key (LLM context). |
 | `AUTO_RESTORE_AGENT` | `false` | Re-launch the last running agent on backend startup. |
 
 For the complete list, see [`.env.example`](../.env.example).
@@ -234,6 +243,8 @@ CI runs all three on every PR (see `.github/workflows/ci.yml`).
 | `401 Unauthorized` from API calls | `API_AUTH_TOKEN` is set but the SPA isn't sending it | Either unset the token (localhost dev) or configure the SPA to inject the bearer header. |
 | iOS app builds but won't run on a real device | `Config.xcconfig` missing or empty `DEVELOPMENT_TEAM` | Edit `ios/hime/Config.xcconfig`. |
 | Watch app shows "—" for all metrics | HealthKit permissions not granted on the watch | Re-run the iOS app and accept all HealthKit prompts. |
+| iOS Chat sends but no reply streams | Agent not running or stream not connected | Start agent; confirm `WS /api/stream/agent/LiveUser?client=ios` in logs; check `API_AUTH_TOKEN` matches app Settings. |
+| Duplicate bubbles after iOS reconnect | Wrong WebSocket client marker | App must use `?client=ios` (see `ChatStreamClient.swift`). |
 
 For anything else, check `logs/backend.log` first — the agent logs every tool call, LLM round-trip, and supervisor restart.
 

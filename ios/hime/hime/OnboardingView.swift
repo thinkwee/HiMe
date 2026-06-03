@@ -24,8 +24,12 @@ struct OnboardingView: View {
     @State private var serverTestState: ServerTestState = .idle
     @State private var didRequestHealthKit = false
     @State private var aiConsentChecked: Bool = false
+    /// Adaptive goal survey (no LLM — just recorded; the agent designs a plan
+    /// from it after the user's first chat). Different primary-focus answers
+    /// branch to different follow-up questions.
+    @StateObject private var survey = SurveyModel()
 
-    private let totalPages = 6
+    private let totalPages = 7
 
     enum ServerTestState: Equatable {
         case idle
@@ -42,7 +46,8 @@ struct OnboardingView: View {
                 serverPage.tag(2)
                 aiDisclosurePage.tag(3)
                 catPage.tag(4)
-                readyPage.tag(5)
+                goalSurveyPage.tag(5)
+                readyPage.tag(6)
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             .indexViewStyle(.page(backgroundDisplayMode: .always))
@@ -269,6 +274,10 @@ struct OnboardingView: View {
         )
     }
 
+    private var goalSurveyPage: some View {
+        GoalSurveyView(model: survey)
+    }
+
     private var readyPage: some View {
         OnboardingPage(
             icon: "checkmark.seal.fill",
@@ -340,6 +349,31 @@ struct OnboardingView: View {
         case 4:
             nextButton(title: "Continue")
         case 5:
+            VStack(spacing: 8) {
+                Button {
+                    if survey.isLast {
+                        submitSurvey()
+                    } else {
+                        withAnimation { survey.next() }
+                    }
+                } label: {
+                    Text(survey.isLast ? "Done" : "Next")
+                        .fontWeight(.semibold)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(survey.canProceed ? Color(red: 0.95, green: 0.70, blue: 0.35) : Color.gray.opacity(0.4))
+                        .foregroundColor(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                .disabled(!survey.canProceed)
+
+                Button("Skip for now") {
+                    advance()
+                }
+                .font(.footnote)
+                .foregroundColor(.secondary)
+            }
+        case 6:
             Button {
                 finishOnboarding()
             } label: {
@@ -391,6 +425,26 @@ struct OnboardingView: View {
 
     private func finishOnboarding() {
         hasOnboarded = true
+    }
+
+    /// Record the goal survey (fire-and-forget — no LLM, no blocking) and move
+    /// on. The backend stores it; the agent designs a plan after the user's
+    /// first chat. Answering nothing simply skips it.
+    private func submitSurvey() {
+        if survey.hasAnyAnswer {
+            let p = survey.payload()
+            Task { await postSurvey(goals: p.goals, answers: p.answers) }
+        }
+        advance()
+    }
+
+    private func postSurvey(goals: [String], answers: [String: Any]) async {
+        // The auth token is entered AFTER onboarding (in Settings), so at this
+        // point there is usually no token yet and a direct POST would 401 and be
+        // lost. Stash the survey locally and try to flush; SettingsView flushes
+        // again the moment a token is saved, and ContentView on launch.
+        ServerConfig.stashPendingSurvey(["goals": goals, "answers": answers])
+        await ServerConfig.flushPendingSurvey()
     }
 
     private func requestHealthKitAuth() async {

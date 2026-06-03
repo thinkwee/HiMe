@@ -61,7 +61,7 @@
                     },
                     "content": {
                         "type": "string",
-                        "description": "The full Markdown report body. Stored in the memory DB and displayed in the HIME dashboard + iOS app — this is the version the user opens when they want depth. Focus on key findings with specific numbers. Use ## headers and bullet points. Do NOT dump raw data tables — summarize insights instead."
+                        "description": "The full Markdown report body. Stored in the memory DB and displayed in the HIME dashboard + iOS app — this is the version the user opens when they want depth. Make it 图文并茂 (rich and well-illustrated): a short intro, `##` section headings, **bold** key numbers, bullet lists, and GFM tables for comparisons. Embed your charts inline with standard image syntax `![caption](/tmp/your_chart.png)` right after the section they illustrate — save them first in the `code` tool (`plt.savefig('/tmp/sleep.png', bbox_inches='tight', dpi=140); plt.close()`) and the backend will inline the file automatically. Aim for at least one chart. Summarize raw data into insight tables — don't paste raw rows."
                     },
                     "im_digest": {
                         "type": "string",
@@ -91,6 +91,13 @@
                             "type": "string"
                         },
                         "description": "Optional topic tags."
+                    },
+                    "image_paths": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Optional. Local chart files (e.g. ['/tmp/sleep.png']) to embed in the report. Usually unnecessary — reference charts inline in `content` with ![caption](/tmp/x.png) instead. Any path listed here that isn't already referenced in content is appended to the end of the report."
                     },
                     "metadata": {
                         "type": "object",

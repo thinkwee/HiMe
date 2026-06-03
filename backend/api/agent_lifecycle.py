@@ -6,7 +6,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
@@ -16,6 +19,7 @@ from ..agent.data_store import DataStore
 from ..config import settings
 from ..utils import ts_fmt
 from .agent_state import (
+    ChatMessageRequest,
     QuickAnalysisResponse,
     StartAgentRequest,
     _check_rate_limit,
@@ -24,6 +28,9 @@ from .agent_state import (
     startup_lock,
     system_ingest_tasks,
 )
+
+# Single-user identity for the in-app channel.
+_LIVE_USER = "LiveUser"
 
 logger = logging.getLogger(__name__)
 
@@ -670,6 +677,143 @@ async def quick_analysis():
     except Exception as e:
         logger.error("Quick analysis error: %s", e)
         return QuickAnalysisResponse(state="neutral", message="Analysis error. Check the logs.")
+
+
+# ---------------------------------------------------------------------------
+# POST /chat — inbound in-app chat (iOS native channel)
+# ---------------------------------------------------------------------------
+
+def _last_config_start_request() -> StartAgentRequest:
+    """Build a StartAgentRequest from the last-used config (or defaults).
+
+    Used to auto-start the agent on demand when a chat arrives and the agent
+    isn't running yet.
+    """
+    body = StartAgentRequest(user_id=_LIVE_USER)
+    try:
+        cfg_path = settings.AGENT_LAST_CONFIG_PATH
+        if os.path.exists(cfg_path):
+            with open(cfg_path) as f:
+                cfg = json.load(f)
+            if cfg.get("llm_provider"):
+                body.llm_provider = cfg["llm_provider"]
+            if cfg.get("model"):
+                body.model = cfg["model"]
+            if cfg.get("granularity"):
+                body.granularity = cfg["granularity"]
+    except Exception:
+        pass
+    return body
+
+
+async def _ensure_agent_started() -> str:
+    """Ensure the agent is running or starting. Returns the state.
+
+    ``"running"`` if live, else ``"starting"`` (kicking a background startup
+    if none is in progress). Mirrors POST /start's guarded placeholder.
+    """
+    async with startup_lock:
+        info = active_agents.get(_LIVE_USER)
+        if info is not None:
+            if info.get("_starting") or not info.get("agent"):
+                return "starting"
+            return "running"
+        event_queue: asyncio.Queue = asyncio.Queue(maxsize=500)
+        active_agents[_LIVE_USER] = {
+            "agent": None,
+            "task": None,
+            "data_store": None,
+            "ingest_task": None,
+            "event_queue": event_queue,
+            "config": {},
+            "memory": None,
+            "_starting": True,
+        }
+    asyncio.create_task(
+        _start_agent_background(_last_config_start_request(), event_queue),
+        name=f"agent-startup-{_LIVE_USER}",
+    )
+    return "starting"
+
+
+async def _store_inbound_image(image_base64: str, image_mime: str | None) -> dict | None:
+    """Decode a base64 image, size-check it, and write it to the uploads dir.
+
+    Returns an attachment dict ``{"type":"image","path":...,"mime":...}`` or
+    None if invalid/too large. Files land in ``<DATA_STORE_PATH>/LiveUser/
+    uploads/`` and are read by the agent to pass to a vision-capable LLM. The
+    write is offloaded to a thread.
+    """
+    import base64
+
+    try:
+        raw = base64.b64decode(image_base64)
+    except Exception as e:
+        logger.warning("Bad inbound image: %s", e)
+        return None
+    if not raw or len(raw) > settings.IOS_MAX_IMAGE_BYTES:
+        logger.warning(
+            "Inbound image rejected (size=%d, max=%d)",
+            len(raw), settings.IOS_MAX_IMAGE_BYTES,
+        )
+        return None
+    mime = (image_mime or "image/jpeg").lower()
+    ext = {
+        "image/jpeg": "jpg", "image/png": "png", "image/heic": "heic",
+        "image/webp": "webp", "image/gif": "gif",
+    }.get(mime, "jpg")
+    updir = Path(settings.DATA_STORE_PATH) / _LIVE_USER / "uploads"
+
+    def _write() -> str:
+        updir.mkdir(parents=True, exist_ok=True)
+        path = updir / f"{uuid.uuid4().hex}.{ext}"
+        with open(path, "wb") as f:
+            f.write(raw)
+        return str(path)
+
+    path = await asyncio.to_thread(_write)
+    return {"type": "image", "path": path, "mime": mime}
+
+
+@lifecycle_router.post("/chat")
+async def post_chat_message(request: Request, body: ChatMessageRequest):
+    """Accept an in-app chat message and route it to the agent inbox.
+
+    The reply is NOT returned here — it streams back over the
+    ``/api/stream/agent`` WebSocket as ``chat_thinking`` / ``chat_content``
+    chunks followed by a final ``chat_reply`` event (and ``chat_image`` for
+    charts).
+    """
+    _check_rate_limit(_client_ip(request))
+
+    text = (body.text or "").strip()
+    attachments: list[dict] = []
+    if settings.IOS_VISION_ENABLED and body.image_base64:
+        att = await _store_inbound_image(body.image_base64, body.image_mime)
+        if att:
+            attachments.append(att)
+    if not text and not attachments:
+        raise HTTPException(status_code=400, detail="Empty message")
+
+    info = active_agents.get(_LIVE_USER)
+    if info is None or info.get("_starting") or not info.get("agent"):
+        # Agent not ready — kick a startup and tell the client to retry once
+        # the agent_started event arrives on the stream.
+        state = await _ensure_agent_started()
+        return {"success": True, "status": state, "queued": False}
+
+    from ..messaging.base import MessageChannel, MessageEnvelope
+
+    envelope = MessageEnvelope(
+        message_id=body.client_msg_id or uuid.uuid4().hex,
+        channel=MessageChannel.IOS,
+        sender_id=_LIVE_USER,
+        content=text,
+        chat_id=_LIVE_USER,
+        attachments=attachments,
+    )
+    await info["agent"].inbox.push(envelope)
+    return {"success": True, "status": "queued", "queued": True}
 
 
 # ---------------------------------------------------------------------------

@@ -49,8 +49,10 @@ HiMe (Health Intelligence Management Engine) is a self-hosted, fully local, secu
 
 - Real-time wearable data ingestion from Apple Watch + iPhone, including heart rate, HRV, SpO2, sleep stages, workouts, mobility, and 50+ metrics more.
 - iOS and watchOS companion apps for easy syncing health data and controlling the agent.
-- Autonomous AI analysis with scheduled checks and event triggers.
-- OpenClaw-style chat over Telegram, Feishu, or WeChat (via the official ClawBot plugin), with evidence-backed responses.
+- Native in-app chat — talk to the agent directly inside the iOS app: streaming replies, image sharing, evidence-backed answers, and proactive push (APNs) when the app is closed. No bot binding required.
+- Personalised health plan — a quick onboarding goal survey, then the agent designs and schedules your recurring check-ins automatically (redesign anytime from Settings).
+- Autonomous AI analysis with scheduled checks and event triggers, delivered as chart-rich (图文并茂) reports.
+- Optional IM gateways — chat over Telegram, Feishu, or WeChat (via the official ClawBot plugin) instead of, or alongside, the in-app chat.
 - Agent-generated personalised pages on demand for repeated workflows or personalised interaction. Generate your app, not learn to use it.
 - Skills system for reusable analysis playbooks.
 - Strong self-hosted privacy posture.
@@ -59,9 +61,9 @@ HiMe (Health Intelligence Management Engine) is a self-hosted, fully local, secu
 
 Three steps. Total time: ~10 minutes.
 
-### 1. Get IM credentials
+### 1. (Optional) Get IM credentials
 
-HiMe chats with you over **Telegram**, **Feishu**, or **WeChat**. Pick one and grab the credentials before you start the server (the setup wizard will ask for them).
+**Skip this if you'll use the built-in in-app chat** — the iOS app talks to the agent directly, no bot needed. If you'd rather chat over an IM app, HiMe also supports **Telegram**, **Feishu**, or **WeChat**. Pick one and grab the credentials before you start the server (the setup wizard will ask for them).
 
 - **Telegram**: create a bot with [@BotFather](https://t.me/BotFather) → save the token. Send `/start` to [@userinfobot](https://t.me/userinfobot) → save your chat_id.
 - **Feishu**: create a custom app at [open.feishu.cn](https://open.feishu.cn) → grab APP_ID + APP_SECRET. Invite the bot to a group → grab the open_chat_id.
@@ -90,7 +92,7 @@ When it's done, the dashboard is at http://localhost:5173 — but you'll do most
 - **Easy path**: install [HiMe on the App Store](https://apps.apple.com/app/id6762160735). Open Settings → Server URL → enter your host (e.g. `localhost`, your Mac's LAN IP, or `homelab.local`).
 - **Build from source**: see [`docs/INSTALL.md#ios-app`](docs/INSTALL.md#ios-app).
 
-That's it. Send the bot a message and the agent will reply.
+That's it. Open the **Chat** tab in the app and message Hime — or message your IM bot if you set one up — and the agent will reply.
 
 ## Update the HiMe
 

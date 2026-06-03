@@ -104,9 +104,13 @@ struct ContentView: View {
     @EnvironmentObject var ws: WebSocketClient
 
     @StateObject private var pagesStore = PersonalisedPagesStore()
+    @ObservedObject private var router = AppRouter.shared
 
     // Tab order: Dashboard(0), Collected Data(1), Cat Home(2, default), Pages(3..3+n-1), Placeholder(3+n)
     @State private var selectedTab = 2
+    /// Root navigation stack — driven programmatically so a tapped notification
+    /// can deep-link straight into Chat.
+    @State private var path = NavigationPath()
 
     /// 3 built-in + personalised pages + 1 placeholder
     private var totalTabs: Int { 3 + pagesStore.pages.count + 1 }
@@ -117,7 +121,7 @@ struct ContentView: View {
 
     @ViewBuilder
     private var mainContent: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             VStack(spacing: 0) {
                 // Page indicator dots
                 HStack(spacing: 6) {
@@ -183,9 +187,22 @@ struct ContentView: View {
                     }
                 }
             }
+            .navigationDestination(for: AppRoute.self) { route in
+                switch route {
+                case .chat: ChatView()
+                // .report is handled by switching tabs (not a pushed
+                // destination), so this branch is never reached — kept for
+                // exhaustiveness.
+                case .report: DashboardView()
+                }
+            }
             .task {
                 await pagesStore.fetchPages()
                 pagesStore.startPeriodicRefresh()
+                // A goal survey captured during onboarding (before the auth
+                // token was entered) is stashed locally; flush it now that the
+                // app is up and a token may exist.
+                await ServerConfig.flushPendingSurvey()
             }
             .onDisappear {
                 pagesStore.stopPeriodicRefresh()
@@ -193,6 +210,25 @@ struct ContentView: View {
             .refreshable {
                 await pagesStore.fetchPages()
             }
+        }
+        // A tapped notification asks the router to open Chat. onReceive (not
+        // onChange) so a value set before this view subscribes — e.g. a cold
+        // launch from the notification — still routes.
+        .onReceive(router.$pendingRoute) { route in
+            guard let route else { return }
+            switch route {
+            case .chat:
+                selectedTab = 2
+                path = NavigationPath()
+                path.append(AppRoute.chat)
+            case .report:
+                // Reports live inside the Dashboard tab; switch there and let
+                // `pendingReportId` drive the section + expand. Pop any pushed
+                // screen (e.g. Chat) so the Dashboard is actually visible.
+                path = NavigationPath()
+                selectedTab = 0
+            }
+            router.pendingRoute = nil
         }
     }
 

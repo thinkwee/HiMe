@@ -35,6 +35,10 @@ ENV/
 .env
 .env.local
 
+# Secrets (APNs .p8 auth keys, etc. — never commit)
+secrets/
+*.p8
+
 # iOS local build configuration (Team ID, bundle prefix — never commit)
 ios/hime/Config.xcconfig
 ios/hime/hime.xcodeproj/xcuserdata/
@@ -46,15 +50,23 @@ tunnel.token
 .tunnel.pid
 cloudflared
 
-# Runtime data / memory (new layout)
+# Runtime state — health DBs, agent memory, chat uploads, logs (never commit)
 logs/
 memory/
-data/data_stores/
+memory/**/*.db
+ios/Server/watch*
+
+# data/ — only bundled personalised-page assets are tracked
+data/*
+!data/personalised_pages/
 data/personalised_pages/*
 !data/personalised_pages/_shared/
 !data/personalised_pages/_shared/**
+# Explicit (also covered by data/*): health stores, WeChat token, iOS chat images
+data/data_stores/
+data/**/uploads/
 data/weixin_bot_token.json
-ios/Server/watch*
+data/LiveUser/
 
 # supported dataset (too large for git)
 GLOBEM/
@@ -76,9 +88,8 @@ frontend/build/
 frontend/.vite/
 frontend/.cache/
 
-# Logs
+# Logs (duplicate patterns — logs/ dir is the canonical ignore)
 *.log
-logs/
 
 # Testing
 .pytest_cache/

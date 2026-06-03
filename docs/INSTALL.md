@@ -7,7 +7,10 @@ The README's Quick Start covers the happy path. This document covers everything 
 - [Manual Docker setup](#manual-docker-setup)
 - [Native dev install](#native-dev-install)
 - [Public deployment](#public-deployment)
-- [IM gateway setup](#im-gateway-setup)
+- [In-app iOS chat (default)](#in-app-ios-chat-default)
+  - [Optional: vision (image uploads)](#optional-vision-image-uploads)
+  - [Optional: APNs background push](#optional-apns-background-push)
+- [IM gateway setup (optional)](#im-gateway-setup-optional)
   - [Telegram](#telegram)
   - [Feishu (Lark)](#feishu-lark)
   - [WeChat (Weixin ClawBot)](#wechat-weixin-clawbot)
@@ -28,8 +31,8 @@ If you want full control over the wizard's choices, edit `.env` directly:
 git clone https://github.com/thinkwee/HiMe.git HiMe
 cd HiMe
 cp .env.example .env
-# Edit .env and at minimum set DEFAULT_LLM_PROVIDER + the matching *_API_KEY,
-# and the Telegram or Feishu gateway block.
+# Edit .env and at minimum set DEFAULT_LLM_PROVIDER + the matching *_API_KEY.
+# IM gateway blocks are optional if you use the built-in in-app iOS chat.
 docker compose up --build -d
 ```
 
@@ -64,9 +67,61 @@ Mostly defer to [`docs/DEPLOYMENT.md`](DEPLOYMENT.md), but the critical steps ar
 
 Full nginx + Caddy examples: [`docs/DEPLOYMENT.md`](DEPLOYMENT.md).
 
-## IM gateway setup
+## In-app iOS chat (default)
 
-HiMe chats with you exclusively through an IM gateway. The web dashboard does not have a chat UI. Pick Telegram, Feishu, or WeChat (or set up multiple, but most people pick one).
+By default HiMe uses the **native iOS chat** built into the iPhone app — no Telegram/Feishu/WeChat bot required. The React dashboard is for monitoring, reports, and configuration; it does not host a chat UI.
+
+How it works:
+
+1. **Inbound:** the app sends text (and optionally images) with `POST /api/agent/chat` on the backend (`:8000`).
+2. **Outbound (live):** replies stream over `WS /api/stream/agent/LiveUser?client=ios` as `chat_thinking`, `chat_content`, `chat_reply`, and `chat_image` events.
+3. **History:** past turns are stored in the memory DB and reloaded via `GET /api/agent/chat-history` after a restart.
+4. **Onboarding plan:** after the goal survey, a one-shot **plan designer** run creates `scheduled_tasks` and publishes an introductory plan report.
+
+Ensure these are set in `.env` (defaults are already correct for a fresh install):
+
+```bash
+IOS_GATEWAY_ENABLED=true
+```
+
+If `API_AUTH_TOKEN` is set, paste the same token in the iOS app under **Settings → Auth Token**. The chat WebSocket passes it as `?token=...`.
+
+The agent must be running (`POST /api/agent/start` or auto-restore). If you send a message while the agent is still starting, the API returns `status: starting` — wait for the `agent_started` event on the stream and retry.
+
+### Optional: vision (image uploads)
+
+To let the user attach photos in chat:
+
+```bash
+IOS_VISION_ENABLED=true
+```
+
+Use a vision-capable provider/model (`anthropic`, `gemini`, or `openai`). Non-vision providers receive a text-only fallback note. Max upload size: `IOS_MAX_IMAGE_BYTES` (default 5 MiB).
+
+### Optional: APNs background push
+
+When the app is closed or backgrounded it disconnects the stream socket; replies are still persisted and appear on next open. To also show an iOS notification banner:
+
+1. Create an **APNs Auth Key** (`.p8`) in your Apple Developer account.
+2. Install the optional dependency (included in `backend/requirements.txt`): `pip install aioapns` (or reinstall requirements).
+3. In `.env`:
+
+   ```bash
+   APNS_ENABLED=true
+   APNS_KEY_PATH=/path/to/AuthKey_XXXX.p8   # never commit — see .gitignore
+   APNS_KEY_ID=<10-char key id>
+   APNS_TEAM_ID=<10-char team id>
+   APNS_BUNDLE_ID=com.example.hime          # must match the app bundle id
+   APNS_ENV=sandbox                         # sandbox for debug builds; production for TestFlight/App Store
+   ```
+
+4. Build the iOS app with the Push Notifications capability and register the device token (the app calls `POST /api/devices/register` after permission is granted).
+
+If APNs is disabled, behaviour is unchanged except there is no banner — messages still land in chat history.
+
+## IM gateway setup (optional)
+
+Use an IM app **instead of or alongside** the built-in iOS chat. Pick Telegram, Feishu, or WeChat (most people use in-app chat only, or one IM channel as a backup).
 
 ### Telegram
 
@@ -136,7 +191,11 @@ The token is long-lived; re-run step 2 only if the backend log starts reporting 
 
 ### Easy path
 
-Install [HiMe on the App Store](https://apps.apple.com/app/id6762160735). Open the app → Settings → enter your Server URL.
+Install [HiMe on the App Store](https://apps.apple.com/app/id6762160735). Open the app → **Settings** → enter your **Server URL**, then use the **Chat** tab for in-app conversation (streaming replies, evidence, optional images). Complete the onboarding goal survey on first launch; the agent designs recurring check-ins from your answers. Redesign the plan anytime from **Settings**.
+
+### App tabs (build from source)
+
+Reports, Dashboard, Collected Data, **Chat**, Cat Home, Personalised Pages, plus onboarding / goal survey flows (`GoalSurveyView`, `PlanSurveySheet`).
 
 `Server URL` accepts:
 

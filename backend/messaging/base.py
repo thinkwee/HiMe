@@ -20,6 +20,7 @@ class MessageChannel(str, Enum):
     TELEGRAM = "telegram"
     FEISHU = "feishu"
     WEIXIN = "weixin"
+    IOS = "ios"
     WEB = "web"
     API = "api"
     BENCHMARK = "benchmark"
@@ -68,6 +69,12 @@ class MessageEnvelope:
     # Generic platform metadata (used by Feishu and any future channels).
     conversation_id: str | None = None
     platform_message_id: str | None = None
+
+    # Inbound media (e.g. iOS image uploads). Each entry is a dict like
+    # ``{"type": "image", "path": "/abs/path.jpg", "mime": "image/jpeg"}``.
+    # Empty for text-only messages; IM channels never populate it (they
+    # drop non-text input).
+    attachments: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass

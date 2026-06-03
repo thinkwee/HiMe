@@ -30,6 +30,7 @@ from .api.config_routes import (
     router as config_router,
 )
 from .api.data_routes import router as data_router
+from .api.device_routes import router as device_router
 from .api.page_routes import router as page_router
 from .api.prompt_routes import router as prompt_router
 from .api.skill_routes import router as skill_router
@@ -46,6 +47,7 @@ logger = setup_logging()
 _telegram_gateway = None
 _feishu_gateway = None
 _weixin_gateway = None
+_ios_gateway = None  # IOSGateway — native in-app channel (APNs + WebSocket)
 
 # Shared GatewayRegistry — populated at startup with every enabled gateway
 # (Telegram, Feishu, ...). Tools like reply_user / push_report route
@@ -68,6 +70,11 @@ def get_feishu_gateway():
 def get_weixin_gateway():
     """Return the active WeixinGateway instance (or None)."""
     return _weixin_gateway
+
+
+def get_ios_gateway():
+    """Return the active IOSGateway instance (or None)."""
+    return _ios_gateway
 
 
 def get_gateway_registry() -> GatewayRegistry:
@@ -220,7 +227,7 @@ async def lifespan(app: FastAPI):
     Lifespan context manager for startup and shutdown events.
     Guarantees cleanup of resources.
     """
-    global _telegram_gateway, _feishu_gateway, _weixin_gateway
+    global _telegram_gateway, _feishu_gateway, _weixin_gateway, _ios_gateway
 
     # --- Startup ---
     logger.info("[Startup] 1/4 Application starting up...")
@@ -391,6 +398,30 @@ async def lifespan(app: FastAPI):
             logger.warning(f"WeChat Gateway start failed: {e}", exc_info=True)
             _weixin_gateway = None
 
+    # Start the in-app iOS channel (native chat — APNs + WebSocket). Like the
+    # IM gateways it registers in the shared GatewayRegistry, so the agent's
+    # reply_user / push_report tools route to it automatically. Channel-aware
+    # routing means an in-app message is answered in-app, while proactive
+    # reports fan out to every enabled channel (in-app + any IM). APNs stays a
+    # no-op until the operator configures a .p8 key (APNS_* in .env).
+    if settings.IOS_GATEWAY_ENABLED:
+        try:
+            from .ios_gateway import APNSSender, IOSGateway
+
+            apns_sender = APNSSender(settings)
+            _ios_gateway = IOSGateway(user_id="LiveUser", apns_sender=apns_sender)
+            await _ios_gateway.start()
+            _gateway_registry.register(_ios_gateway)
+            logger.info("In-app iOS Gateway started")
+            if apns_sender.enabled:
+                logger.info(
+                    "APNs push enabled (topic=%s, env=%s)",
+                    settings.APNS_BUNDLE_ID, settings.APNS_ENV,
+                )
+        except Exception as e:
+            logger.warning(f"iOS Gateway start failed: {e}", exc_info=True)
+            _ios_gateway = None
+
     # --- Live Background Ingestion (Phase 1) ---
     # Automatically start syncing data from watch.db to LiveUser_data.db
     # even if no agent is running.
@@ -500,6 +531,14 @@ async def lifespan(app: FastAPI):
             logger.warning(f"WeChat Gateway stop error: {e}")
         _weixin_gateway = None
 
+    # 1d. Stop in-app iOS Gateway
+    if _ios_gateway:
+        try:
+            await _ios_gateway.stop()
+        except Exception as e:
+            logger.warning(f"iOS Gateway stop error: {e}")
+        _ios_gateway = None
+
     # Clear the shared registry so any lingering tool handles don't try to
     # dispatch through a torn-down gateway during shutdown.
     _gateway_registry.clear()
@@ -590,6 +629,7 @@ app.include_router(data_router)
 app.include_router(agent_router)
 app.include_router(page_router)
 app.include_router(stream_router)
+app.include_router(device_router)
 app.include_router(prompt_router)
 app.include_router(skill_router)
 

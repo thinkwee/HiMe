@@ -279,6 +279,39 @@ def insert_default_trigger_rules(memory_db_file: Path) -> None:
                     180,
                     "Blood oxygen dropped below 93%. Analyze respiratory data, check for breathing disturbances, and assess severity.",
                 ),
+                (
+                    "Heart rate spike",
+                    "heart_rate",
+                    "spike",
+                    2.5,
+                    30,
+                    90,
+                    "Heart rate spiked well above its recent baseline. Check whether this "
+                    "lines up with a workout or activity; if the user was at rest, look for "
+                    "stress, caffeine, or other causes and advise accordingly.",
+                ),
+                (
+                    "Prolonged elevated heart rate",
+                    "heart_rate",
+                    "avg_gt",
+                    110.0,
+                    30,
+                    120,
+                    "Average heart rate stayed above 110 BPM for half an hour without an "
+                    "obvious workout. Check the activity context and assess for stress, "
+                    "illness, or overexertion, then advise.",
+                ),
+                (
+                    "Low heart rate variability",
+                    "heart_rate_variability",
+                    "lt",
+                    20.0,
+                    180,
+                    360,
+                    "Heart rate variability dropped to a low level, which can signal stress, "
+                    "fatigue, or under-recovery. Review recent sleep, training load, and "
+                    "stress, and suggest concrete recovery actions.",
+                ),
             ]
 
             conn.executemany(

@@ -74,6 +74,19 @@ class QuickAnalysisResponse(BaseModel):
     message: str
 
 
+class ChatMessageRequest(BaseModel):
+    """Request body for POST /api/agent/chat (in-app iOS chat).
+
+    Single-user mode: the conversation is always the local ``LiveUser`` — the
+    body carries no identity, only the message payload.
+    """
+    text: str = ""
+    client_msg_id: str | None = None
+    # Optional inbound image (only honoured when IOS_VISION_ENABLED).
+    image_base64: str | None = None
+    image_mime: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Memory helpers
 # ---------------------------------------------------------------------------

@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
@@ -265,10 +266,14 @@ async def get_dashboard_data(minutes: int = Query(1440, ge=10, le=43200)):
                 )
                 if df.empty:
                     return ft, []
-                points = [
-                    {"ts": float(row["ts"]), "v": float(row["value"])}
-                    for _, row in df.iterrows()
-                ]
+                points = []
+                for _, row in df.iterrows():
+                    ts = float(row["ts"])
+                    v = float(row["value"])
+                    # NaN/Inf readings aren't plottable and break JSON
+                    # serialization (stdlib json.dumps rejects them) — skip.
+                    if math.isfinite(ts) and math.isfinite(v):
+                        points.append({"ts": ts, "v": v})
                 return ft, points
             except Exception:
                 return ft, []

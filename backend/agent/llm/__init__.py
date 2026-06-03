@@ -400,6 +400,24 @@ async def retry_async(
 # Base provider
 # ---------------------------------------------------------------------------
 
+def parse_image_data_uri(url: str) -> tuple[str, str]:
+    """Parse a ``data:<mime>;base64,<data>`` URI into ``(mime, base64_data)``.
+
+    Returns ``("image/jpeg", "")`` when *url* is not a base64 data URI. Used by
+    the Anthropic/Gemini converters to turn the OpenAI-native ``image_url``
+    block (the canonical internal multimodal format) into their own image
+    representation.
+    """
+    try:
+        if url.startswith("data:") and ";base64," in url:
+            header, data = url.split(";base64,", 1)
+            mime = header[len("data:"):].split(";")[0] or "image/jpeg"
+            return mime, data
+    except Exception:
+        pass
+    return "image/jpeg", ""
+
+
 class BaseLLMProvider(ABC):
     """
     Unified async interface for all LLM backends.
@@ -432,6 +450,16 @@ class BaseLLMProvider(ABC):
     def supports_tools(self) -> bool:
         """Return whether this provider supports function/tool calling."""
         ...  # pragma: no cover
+
+    def supports_vision(self) -> bool:
+        """Return whether this provider accepts inline image content blocks.
+
+        Default ``False`` — only image-capable providers (Anthropic, OpenAI,
+        Gemini) override this. The chat loop checks it before sending
+        multimodal (list) message content, so non-vision providers never
+        receive image blocks and their message handling is untouched.
+        """
+        return False
 
 
 # ---------------------------------------------------------------------------

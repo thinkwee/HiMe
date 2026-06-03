@@ -7,6 +7,7 @@ import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from ..ios_gateway.connections import ios_connections
 from ..services.connection_manager import agent_monitor_manager, data_stream_manager
 from ..services.streaming_service import DataStreamingService
 from .config_routes import get_app_state
@@ -67,6 +68,15 @@ async def monitor_autonomous_agent(websocket: WebSocket, user_id: str):
     """
     await agent_monitor_manager.connect(websocket)
 
+    # Track iOS app presence (drives the WS-vs-APNs delivery decision in
+    # IOSGateway). Only the iOS client counts — a web dashboard monitor must
+    # not suppress push notifications to the phone. iOS connects with
+    # ?client=ios and closes this socket when it backgrounds.
+    _is_ios = websocket.query_params.get("client") == "ios"
+    _conn_id = str(id(websocket))
+    if _is_ios:
+        await ios_connections.register(user_id, _conn_id)
+
     try:
         from .agent_state import active_agents
 
@@ -78,7 +88,21 @@ async def monitor_autonomous_agent(websocket: WebSocket, user_id: str):
             })
             return
 
-        event_queue = agent_info.get('event_queue')
+        # Subscribe to the per-user fan-out hub instead of reading the agent's
+        # event_queue directly. This gives every connection (iOS app, web
+        # dashboard, ...) its own private queue so they no longer steal events
+        # from one another. The hub + its pump are created lazily here on the
+        # first connect, so no agent-start path needs to change.
+        from .event_hub import ensure_hub
+        hub = ensure_hub(user_id, agent_info)
+        # iOS loads past turns via /chat-history, so it must NOT get the replay
+        # backlog (a reconnect would re-deliver recent replies as duplicates).
+        # The web dashboard has no history endpoint, so it keeps the replay.
+        sub_queue = hub.subscribe(replay=not _is_ios)
+        logger.info(
+            "monitor WS connect: user=%s ios=%s subscribers=%d",
+            user_id, _is_ios, hub.subscriber_count,
+        )
 
         await websocket.send_json({
             'type': 'monitor_connected',
@@ -91,15 +115,15 @@ async def monitor_autonomous_agent(websocket: WebSocket, user_id: str):
         _stop = asyncio.Event()
 
         async def _event_pusher():
-            """Dedicated task: drain event queue and push to WebSocket immediately."""
+            """Dedicated task: drain this connection's queue and push immediately."""
             while not _stop.is_set():
                 try:
-                    event = await asyncio.wait_for(event_queue.get(), timeout=0.3)
+                    event = await asyncio.wait_for(sub_queue.get(), timeout=0.3)
                     batch = [event]
                     # Drain any additional queued events without waiting
                     while len(batch) < 50:
                         try:
-                            batch.append(event_queue.get_nowait())
+                            batch.append(sub_queue.get_nowait())
                         except asyncio.QueueEmpty:
                             break
                     async with _ws_lock:
@@ -123,6 +147,9 @@ async def monitor_autonomous_agent(websocket: WebSocket, user_id: str):
                 await asyncio.sleep(3.0)
                 if _stop.is_set():
                     break
+                # Refresh iOS presence heartbeat while the socket is alive.
+                if _is_ios:
+                    ios_connections.touch(user_id, _conn_id)
                 try:
                     # During startup, agent may not be ready yet — skip status push
                     current_info = active_agents.get(user_id)
@@ -156,6 +183,7 @@ async def monitor_autonomous_agent(websocket: WebSocket, user_id: str):
             _stop.set()
             pusher_task.cancel()
             status_task.cancel()
+            hub.unsubscribe(sub_queue)
 
 
     except WebSocketDisconnect:
@@ -164,6 +192,11 @@ async def monitor_autonomous_agent(websocket: WebSocket, user_id: str):
         logger.error(f"Monitor error: {e}")
     finally:
         agent_monitor_manager.disconnect(websocket)
+        if _is_ios:
+            try:
+                await ios_connections.unregister(user_id, _conn_id)
+            except Exception:
+                pass
 
 
 @router.get("/connections")

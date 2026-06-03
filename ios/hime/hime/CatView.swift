@@ -100,12 +100,14 @@ struct CatMainView: View {
                                 }
                             }
 
-                            // Row 1: Chat (label resolved server-side via /chat-info)
-                            Button { vm.openChat() } label: {
+                            // Row 1: open the native in-app conversation with Hime.
+                            // Value-based so it shares the root stack's Chat
+                            // destination with the notification-tap deep link.
+                            NavigationLink(value: AppRoute.chat) {
                                 HStack(spacing: 6) {
-                                    Image(systemName: vm.chatPlatform == "feishu" ? "bubble.left.and.bubble.right.fill" : "paperplane.fill")
+                                    Image(systemName: "bubble.left.and.bubble.right.fill")
                                         .font(.system(size: 13))
-                                    Text(vm.chatLabel)
+                                    Text("Chat with Hime")
                                         .font(.system(size: 13, weight: .semibold))
                                 }
                                 .foregroundColor(.blue)
@@ -114,7 +116,6 @@ struct CatMainView: View {
                                 .overlay(Capsule().stroke(Color.blue.opacity(0.2), lineWidth: 1))
                                 .shadow(color: .blue.opacity(0.08), radius: 4, y: 2)
                             }
-                            .onAppear { vm.refreshChatInfo() }
 
                             // Row 2: Sync + Agent sliding toggles
                             HStack(spacing: 14) {

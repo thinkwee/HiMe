@@ -209,6 +209,19 @@ WeChat goes over Tencent's iLink protocol (`ilinkai.weixin.qq.com`) and is inten
 
 For setup, see [`docs/INSTALL.md#wechat-weixin-clawbot`](INSTALL.md#wechat-weixin-clawbot).
 
+### 3.4. In-app iOS channel
+
+The native iOS chat path does **not** require a public inbound URL. The phone initiates:
+
+- `POST /api/agent/chat` (and optional image upload when `IOS_VISION_ENABLED=true`)
+- `WS /api/stream/agent/LiveUser?client=ios` for live downlink events
+
+Behind your reverse proxy, ensure WebSocket upgrade headers are forwarded (same `location /` block as in section 2.4). Pass `API_AUTH_TOKEN` via `Authorization: Bearer` on HTTP and `?token=` on the WebSocket if auth is enabled.
+
+**APNs (optional):** mount the `.p8` key into the backend container read-only and set `APNS_*` in `.env`. `APNS_ENV` must match the build (`sandbox` for Xcode debug, `production` for TestFlight/App Store). Device tokens are stored in the memory DB via `POST /api/devices/register`.
+
+**Event fan-out:** multiple WebSocket clients (iOS app + web agent monitor) subscribe through `EventHub` in `backend/api/event_hub.py`. The iOS client uses `replay=false` on subscribe so reconnects do not duplicate bubbles; the dashboard keeps replay for late joins.
+
 ---
 
 ## 4. Docker Compose production notes
@@ -248,5 +261,8 @@ Compose services expose the same endpoints described in section 1.5. Point your 
 | Feishu card actions do nothing | Message Card Request URL not set / not publicly reachable | Configure the card callback URL in the Feishu console |
 | WeChat bot silent after restart | Token file missing or expired | Re-run `python -m backend.weixin.qr_login` and re-scan; check `./data/weixin_bot_token.json` exists |
 | Agent stops after a few minutes on a laptop | OS sleep | Use `caffeinate` (macOS) or `systemd-inhibit` (Linux), or deploy on an always-on host |
+| iOS chat works on LAN but not over HTTPS | WS URL / cert mismatch | Use `https://` in Server URL; confirm proxy forwards WebSocket upgrade |
+| No push notifications when app is closed | `APNS_ENABLED=false` or missing `.p8` | See [`docs/INSTALL.md#optional-apns-background-push`](INSTALL.md#optional-apns-background-push) |
+| Duplicate chat bubbles after reconnect | Expected if replay were on for iOS | iOS must connect with `?client=ios` (handled by the app) |
 
 For anything not covered here, see [`docs/DEVELOPMENT.md`](DEVELOPMENT.md).

@@ -945,6 +945,85 @@ class AgentLoopsMixin:
         self._save_state()
 
     # ==================================================================
+    # Plan designer — onboarding goal survey → concrete plan + tasks
+    # ==================================================================
+
+    async def trigger_plan_redesign(self) -> bool:
+        """On-demand plan (re)design — backs the Settings "redo plan" button.
+
+        Reads the newest pending survey and runs the plan designer NOW, rather
+        than waiting for the next chat reply (the onboarding path). Returns True
+        if a run was started, False if one is already in flight or there is no
+        pending survey to act on (the caller can then fall back to the
+        next-chat-reply hook).
+        """
+        if getattr(self, "_plan_running", False):
+            return False
+        survey = await asyncio.to_thread(self._chat_memory().get_pending_survey)
+        if not survey:
+            return False
+        self._plan_running = True
+        asyncio.create_task(self._run_plan_designer_guarded(survey))
+        logger.info("Plan redesign triggered on demand for %s", self.user_id)
+        return True
+
+    async def _run_plan_designer_guarded(self, survey: dict) -> None:
+        """Run the plan designer once, clearing the in-flight guard after."""
+        try:
+            await self._run_plan_designer(survey)
+        finally:
+            self._plan_running = False
+
+    async def _run_plan_designer(self, survey: dict) -> None:
+        """Turn the user's onboarding goal survey into a concrete, set-up plan.
+
+        Fired once (fire-and-forget) after the user's first successful chat
+        reply — the LLM is warm and the user is engaged. Unlike sub_analysis
+        this run is allowed to WRITE: it reads the survey + recent health data,
+        creates ``scheduled_tasks`` via the ``sql`` tool (which auto-refreshes
+        the cron scheduler), records the plan as a memory note, and publishes a
+        plan report via ``push_report`` (delivered to in-app chat + Reports
+        tab, in the user's own language). On success the survey is flipped to
+        'done' so it never fires again; on a transient failure it stays
+        'pending' and retries on the next chat reply.
+        """
+        survey_id = survey.get("id")
+        goals = survey.get("goals") or []
+        answers = survey.get("answers") or {}
+        goal = (
+            "A new user just finished onboarding HiMe and told us — via a goal "
+            "survey, with no conversation yet — what they want to achieve. "
+            "Design a concrete, personalised health plan and SET IT UP for them: "
+            "create the relevant scheduled_tasks, record the plan in memory, and "
+            "publish a warm plan report introducing it.\n\n"
+            f"Selected goals: {json.dumps(goals, ensure_ascii=False)}\n"
+            f"Other survey answers: {json.dumps(answers, ensure_ascii=False)}"
+        )
+        try:
+            system_prompt = await asyncio.to_thread(self.build_plan_designer_prompt)
+            result = await self._run_sub_analysis(
+                goal,
+                chat_id=None,
+                source="plan",
+                max_turns=self.max_turns,
+                extra_tools={"push_report", "update_md"},
+                system_prompt=system_prompt,
+            )
+            if not result.get("report_pushed"):
+                logger.warning(
+                    "Plan designer for %s finished without publishing a report",
+                    self.user_id,
+                )
+            # Mark done regardless of whether a report was pushed: the run
+            # completed, so we don't want to re-fire on every subsequent turn.
+            if survey_id is not None:
+                await asyncio.to_thread(self._chat_memory().mark_survey_planned, survey_id)
+            logger.info("Plan designer completed for %s (survey %s)", self.user_id, survey_id)
+        except Exception as exc:
+            # Leave the survey 'pending' so the next chat reply retries.
+            logger.error("Plan designer failed for %s: %s", self.user_id, exc, exc_info=True)
+
+    # ==================================================================
     # Quick analysis — for iOS cat feature
     # ==================================================================
 
@@ -1091,6 +1170,7 @@ class AgentLoopsMixin:
         max_turns: int = 15,
         allowed_tools: set | None = None,
         extra_tools: set | None = None,
+        system_prompt: str | None = None,
     ) -> dict:
         """Run a focused data analysis as a sub-agent and return findings.
 
@@ -1146,12 +1226,29 @@ class AgentLoopsMixin:
             await _code_tool.refresh_df_async()
 
         # Single source of truth for prompt assembly: agent_prompts.py.
-        system_prompt = await asyncio.to_thread(self.build_sub_analysis_prompt)
+        # Callers that need a different engine (e.g. the plan designer, which
+        # is allowed to write) pass their own system_prompt; everyone else gets
+        # the shared read-only sub_analysis prompt (KV-cache friendly).
+        if system_prompt is None:
+            system_prompt = await asyncio.to_thread(self.build_sub_analysis_prompt)
 
-        from ..utils import local_tz_line
+        from ..utils import language_directive, local_tz_line
+        preamble = f"[{local_tz_line()}]"
+        # Proactive paths (scheduled reports, the iOS cat caption, the plan
+        # designer) have no incoming user message to infer language from, so
+        # they default to the prompt's English. Give them a language directive
+        # inferred from the user's own recent chat messages. Chat-spawned
+        # analyze (source="chat") is internal to the orchestrator, which
+        # already handles language.
+        if source in ("analysis", "quick", "plan"):
+            try:
+                sample = await asyncio.to_thread(self._chat_memory().recent_user_text)
+                preamble += f"\n[{language_directive(sample, settings.DEFAULT_USER_LANGUAGE)}]"
+            except Exception as exc:
+                logger.debug("language inference skipped: %s", exc)
         messages: list[dict] = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"[{local_tz_line()}]\n{goal}"},
+            {"role": "user", "content": f"{preamble}\n{goal}"},
         ]
 
         sub_tools = self._get_sub_analysis_tool_definitions(extra_tools=extra_tools)
@@ -1460,6 +1557,21 @@ class AgentLoopsMixin:
         # Platform-prefixed history key so the same numeric chat_id on
         # different gateways (Telegram 12345 vs Feishu 12345) can't collide.
         history_key = f"{channel}:{chat_id}"
+
+        # Slash-command handling for the native in-app channel. IM gateways
+        # intercept these before the inbox, so this branch only fires for iOS
+        # chat, which routes all text (commands included) through the inbox.
+        if (envelope.content or "").strip().lower() in ("/clear", "/reset"):
+            self._chat_histories.pop(history_key, None)
+            self._save_state()
+            try:
+                await self._chat_memory().clear_chat_history(history_key)
+            except Exception as e:
+                logger.debug("clear_chat_history failed: %s", e)
+            await self._emit({"type": "chat_cleared", "chat_id": chat_id})
+            self._set_state("chat_complete", loop="chat")
+            return
+
         self.user_messages_received += 1
 
         self._set_state("chat_processing", loop="chat")
@@ -1487,17 +1599,46 @@ class AgentLoopsMixin:
         from ..utils import local_tz_line, now_local
         tz_line = local_tz_line()
         now_str = now_local().strftime("%Y-%m-%d %H:%M")
-        user_msg_for_llm: dict = {
-            "role": "user",
-            "content": (
-                f"[{tz_line}]\n"
-                f"[Current local time: {now_str}]\n"
-                f"[{channel.upper()} MESSAGE from {sender} at {ts_str}]: {envelope.content}"
-            ),
-        }
+        user_text = (
+            f"[{tz_line}]\n"
+            f"[Current local time: {now_str}]\n"
+            f"[{channel.upper()} MESSAGE from {sender} at {ts_str}]: {envelope.content}"
+        )
+        # Inbound images (iOS, IOS_VISION_ENABLED only). Build OpenAI-native
+        # multimodal content when the provider can see images; otherwise note
+        # the attachment and proceed text-only. IM channels never populate
+        # attachments, so existing flows are unchanged.
+        image_atts = [
+            a for a in (getattr(envelope, "attachments", None) or [])
+            if a.get("type") == "image" and a.get("path")
+        ]
+        user_msg_for_llm: dict
+        if image_atts and self.llm.supports_vision():
+            import base64 as _b64
+            blocks: list[dict] = [{"type": "text", "text": user_text}]
+            for att in image_atts:
+                try:
+                    with open(att["path"], "rb") as f:
+                        b64 = _b64.b64encode(f.read()).decode()
+                    mime = att.get("mime", "image/jpeg")
+                    blocks.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime};base64,{b64}"},
+                    })
+                except Exception as e:
+                    logger.warning("Could not read inbound image %s: %s", att.get("path"), e)
+            user_msg_for_llm = {"role": "user", "content": blocks}
+        elif image_atts:
+            user_msg_for_llm = {
+                "role": "user",
+                "content": user_text + "\n[The user attached an image, but the current "
+                                       "model cannot view images.]",
+            }
+        else:
+            user_msg_for_llm = {"role": "user", "content": user_text}
         user_msg_for_history: dict = {
             "role": "user",
-            "content": f"[{ts_str}] {envelope.content}",
+            "content": f"[{ts_str}] {envelope.content}" + (" [image]" if image_atts else ""),
         }
 
         chat_messages = [
@@ -1520,7 +1661,10 @@ class AgentLoopsMixin:
                 _reply_tool._event_emitter = self._emit
 
         reply_text: str | None = None
-        original_user_content = user_msg_for_llm["content"]
+        # Always the text form (never the multimodal list) — this is only used
+        # to re-inject the user's text when context is summarized, where string
+        # concatenation would fail on a content list.
+        original_user_content = user_text
         preamble_size = len(chat_messages)  # system + history + user
         prev_chat_tool_results: list[dict] = []
         all_evidence: list[dict] = []
@@ -1557,7 +1701,7 @@ class AgentLoopsMixin:
                 if not has_replied and clean and clean not in ("(tools)", "(done)", "(no response)"):
                     # LLM wrote text but didn't call reply_user — send it
                     logger.info("Chat turn %d: no tool calls, auto-replying with text", turn)
-                    ar = await self._auto_reply(clean, chat_id, all_evidence, user_message=envelope.content, chat_history=history)
+                    ar = await self._auto_reply(clean, chat_id, all_evidence, user_message=envelope.content, chat_history=history, channel=envelope.channel)
                     if ar["sent"]:
                         has_replied = True
                         reply_text = clean
@@ -1626,7 +1770,7 @@ class AgentLoopsMixin:
                     if not has_replied:
                         clean = _strip_meta_markers(text)
                         if clean:
-                            ar = await self._auto_reply(clean, chat_id, all_evidence, user_message=envelope.content, chat_history=history)
+                            ar = await self._auto_reply(clean, chat_id, all_evidence, user_message=envelope.content, chat_history=history, channel=envelope.channel)
                             has_replied = ar["sent"]
                             if ar["sent"]:
                                 reply_text = clean
@@ -1792,7 +1936,7 @@ class AgentLoopsMixin:
             await self._auto_reply(
                 "Sorry, I couldn't process your message properly. Please try again!",
                 chat_id, all_evidence, user_message=envelope.content,
-                chat_history=history,
+                chat_history=history, channel=envelope.channel,
             )
             reply_text = "(auto-reply: processing failed)"
             finished = True
@@ -1821,6 +1965,46 @@ class AgentLoopsMixin:
             hist = hist[-self._max_chat_history:]
             self._chat_histories[history_key] = hist
         self._save_state()
+        # Persist the turn(s) to the memory DB so the in-app chat can reload
+        # history across restarts / new devices. Fire-and-forget so it never
+        # blocks the reply loop. (IM channels are persisted too, under their
+        # own history_key; the iOS fetch scopes by "ios:<uid>".)
+        try:
+            from .fact_verifier import _hash_message
+            mem = self._chat_memory()
+            # Persist user + assistant as ONE ordered, atomic turn. Two separate
+            # fire-and-forget writes used to race on the autoincrement id (the
+            # reply could be stored before the prompt) and collide on the file
+            # lock (silently dropping a row) — reordered/missing history on
+            # reload. persist_chat_turns writes them in order under one lock.
+            turns: list[dict[str, Any]] = [{
+                "role": "user",
+                "content": envelope.content or ("[image]" if image_atts else ""),
+                "client_msg_id": getattr(envelope, "message_id", None),
+            }]
+            if reply_text:
+                turns.append({
+                    "role": "assistant",
+                    "content": reply_text,
+                    "message_hash": _hash_message(reply_text),
+                })
+            asyncio.create_task(mem.persist_chat_turns(history_key, turns))
+        except Exception as e:
+            logger.debug("chat_history persist skipped: %s", e)
+
+        # Deferred onboarding plan: the user filled a goal survey at onboarding
+        # but we waited for the LLM to be warm and the user engaged. Now that
+        # they've had a real reply, design + set up their plan once. Guarded so
+        # a slow run can't double-fire on the next turn; stays 'pending' (and
+        # retries) only on a hard failure.
+        if reply_text and not getattr(self, "_plan_running", False):
+            try:
+                survey = await asyncio.to_thread(self._chat_memory().get_pending_survey)
+                if survey:
+                    self._plan_running = True
+                    asyncio.create_task(self._run_plan_designer_guarded(survey))
+            except Exception as e:
+                logger.debug("plan-designer hook skipped: %s", e)
         logger.info("Chat with %s completed (%d turns, history=%d msgs)", sender, turn, len(hist))
 
     async def _auto_reply(
@@ -1830,6 +2014,7 @@ class AgentLoopsMixin:
         tool_results: list[dict] | None = None,
         user_message: str = "",
         chat_history: list[dict] | None = None,
+        channel: Any = None,
     ) -> dict:
         """Send text as a reply_user on behalf of the LLM.
 
@@ -1861,12 +2046,19 @@ class AgentLoopsMixin:
                     reply_tool._event_emitter = self._emit
                 result = await reply_tool.execute(message=text, chat_id=str(chat_id))
                 if result.get("success"):
-                    await self._emit({
-                        "type": "chat_reply",
-                        "content": text[:300],
-                        "chat_id": str(chat_id),
-                        "auto": True,
-                    })
+                    # The iOS gateway already emits its own full-fidelity
+                    # chat_reply (with evidence hash + markup) from inside
+                    # send_message, so emitting this legacy monitor echo here
+                    # would surface as a duplicate bubble in the app. Keep it
+                    # for IM channels, whose gateways don't emit chat_reply —
+                    # the web dashboard relies on it to show the reply.
+                    if getattr(channel, "value", None) != "ios":
+                        await self._emit({
+                            "type": "chat_reply",
+                            "content": text[:300],
+                            "chat_id": str(chat_id),
+                            "auto": True,
+                        })
                     return {"sent": True, "error": ""}
                 else:
                     err = str(result.get("error", ""))

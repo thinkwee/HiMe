@@ -3,10 +3,15 @@ Agent diagnostics — activity log, memory inspection, tool listing, messaging-g
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import mimetypes
+import os
 import sqlite3
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from ..config import settings
 from .agent_state import _get_or_create_memory, active_agents
@@ -14,6 +19,122 @@ from .agent_state import _get_or_create_memory, active_agents
 logger = logging.getLogger(__name__)
 
 diagnostics_router = APIRouter()
+
+# Single-user identity for the in-app channel.
+_LIVE_USER = "LiveUser"
+
+
+# ---------------------------------------------------------------------------
+# GET /evidence/{message_hash}  — fact-verification "Show Evidence" (iOS)
+# ---------------------------------------------------------------------------
+
+@diagnostics_router.get("/evidence/{message_hash}")
+async def get_message_evidence(message_hash: str):
+    """Return the fact-verification evidence trail for a delivered message.
+
+    Backs the in-app "Show Evidence" affordance. The evidence is the same
+    trail Telegram/Feishu surface via their inline button — here it is a
+    plain authed fetch keyed by the ``message_hash`` carried on the
+    ``chat_reply`` stream event.
+    """
+    def _load():
+        from ..agent.fact_verifier import FactVerifier
+        fv = FactVerifier(settings.MEMORY_DB_PATH, _LIVE_USER)
+        ev = fv.get_evidence(message_hash)
+        if not ev:
+            return None, ""
+        return ev, fv.format_evidence_for_display(ev)
+
+    evidence, formatted = await asyncio.to_thread(_load)
+    if not evidence:
+        return {"success": True, "found": False, "evidence": None, "formatted": ""}
+    return {"success": True, "found": True, "evidence": evidence, "formatted": formatted}
+
+
+# ---------------------------------------------------------------------------
+# GET /chat-history  — in-app conversation transcript (iOS)
+# ---------------------------------------------------------------------------
+
+@diagnostics_router.get("/chat-history")
+async def get_chat_history(limit: int = Query(200, ge=1, le=2000)):
+    """Return the in-app chat transcript, oldest-first.
+
+    Lets the iOS app reload conversation scrollback after a restart or on a
+    new device. Scoped to the ``ios:LiveUser`` history key, so it returns
+    only the in-app chat (not legacy IM transcripts).
+    """
+    memory = _get_or_create_memory(_LIVE_USER)
+    if memory is None:
+        return {"success": True, "messages": []}
+    messages = await asyncio.to_thread(memory.get_chat_history, f"ios:{_LIVE_USER}", limit)
+    return {"success": True, "messages": messages}
+
+
+# ---------------------------------------------------------------------------
+# POST /onboarding-survey  — record the user's health goals (no LLM)
+# ---------------------------------------------------------------------------
+
+class OnboardingSurvey(BaseModel):
+    goals: list[str] = []
+    answers: dict = {}
+    # When true (the Settings "redesign plan" button), kick the plan designer
+    # immediately instead of waiting for the next chat reply. Onboarding leaves
+    # this false so the run is deferred until the user is warm and engaged.
+    trigger_now: bool = False
+
+
+@diagnostics_router.post("/onboarding-survey")
+async def post_onboarding_survey(body: OnboardingSurvey):
+    """Record the goal survey verbatim — no LLM runs at capture time.
+
+    The captured goals sit in the memory DB with ``plan_status='pending'``
+    (any prior pending survey is superseded). Then:
+
+    - **Onboarding** (``trigger_now=false``): the plan designer fires later,
+      after the user's first successful chat reply (LLM warm, user engaged).
+    - **Settings "redesign plan"** (``trigger_now=true``): the plan designer is
+      kicked right now against the running agent. If the agent isn't up yet we
+      simply leave the survey pending and the next-chat-reply hook handles it.
+    """
+    memory = _get_or_create_memory(_LIVE_USER)
+    if memory is None:
+        # No memory DB yet — create one so the survey can be recorded.
+        from ..agent import MemoryManager
+        memory = MemoryManager(settings.MEMORY_DB_PATH, _LIVE_USER)
+    await asyncio.to_thread(memory.save_onboarding_survey, body.goals, body.answers)
+    logger.info("Onboarding survey saved (%d goals)", len(body.goals))
+
+    triggered = False
+    if body.trigger_now:
+        info = active_agents.get(_LIVE_USER)
+        agent = info.get("agent") if info else None
+        if agent is not None and hasattr(agent, "trigger_plan_redesign"):
+            triggered = await agent.trigger_plan_redesign()
+        if not triggered:
+            logger.info(
+                "Redesign requested but agent not ready — will run on next chat reply"
+            )
+    return {"success": True, "queued_plan": True, "triggered_now": triggered}
+
+
+# ---------------------------------------------------------------------------
+# GET /chat-image/{image_id}  — authed fetch of an agent-sent chart (iOS)
+# ---------------------------------------------------------------------------
+
+@diagnostics_router.get("/chat-image/{image_id}")
+async def get_chat_image(image_id: str):
+    """Serve an agent-generated image to the local user only.
+
+    The ``image_id`` is handed to the client on the ``chat_image`` stream
+    event. ``image_store.get`` returns the path only when the caller owns it.
+    """
+    from ..ios_gateway.image_store import image_store
+
+    path = image_store.get(image_id, _LIVE_USER)
+    if not path or not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Image not found")
+    media_type = mimetypes.guess_type(path)[0] or "image/png"
+    return FileResponse(path, media_type=media_type)
 
 
 # ---------------------------------------------------------------------------

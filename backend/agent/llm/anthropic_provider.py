@@ -37,11 +37,36 @@ from typing import Any
 
 from . import (
     BaseLLMProvider,
+    parse_image_data_uri,
     provider_write_log,
     retry_async,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _openai_content_to_anthropic(content: list) -> list:
+    """Convert OpenAI-native multimodal blocks to Anthropic content blocks.
+
+    Text blocks → ``{"type": "text", ...}``; ``image_url`` data-URI blocks →
+    ``{"type": "image", "source": {"type": "base64", ...}}``.
+    """
+    out: list[dict] = []
+    for b in content:
+        if not isinstance(b, dict):
+            out.append({"type": "text", "text": str(b)})
+            continue
+        if b.get("type") == "image_url":
+            url = (b.get("image_url") or {}).get("url", "")
+            mime, data = parse_image_data_uri(url)
+            if data:
+                out.append({
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": mime, "data": data},
+                })
+        else:
+            out.append({"type": "text", "text": b.get("text", "")})
+    return out or [{"type": "text", "text": ""}]
 
 
 class AnthropicProvider(BaseLLMProvider):
@@ -65,6 +90,9 @@ class AnthropicProvider(BaseLLMProvider):
             ) from exc
 
     def supports_tools(self) -> bool:
+        return True
+
+    def supports_vision(self) -> bool:
         return True
 
     async def complete(
@@ -333,7 +361,11 @@ class AnthropicProvider(BaseLLMProvider):
                     })
                 filtered.append({"role": "assistant", "content": content_blocks})
             else:
-                filtered.append({"role": role, "content": msg.get("content") or ""})
+                content = msg.get("content")
+                if isinstance(content, list):
+                    # Multimodal user content (text + image) from the iOS channel.
+                    content = _openai_content_to_anthropic(content)
+                filtered.append({"role": role, "content": content if content else ""})
 
         _flush_tool_results()
         system = "\n".join(system_parts) if system_parts else None

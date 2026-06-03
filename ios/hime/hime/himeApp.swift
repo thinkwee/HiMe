@@ -7,12 +7,13 @@
 
 import SwiftUI
 import BackgroundTasks
+import UserNotifications
 
 private let kBGRefreshID = "com.hime.healthkit.refresh"
 
 // MARK: - AppDelegate
 
-class AppDelegate: NSObject, UIApplicationDelegate {
+class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     func application(
         _ application: UIApplication,
         handleEventsForBackgroundURLSession identifier: String,
@@ -30,7 +31,80 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             HealthKitManager.shared.handleBackgroundRefresh(task: refreshTask)
         }
 
+        UNUserNotificationCenter.current().delegate = self
+        registerForPushIfConsented(application)
         return true
+    }
+
+    // MARK: - APNs (proactive push for in-app chat / reports)
+
+    /// Request notification permission and register for remote notifications,
+    /// but only once the user has onboarded and consented (mirrors the gate
+    /// used for HealthKit). Idempotent — safe to call again post-consent.
+    func registerForPushIfConsented(_ application: UIApplication) {
+        let onboarded = UserDefaults.standard.bool(forKey: "hime.hasOnboarded")
+        let consented = UserDefaults.standard.bool(forKey: "hime.hasConsentedToAIDataSharing")
+        guard onboarded && consented else { return }
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+            guard granted else { return }
+            DispatchQueue.main.async { application.registerForRemoteNotifications() }
+        }
+    }
+
+    func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
+        Task { await uploadDeviceToken(hex) }
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: Error
+    ) {
+        print("APNs registration failed: \(error.localizedDescription)")
+    }
+
+    private func uploadDeviceToken(_ token: String) async {
+        guard let url = URL(string: "\(ServerConfig.load().apiBaseURL)/api/devices/register") else { return }
+        var req = APIClient.request(url, method: "POST")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        #if DEBUG
+        let env = "sandbox"
+        #else
+        let env = "production"
+        #endif
+        let body: [String: Any] = [
+            "device_token": token,
+            "bundle_id": Bundle.main.bundleIdentifier ?? "",
+            "environment": env,
+        ]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        _ = try? await URLSession.shared.data(for: req)
+    }
+
+    // MARK: - UNUserNotificationCenterDelegate
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        // Show as a banner even when foregrounded (e.g. user on another tab).
+        completionHandler([.banner, .sound])
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        // Every proactive notification we send is a chat reply / report, so a
+        // tap deep-links into the Chat screen. ContentView observes the router
+        // and pushes Chat (reconcile() then pulls in the just-arrived message).
+        Task { @MainActor in AppRouter.shared.requestChat() }
+        completionHandler()
     }
 }
 
@@ -80,7 +154,9 @@ struct himeApp: App {
                 .onChange(of: hasOnboarded) { _, onboarded in
                     if onboarded {
                         // User just finished onboarding — HealthKit setup
-                        // already happened during the Grant Access step.
+                        // already happened during the Grant Access step. Now
+                        // that consent is in place, register for push.
+                        appDelegate.registerForPushIfConsented(UIApplication.shared)
                     }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)) { _ in

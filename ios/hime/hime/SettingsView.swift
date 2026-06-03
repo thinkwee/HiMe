@@ -18,6 +18,7 @@ struct SettingsView: View {
     @State private var isTestingConnection: Bool = false
     @State private var showAIDisclosureSheet = false
     @State private var showRevokeConsentConfirm = false
+    @State private var showPlanSurvey = false
 
     var body: some View {
         Form {
@@ -107,9 +108,13 @@ struct SettingsView: View {
                         .foregroundColor(.secondary)
                         .onSubmit {
                             ServerConfig.authToken = authToken
+                            // A survey captured during onboarding (before the
+                            // token existed) is stashed locally — flush it now.
+                            Task { await ServerConfig.flushPendingSurvey() }
                         }
                         .onChange(of: authToken) {
                             ServerConfig.authToken = authToken
+                            Task { await ServerConfig.flushPendingSurvey() }
                         }
                 }
 
@@ -208,13 +213,22 @@ struct SettingsView: View {
             // MARK: - Onboarding
             Section {
                 Button {
+                    showPlanSurvey = true
+                } label: {
+                    Label("Redesign My Plan", systemImage: "wand.and.stars")
+                }
+                .foregroundColor(.accentColor)
+
+                Button {
                     hasOnboarded = false
                 } label: {
                     Label("Replay Onboarding", systemImage: "arrow.counterclockwise")
                 }
                 .foregroundColor(.accentColor)
             } header: {
-                Text("Onboarding")
+                Text("Plan & Onboarding")
+            } footer: {
+                Text("Retake the goal survey and let HiMe redesign your scheduled check-ins and plan.")
             }
 
             // MARK: - HealthKit
@@ -273,7 +287,7 @@ struct SettingsView: View {
                             }
                         }
                         .frame(height: 260)
-                        .onChange(of: lm.logs.count) { _ in
+                        .onChange(of: lm.logs.count) {
                             if let last = lm.logs.last {
                                 withAnimation {
                                     proxy.scrollTo(last.id, anchor: .bottom)
@@ -342,6 +356,9 @@ struct SettingsView: View {
         .animation(.easeInOut(duration: 0.2), value: showCopiedToast)
         .sheet(isPresented: $showAIDisclosureSheet) {
             AIDisclosureSheet()
+        }
+        .sheet(isPresented: $showPlanSurvey) {
+            PlanSurveySheet()
         }
     }
 
