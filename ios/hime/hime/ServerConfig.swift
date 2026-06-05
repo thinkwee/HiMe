@@ -72,6 +72,12 @@ struct ServerConfig {
     // flushPendingSurvey after the token is saved; ContentView flushes on launch).
     private static let pendingSurveyKey = "hime.pendingGoalSurvey"
 
+    // Single-flight guard. flushPendingSurvey() is called from four places
+    // (onboarding completion, ContentView launch, two SettingsView token-save
+    // paths); without this, two calls can read the stash before either clears
+    // it and each POSTs the same survey → duplicate onboarding rows.
+    private static var isFlushingSurvey = false
+
     static var hasPendingSurvey: Bool {
         UserDefaults.standard.data(forKey: pendingSurveyKey) != nil
     }
@@ -84,18 +90,35 @@ struct ServerConfig {
     }
 
     /// Re-POST a stashed survey once a token is available. No-op if nothing is
-    /// pending or there is still no token. Clears the stash only on a 2xx.
+    /// pending, there is still no token, or a flush is already in progress.
+    ///
+    /// Idempotency: the stash is claimed (removed) BEFORE the POST so a
+    /// concurrent flush sees nothing and can't double-submit; on any failure
+    /// the payload is restored so the next launch/Settings flush retries it.
     static func flushPendingSurvey() async {
+        guard !isFlushingSurvey else { return }
         guard !authToken.isEmpty,
               let data = UserDefaults.standard.data(forKey: pendingSurveyKey) else { return }
+        isFlushingSurvey = true
+        defer { isFlushingSurvey = false }
+
+        // Claim the stash up-front; restore it if we don't reach a 2xx.
+        UserDefaults.standard.removeObject(forKey: pendingSurveyKey)
+
         let cfg = load()
-        guard let url = URL(string: "\(cfg.apiBaseURL)/api/agent/onboarding-survey") else { return }
+        guard let url = URL(string: "\(cfg.apiBaseURL)/api/agent/onboarding-survey") else {
+            UserDefaults.standard.set(data, forKey: pendingSurveyKey)
+            return
+        }
         var req = APIClient.request(url, method: "POST")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = data
         guard let (_, resp) = try? await URLSession.shared.data(for: req),
-              let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else { return }
-        UserDefaults.standard.removeObject(forKey: pendingSurveyKey)
+              let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            UserDefaults.standard.set(data, forKey: pendingSurveyKey)
+            return
+        }
+        // Success: stash already cleared above.
     }
 
     // MARK: - Persistence

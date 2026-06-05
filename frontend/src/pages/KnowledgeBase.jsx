@@ -69,7 +69,7 @@ export default function MemoryAndTools() {
     try {
       const res = await api.inspectMemoryTable(tableName)
       if (res.success) {
-        setTableData(res.rows)
+        setTableData(Array.isArray(res.rows) ? res.rows : [])
       } else {
         setError(res.error || t('knowledge.failed_inspect', { name: tableName }))
       }
@@ -253,7 +253,7 @@ export default function MemoryAndTools() {
                                         <table className="text-left text-[11px] border-collapse" style={{ minWidth: '100%' }}>
                                           <thead className="bg-gray-50 sticky top-0 font-black text-gray-400">
                                             <tr>
-                                              {Object.keys(tableData[0]).map(k => (
+                                              {Object.keys(tableData[0] || {}).map(k => (
                                                 <th
                                                   key={k}
                                                   className="px-3 py-2 border-b border-gray-100 uppercase bg-gray-50 whitespace-nowrap"
