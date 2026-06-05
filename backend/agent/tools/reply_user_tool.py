@@ -120,6 +120,7 @@ class ReplyUserTool(BaseTool):
         reply_markup = verification["reply_markup"]
 
         # Send image first (if provided), then text message
+        sent_image_id: str | None = None
         if image_path:
             import os
             if os.path.isfile(image_path):
@@ -134,6 +135,9 @@ class ReplyUserTool(BaseTool):
                         "reply_user photo sent via %s to %s",
                         gateway.channel.value, target,
                     )
+                    # Durable id of the just-sent image (iOS only) so the chat
+                    # loop can persist it on the assistant turn for replay.
+                    sent_image_id = getattr(gateway, "last_image_id", None) or None
                     # Skip the text follow-up only when the gateway baked
                     # the caption into the photo message AND the caption
                     # wasn't truncated. WeChat (supports_inline_caption=
@@ -143,7 +147,11 @@ class ReplyUserTool(BaseTool):
                         getattr(gateway, "supports_inline_caption", True)
                         and len(message) <= 1024
                     ):
-                        return {"success": True, "message": "Photo with caption sent."}
+                        return {
+                            "success": True,
+                            "message": "Photo with caption sent.",
+                            "image_id": sent_image_id,
+                        }
                 else:
                     logger.warning("Photo send failed, falling back to text-only")
             else:
@@ -160,7 +168,11 @@ class ReplyUserTool(BaseTool):
                 "reply_user sent via %s to %s: %s",
                 gateway.channel.value, target, message[:80],
             )
-            return {"success": True, "message": "Reply sent successfully."}
+            return {
+                "success": True,
+                "message": "Reply sent successfully.",
+                "image_id": sent_image_id,
+            }
         logger.warning(
             "reply_user failed on %s for chat %s (preview: %s)",
             gateway.channel.value, target, message[:100],

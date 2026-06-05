@@ -100,7 +100,8 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             content       TEXT NOT NULL,
             message_hash  TEXT,
             client_msg_id TEXT,
-            report_id     INTEGER
+            report_id     INTEGER,
+            image_id      TEXT
         );
 
         CREATE TABLE IF NOT EXISTS onboarding_survey (
@@ -135,6 +136,17 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         cols = {row[1] for row in conn.execute("PRAGMA table_info(chat_history)").fetchall()}
         if "report_id" not in cols:
             conn.execute("ALTER TABLE chat_history ADD COLUMN report_id INTEGER")
+            conn.commit()
+    except Exception:
+        pass  # table may not exist yet (handled by CREATE TABLE above)
+
+    # Migrate: add 'image_id' column so an agent-sent chart (the iOS in-app
+    # `chat_image` event) is persisted on its assistant turn and can be
+    # replayed by GET /chat-history — not just delivered live over the WS.
+    try:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(chat_history)").fetchall()}
+        if "image_id" not in cols:
+            conn.execute("ALTER TABLE chat_history ADD COLUMN image_id TEXT")
             conn.commit()
     except Exception:
         pass  # table may not exist yet (handled by CREATE TABLE above)
@@ -306,12 +318,13 @@ class MemoryManager:
         message_hash: str | None = None,
         client_msg_id: str | None = None,
         report_id: int | None = None,
+        image_id: str | None = None,
     ) -> None:
         """Persist one chat turn to the memory DB (async)."""
         await self.persist_chat_turns(history_key, [{
             "role": role, "content": content,
             "message_hash": message_hash, "client_msg_id": client_msg_id,
-            "report_id": report_id,
+            "report_id": report_id, "image_id": image_id,
         }])
 
     async def persist_chat_turns(
@@ -322,7 +335,7 @@ class MemoryManager:
         """Persist an ordered list of chat turns in ONE transaction.
 
         Each turn is a dict with ``role``/``content`` (required) and optional
-        ``message_hash``/``client_msg_id``/``report_id``. Writing the whole turn
+        ``message_hash``/``client_msg_id``/``report_id``/``image_id``. Writing the whole turn
         atomically, under the per-instance write lock, guarantees the rows keep
         their given order and that no concurrent writer can interleave or drop
         them."""
@@ -341,13 +354,13 @@ class MemoryManager:
                 _ensure_schema(conn)
                 conn.executemany(
                     "INSERT INTO chat_history "
-                    "(history_key, role, content, message_hash, client_msg_id, report_id) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    "(history_key, role, content, message_hash, client_msg_id, report_id, image_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
                     [
                         (
                             history_key, t["role"], t["content"],
                             t.get("message_hash"), t.get("client_msg_id"),
-                            t.get("report_id"),
+                            t.get("report_id"), t.get("image_id"),
                         )
                         for t in turns
                     ],
@@ -376,7 +389,7 @@ class MemoryManager:
             rows = conn.execute(
                 """SELECT * FROM (
                        SELECT id, created_at, role, content, message_hash,
-                              client_msg_id, report_id
+                              client_msg_id, report_id, image_id
                        FROM chat_history WHERE history_key = ?
                        ORDER BY id DESC LIMIT ?
                    ) ORDER BY id ASC""",

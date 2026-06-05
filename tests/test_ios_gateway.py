@@ -122,7 +122,12 @@ async def test_apns_coalesced(agents):
     assert len(apns.calls) == 1
 
 
-async def test_send_photo_emits_chat_image_with_authed_url(agents, tmp_path):
+async def test_send_photo_emits_chat_image_with_authed_url(agents, tmp_path, monkeypatch):
+    # Point the durable chat-image dir at the test's tmp so register() doesn't
+    # write into the repo's real data/ tree.
+    from backend.config import settings
+    monkeypatch.setattr(settings, "DATA_STORE_PATH", str(tmp_path / "data"))
+
     fa = _FakeAgent()
     agents["userF"] = {"agent": fa}
     png = tmp_path / "chart.png"
@@ -134,9 +139,19 @@ async def test_send_photo_emits_chat_image_with_authed_url(agents, tmp_path):
     assert ev["type"] == "chat_image"
     assert ev["url"].startswith("/api/agent/chat-image/")
     assert ev["caption"] == "weekly trend"
+    # register() persists a durable copy (not the raw /tmp path) so the chart
+    # survives reaping/restart for history replay; the copy holds the bytes.
+    durable = image_store.get(ev["image_id"], "userF")
+    assert durable is not None and durable != str(png)
+    with open(durable, "rb") as f:
+        assert f.read() == b"\x89PNG fake"
     # The image id resolves only for the owning user.
-    assert image_store.get(ev["image_id"], "userF") == str(png)
     assert image_store.get(ev["image_id"], "userOther") is None
+    # Durable filesystem fallback (post-restart / post-TTL) is owner-scoped too.
+    assert image_store.durable_path(ev["image_id"], "userF") == durable
+    assert image_store.durable_path(ev["image_id"], "userOther") is None
+    # The gateway exposes the id so the chat loop can persist it on the turn.
+    assert gw.last_image_id == ev["image_id"]
 
 
 def test_gateway_identity():

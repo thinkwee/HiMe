@@ -71,6 +71,11 @@ class IOSGateway(BaseGateway):
         self.sender = None  # no external sender handle
         self._apns = apns_sender
         self._last_apns_ts = 0.0
+        # Set by send_photo to the durable image id of the most recent photo so
+        # the chat loop can persist it on the assistant's chat_history turn
+        # (enables history replay, not just live delivery). reply_user reads it
+        # immediately after a successful send_photo, so no cross-turn races.
+        self.last_image_id: str | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle (no transport — both are no-ops)
@@ -178,9 +183,11 @@ class IOSGateway(BaseGateway):
         # so the client fetches it via GET /api/agent/chat-image/<id> with its
         # bearer token (never expose the raw filesystem path).
         image_id = None
+        self.last_image_id = None
         try:
             if photo_path and os.path.exists(photo_path):
                 image_id = image_store.register(self.user_id, photo_path)
+                self.last_image_id = image_id
         except Exception as e:  # pragma: no cover — defensive
             logger.warning("IOSGateway[user=%s]: image register failed: %s", self.user_id, e)
         await self._emit_to_stream({

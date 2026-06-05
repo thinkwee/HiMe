@@ -57,6 +57,21 @@ async def test_report_id_round_trips(mm):
     assert rows[0]["report_id"] == 42
 
 
+async def test_image_id_persisted_and_replayed(mm):
+    # An agent-sent chart turn carries an image_id; it must survive a reload
+    # so GET /chat-history can replay the image (the live chat_image WS event
+    # is lost if the app is offline at emit time). The chart itself rides in
+    # the text as a Markdown image line, which the app's MarkdownView renders.
+    img_md = "![chart](/api/agent/chat-image/deadbeefcafe)"
+    await mm.persist_chat_turn(
+        "ios:hist-user", "assistant", f"weekly trend\n\n{img_md}",
+        message_hash="hash123456", image_id="deadbeefcafe",
+    )
+    rows = mm.get_chat_history("ios:hist-user")
+    assert rows[0]["image_id"] == "deadbeefcafe"
+    assert img_md in rows[0]["content"]
+
+
 def test_onboarding_survey_lifecycle(mm):
     mm.save_onboarding_survey(["sleep", "fitness"], {"focus": "sleep"})
     pending = mm.get_pending_survey()

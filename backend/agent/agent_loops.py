@@ -1661,6 +1661,10 @@ class AgentLoopsMixin:
                 _reply_tool._event_emitter = self._emit
 
         reply_text: str | None = None
+        # Durable image id of the chart sent alongside the final reply (iOS),
+        # so it persists on the assistant's chat_history turn and replays on
+        # the next app open — not just live over the WS. None for text-only.
+        reply_image_id: str | None = None
         # Always the text form (never the multimodal list) — this is only used
         # to re-inject the user's text when context is summarized, where string
         # concatenation would fail on a content list.
@@ -1908,6 +1912,9 @@ class AgentLoopsMixin:
                 if tool_name == "reply_user" and result.get("success"):
                     has_replied = True
                     reply_text = arguments.get("message", "")
+                    # Pair the image with this reply's text (None clears any
+                    # image from an earlier send, keeping text↔image aligned).
+                    reply_image_id = result.get("image_id")
 
                 if finished:
                     break
@@ -1982,11 +1989,29 @@ class AgentLoopsMixin:
                 "content": envelope.content or ("[image]" if image_atts else ""),
                 "client_msg_id": getattr(envelope, "message_id", None),
             }]
-            if reply_text:
+            if reply_text or reply_image_id:
+                # Replay an agent-sent chart with NO app change required: the
+                # in-app chat bubble renders `content` through MarkdownView,
+                # which already turns a standalone `![alt](src)` line into an
+                # (authed) image fetch. So we bake the image into the persisted
+                # text as a Markdown image pointing at /api/agent/chat-image/<id>
+                # (the durable copy survives restarts via image_store fallback).
+                # The live `chat_image` WS event still delivers it in-session;
+                # this purely fixes reload/offline replay. NB: only the DB
+                # transcript carries this line — the in-memory LLM history
+                # (`hist`) is left as plain text above, so the model's context
+                # is never polluted with image markup.
+                stored_content = reply_text or ""
+                if reply_image_id:
+                    img_md = f"![chart](/api/agent/chat-image/{reply_image_id})"
+                    stored_content = f"{stored_content}\n\n{img_md}" if stored_content else img_md
                 turns.append({
                     "role": "assistant",
-                    "content": reply_text,
-                    "message_hash": _hash_message(reply_text),
+                    "content": stored_content,
+                    "message_hash": _hash_message(reply_text) if reply_text else None,
+                    # Also recorded structurally (harmless metadata; lets a
+                    # future native-rendering client find the chart directly).
+                    "image_id": reply_image_id,
                 })
             asyncio.create_task(mem.persist_chat_turns(history_key, turns))
         except Exception as e:

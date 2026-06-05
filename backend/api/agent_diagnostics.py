@@ -130,7 +130,11 @@ async def get_chat_image(image_id: str):
     """
     from ..ios_gateway.image_store import image_store
 
+    # Fast path: live in-memory entry. Fallback: the durable per-user copy,
+    # which survives TTL expiry / restarts so replayed history still resolves.
     path = image_store.get(image_id, _LIVE_USER)
+    if not path or not os.path.exists(path):
+        path = image_store.durable_path(image_id, _LIVE_USER)
     if not path or not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Image not found")
     media_type = mimetypes.guess_type(path)[0] or "image/png"
