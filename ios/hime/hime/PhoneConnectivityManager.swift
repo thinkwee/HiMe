@@ -86,12 +86,13 @@ class PhoneConnectivityManager: NSObject, ObservableObject {
         PendingStore.shared.append(healthPayloads)
         watchSamplesReceived += healthPayloads.count
 
-        let (appState, taskID): (String, UIBackgroundTaskIdentifier) = DispatchQueue.main.sync {
-            let s = UIApplication.shared.applicationState
-            let state = (s == .active) ? "foreground" : "background"
-            let tid = UIApplication.shared.beginBackgroundTask(withName: "WatchDataFlush") { }
-            return (state, tid)
-        }
+        // This method is @MainActor and is only invoked from `Task { @MainActor
+        // in … }`, so we are already on the main thread. UIApplication APIs are
+        // main-thread-only, so call them directly — wrapping them in
+        // `DispatchQueue.main.sync` from the main thread deadlocks the thread on
+        // itself, freezing the app every time the Watch delivers health data.
+        let appState = (UIApplication.shared.applicationState == .active) ? "foreground" : "background"
+        let taskID = UIApplication.shared.beginBackgroundTask(withName: "WatchDataFlush") { }
 
         HealthKitManager.bgLog("📱 WC-RECV: \(healthPayloads.count) samples from Watch (appState=\(appState), pending=\(PendingStore.shared.count))")
 

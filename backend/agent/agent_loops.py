@@ -1050,7 +1050,11 @@ class AgentLoopsMixin:
         await self._emit({"type": "quick_analysis_start", "timestamp": ts_now()})
         try:
             return await self._run_quick_analysis_inner()
-        except (asyncio.CancelledError, Exception) as exc:
+        except asyncio.CancelledError:
+            # Never swallow cancellation — re-raise so the caller's wait_for
+            # timeout and agent shutdown can tear this task down cleanly.
+            raise
+        except Exception as exc:
             logger.warning("Quick analysis interrupted: %s", type(exc).__name__)
             return {"state": "neutral", "message": "Analysis interrupted. Try again later."}
         finally:
@@ -1246,6 +1250,17 @@ class AgentLoopsMixin:
                 preamble += f"\n[{language_directive(sample, settings.DEFAULT_USER_LANGUAGE)}]"
             except Exception as exc:
                 logger.debug("language inference skipped: %s", exc)
+            # Proactive runs have no human in the loop to catch confabulation.
+            # If the data for this period is missing/empty/insufficient, the
+            # agent must say so plainly — never fabricate values and never
+            # recycle figures from an earlier report to fill the gap.
+            preamble += (
+                "\n[Honesty: if the data needed for this report is missing, "
+                "empty, or insufficient for the requested period, state that "
+                "honestly in your findings. Do NOT invent numbers and do NOT "
+                "reuse or rephrase data from a previous report to fill gaps. "
+                "Absence of data is itself a valid, reportable finding.]"
+            )
         messages: list[dict] = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"{preamble}\n{goal}"},
@@ -1742,11 +1757,16 @@ class AgentLoopsMixin:
                 finished = True
                 break
 
-            # --- Add assistant message with proper tool_calls structure ---
-            # Strip meta markers (e.g. "[Replied at ...]") the LLM mimics
-            chat_messages.append(_build_assistant_msg(_strip_meta_markers(text), tool_calls, sig))
-
-            # Merge multiple reply_user calls in the same batch
+            # Merge multiple reply_user calls in the same batch. This MUST run
+            # before we record the assistant message: the assistant turn
+            # declares one tool_use id per call it contains, and the next LLM
+            # request requires exactly one tool_result per declared id. If we
+            # built the assistant message from the pre-merge calls (ids a, b)
+            # but only produced a single merged result (and dropped a/b), the
+            # next call would carry orphaned ids → provider 400 → the loop
+            # breaks and any analyze/manage results from this turn are silently
+            # discarded. Reuse the first reply call's id for the merged call so
+            # the declared ids and produced results reconcile.
             reply_calls = [tc for tc in tool_calls if tc.get("name") == "reply_user"]
             if len(reply_calls) > 1:
                 merged_parts: list[str] = []
@@ -1755,7 +1775,11 @@ class AgentLoopsMixin:
                     msg = args.get("message", "")
                     if msg:
                         merged_parts.append(msg)
-                merged_tc = {"name": "reply_user", "arguments": {"message": "\n\n".join(merged_parts)}}
+                merged_tc = {
+                    "name": "reply_user",
+                    "id": reply_calls[0].get("id", ""),
+                    "arguments": {"message": "\n\n".join(merged_parts)},
+                }
                 tool_calls = [tc for tc in tool_calls if tc.get("name") != "reply_user"] + [merged_tc]
 
             # Execution order: reply_user first (user sees ack immediately),
@@ -1763,6 +1787,12 @@ class AgentLoopsMixin:
             # finish_chat very last.
             _ORDER = {"reply_user": 0, "finish_chat": 99, "manage": 40, "analyze": 50}
             tool_calls.sort(key=lambda tc: _ORDER.get(tc.get("name", ""), 10))
+
+            # --- Add assistant message with proper tool_calls structure ---
+            # Built AFTER merge+sort so the declared tool_use ids exactly match
+            # the calls we execute and the tool_results we produce below.
+            # Strip meta markers (e.g. "[Replied at ...]") the LLM mimics.
+            chat_messages.append(_build_assistant_msg(_strip_meta_markers(text), tool_calls, sig))
 
             # --- Duplicate tool call detection ---
             call_sig = _hash_tool_calls(tool_calls)

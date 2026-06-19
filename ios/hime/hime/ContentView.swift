@@ -222,11 +222,26 @@ struct ContentView: View {
                 path = NavigationPath()
                 path.append(AppRoute.chat)
             case .report:
-                // Reports live inside the Dashboard tab; switch there and let
-                // `pendingReportId` drive the section + expand. Pop any pushed
-                // screen (e.g. Chat) so the Dashboard is actually visible.
+                // Reports live inside the Dashboard tab. First pop any pushed
+                // screen (e.g. the Chat view this "view full report" tap came
+                // from) so the TabView becomes frontmost, THEN switch to the
+                // Dashboard tab on a later runloop tick once the pop has settled.
+                //
+                // Why deferred: applied in the SAME state update as the pop, the
+                // PageTabViewStyle's underlying UIPageViewController — still
+                // covered by the popping Chat view — silently drops the
+                // selection change and stays on Hime Home (tab 2), so the user
+                // had to swipe several pages over to reach the report. Deferring
+                // until the pop settles lets the page controller honour the jump
+                // (without animation, so it's a clean cut, not a scroll through
+                // the Data tab). `pendingReportId` then drives the Reports
+                // section + row auto-expand once DashboardView appears.
                 path = NavigationPath()
-                selectedTab = 0
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    var tx = Transaction()
+                    tx.disablesAnimations = true
+                    withTransaction(tx) { selectedTab = 0 }
+                }
             }
             router.pendingRoute = nil
         }

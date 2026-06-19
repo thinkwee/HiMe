@@ -599,6 +599,13 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         if request.method == "OPTIONS" or path in self._PUBLIC_PATHS:
             return await call_next(request)
+        # The Feishu webhook lives under /api/ but authenticates inbound
+        # events with its own signature / verification token, not the API
+        # bearer token. Guarding it here would 401 every Feishu event and
+        # card-action callback (and the initial url_verification handshake)
+        # whenever API_AUTH_TOKEN is set. Exempt it — the gateway verifies it.
+        if path == getattr(settings, "FEISHU_WEBHOOK_PATH", "/api/feishu/webhook"):
+            return await call_next(request)
         # Only guard the API surface; static / docs are left alone.
         if not (path.startswith("/api/") or path.startswith("/ws/")):
             return await call_next(request)

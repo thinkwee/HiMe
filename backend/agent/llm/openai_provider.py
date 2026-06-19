@@ -295,11 +295,16 @@ class OpenAIProvider(BaseLLMProvider):
 
                 # Usage information (vLLM version) or thoughts tokens if available
                 if hasattr(chunk, 'choices') and choice and choice.delta:
-                    # Some models report thoughts separately
+                    # Some models stream a thoughts-token count in delta.model_extra.
+                    # Only adopt it when actually present — for standard OpenAI
+                    # backends model_extra is empty, and an unconditional assign
+                    # here would clobber the authoritative reasoning_tokens already
+                    # read from usage.completion_tokens_details back to None.
                     extra = getattr(choice.delta, "model_extra", {}) or {}
-                    thoughts_tokens = extra.get("thoughts_tokens") or extra.get("reasoning_tokens")
-                    if thoughts_tokens:
-                        yield {"type": "token_usage", "thoughts_tokens": thoughts_tokens}
+                    _tt = extra.get("thoughts_tokens") or extra.get("reasoning_tokens")
+                    if _tt:
+                        thoughts_tokens = _tt
+                        yield {"type": "token_usage", "thoughts_tokens": _tt}
 
             # Fallback: estimate thoughts_tokens from reasoning text when API doesn't provide it
             # (vLLM/GLM may not include completion_tokens_details in usage)

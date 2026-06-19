@@ -31,20 +31,28 @@ def truncate_result(result: dict, tool_name: str) -> dict:
 
 
 def _truncate_code_result(result: dict) -> dict:
-    """Code tool: keep head + tail of output, mark omission."""
-    output = result.get("output", "")
-    if len(output) <= MAX_RESULT_CHARS:
-        return result
+    """Code tool: keep head + tail of large text fields, mark omission.
 
-    third = MAX_RESULT_CHARS // 3
-    head = output[:third]
-    tail = output[-third:]
-    omitted = len(output) - len(head) - len(tail)
-
+    A failed code run returns its payload in ``error`` with an empty
+    ``output`` (see code_tool), so truncating only ``output`` would let a
+    huge traceback / DataFrame repr in ``error`` blow the context window —
+    exactly what this module exists to prevent. Cap both fields.
+    """
     result = dict(result)
-    result["output"] = f"{head}\n\n... [{omitted} characters omitted] ...\n\n{tail}"
-    result["truncated"] = True
-    result["original_length"] = len(output)
+    third = MAX_RESULT_CHARS // 3
+    for field in ("output", "error"):
+        text = result.get(field, "")
+        if isinstance(text, str) and len(text) > MAX_RESULT_CHARS:
+            head = text[:third]
+            tail = text[-third:]
+            omitted = len(text) - len(head) - len(tail)
+            result[field] = f"{head}\n\n... [{omitted} characters omitted] ...\n\n{tail}"
+            result["truncated"] = True
+            result.setdefault("original_length", len(text))
+
+    # Safety net: if several fields combined still overflow, hard-cap.
+    if len(json.dumps(result, ensure_ascii=False, default=str)) > MAX_RESULT_CHARS:
+        return _generic_truncate(result, json.dumps(result, ensure_ascii=False, default=str))
     return result
 
 

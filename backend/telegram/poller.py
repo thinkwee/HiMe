@@ -58,8 +58,12 @@ class TelegramPoller:
         self._offset: int = 0
         self._running = False
         self._client: httpx.AsyncClient | None = None
-        # Simple deduplication: remember the last N message IDs
-        self._seen_ids: set = set()
+        # Simple deduplication: remember the last N message IDs. Use an
+        # insertion-ordered dict (not a set) so the "keep most recent half"
+        # trim below actually evicts the OLDEST keys — set iteration order is
+        # hash-based, so trimming a set can drop the newest keys and let a
+        # re-delivered update be processed (and answered) twice.
+        self._seen_ids: dict[str, None] = {}
         self._MAX_SEEN = 500
 
     # ------------------------------------------------------------------
@@ -142,6 +146,18 @@ class TelegramPoller:
         # Handle callback queries (inline keyboard button presses)
         callback_query = update.get("callback_query")
         if callback_query and self._on_callback_query:
+            # Default-deny applies to button callbacks too — they bypass the
+            # message-branch allowlist check below, and the handler surfaces
+            # the user's private evidence trail. Reject callbacks from chats
+            # that aren't whitelisted.
+            cb_chat_id = str(
+                (callback_query.get("message") or {}).get("chat", {}).get("id", "")
+            )
+            if self._allowed_chat_ids is not None and cb_chat_id not in self._allowed_chat_ids:
+                logger.warning(
+                    "Telegram: rejecting callback from non-whitelisted chat %s", cb_chat_id,
+                )
+                return
             try:
                 await self._on_callback_query(callback_query)
             except Exception as exc:
@@ -176,11 +192,11 @@ class TelegramPoller:
         dedup_key = f"{chat_id}:{message_id}"
         if dedup_key in self._seen_ids:
             return
-        self._seen_ids.add(dedup_key)
+        self._seen_ids[dedup_key] = None
         if len(self._seen_ids) > self._MAX_SEEN:
-            # Trim — keep the most recent half
-            to_remove = list(self._seen_ids)[: self._MAX_SEEN // 2]
-            self._seen_ids -= set(to_remove)
+            # Trim the oldest half (dict preserves insertion order)
+            for _k in list(self._seen_ids)[: self._MAX_SEEN // 2]:
+                del self._seen_ids[_k]
 
         # Build envelope
         sender = msg.get("from", {})

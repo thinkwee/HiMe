@@ -150,6 +150,19 @@ async def _start_agent_background(
         _agent_info = await _start_agent_internal(body, _progress, event_queue=event_queue)
 
         async with startup_lock:
+            # The frontend connects the monitor WS during startup to watch
+            # progress; that connect lazily attaches an EventHub + fan-out pump
+            # to the *placeholder* dict (keyed on the same event_queue). If we
+            # replace the dict wholesale we'd drop those keys, orphan the pump
+            # (it stays alive because the uid is still in active_agents) and a
+            # later connect would spawn a *second* pump competing on the same
+            # queue — the exact split-stream bug EventHub exists to prevent.
+            # Carry the live hub/pump across the swap.
+            _placeholder = active_agents.get(body.user_id)
+            if _placeholder:
+                for _k in ("event_hub", "fanout_task"):
+                    if _placeholder.get(_k) is not None:
+                        _agent_info[_k] = _placeholder[_k]
             active_agents[body.user_id] = _agent_info
 
         await _save_last_config(body)
@@ -583,7 +596,7 @@ async def stop_autonomous_agent(request: Request, user_id: str = Query("LiveUser
             if info.get("agent"):
                 info["agent"].stop()
 
-            for key in ("task",):  # removed ingest_task from auto-cancel
+            for key in ("task", "fanout_task"):  # removed ingest_task from auto-cancel
                 t: asyncio.Task | None = info.get(key)
                 if t is None:
                     continue
@@ -888,7 +901,7 @@ async def shutdown_agents() -> None:
                 info["agent"].stop()
             if info.get("data_store"):
                 info["data_store"].stop_ingestion()
-            for key in ("task", "ingest_task"):
+            for key in ("task", "ingest_task", "fanout_task"):
                 t = info.get(key)
                 if t:
                     t.cancel()

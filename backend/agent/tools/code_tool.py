@@ -150,13 +150,18 @@ class CodeTool(BaseTool):
             try:
                 import sqlite3 as _sq
                 health_db_path = str(self.data_store.db_file)
+                # Health data is strictly read-only (see CLAUDE.md). Open the
+                # connection in SQLite read-only URI mode so agent code can
+                # query but can never INSERT/UPDATE/DELETE the samples table —
+                # the `sql` tool enforces this with an authorizer, and the
+                # code tool must offer the same guarantee.
                 shell.user_ns["health_db"] = _sq.connect(
-                    health_db_path, check_same_thread=False
+                    f"file:{health_db_path}?mode=ro", uri=True, check_same_thread=False
                 )
                 shell.user_ns["memory_db"] = _sq.connect(
                     str(self.memory_db_file), check_same_thread=False
                 )
-                logger.info("Code tool: health_db and memory_db injected")
+                logger.info("Code tool: health_db (read-only) and memory_db injected")
             except Exception as exc:
                 logger.warning("Code tool: failed to inject DB connections: %s", exc)
 

@@ -221,6 +221,18 @@ class FeishuGateway(BaseGateway):
                 logger.warning("Feishu card action: no chat_id available, cannot reply")
                 return None
 
+            # Default-deny also applies here. Card actions arrive on a separate
+            # webhook that does NOT pass through the inbound-message allowlist
+            # check in the transport, and the chat_id is taken from the
+            # (attacker-controllable) callback payload. Without this gate, a
+            # crafted card action could exfiltrate the user's private evidence
+            # trail (health-data SQL results) to an arbitrary chat.
+            if self.allowed_chat_ids is not None and chat_id not in self.allowed_chat_ids:
+                logger.warning(
+                    "Feishu card action: rejecting non-allowlisted chat_id=%s", chat_id,
+                )
+                return None
+
             verifier = self._get_fact_verifier()
             evidence = await asyncio.to_thread(verifier.get_evidence, msg_hash)
             if not evidence:

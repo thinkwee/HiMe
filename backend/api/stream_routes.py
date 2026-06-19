@@ -7,6 +7,7 @@ import logging
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from ..config import settings
 from ..ios_gateway.connections import ios_connections
 from ..services.connection_manager import agent_monitor_manager, data_stream_manager
 from ..services.streaming_service import DataStreamingService
@@ -17,6 +18,28 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/stream", tags=["streaming"])
 
 
+def _ws_token_ok(websocket: WebSocket) -> bool:
+    """Validate the bearer token for a WebSocket handshake.
+
+    ``BearerAuthMiddleware`` subclasses Starlette's ``BaseHTTPMiddleware``,
+    whose ``__call__`` short-circuits every non-``http`` ASGI scope — so it
+    never runs for ``websocket`` connections. WS routes must therefore enforce
+    the token themselves or they are wide open whenever ``API_AUTH_TOKEN`` is
+    set. Mirrors the middleware: no token configured → open; otherwise accept
+    it from ``?token=`` (browsers can't set headers on a WS handshake) or an
+    ``Authorization: Bearer`` header.
+    """
+    token = settings.API_AUTH_TOKEN
+    if not token:
+        return True
+    provided: str | None = websocket.query_params.get("token")
+    if not provided:
+        auth = websocket.headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            provided = auth.split(" ", 1)[1].strip()
+    return provided == token
+
+
 @router.websocket("/data")
 async def stream_data(websocket: WebSocket):
     """
@@ -25,6 +48,9 @@ async def stream_data(websocket: WebSocket):
     Reads configuration from app state and streams data.
     """
     logger.info("=== WebSocket connection attempt ===")
+    if not _ws_token_ok(websocket):
+        await websocket.close(code=1008)  # policy violation
+        return
     await data_stream_manager.connect(websocket)
 
     try:
@@ -66,6 +92,9 @@ async def monitor_autonomous_agent(websocket: WebSocket, user_id: str):
     Streams agent events (code execution, results, errors) and status updates.
     If WebSocket disconnects, agent continues running.
     """
+    if not _ws_token_ok(websocket):
+        await websocket.close(code=1008)  # policy violation
+        return
     await agent_monitor_manager.connect(websocket)
 
     # Track iOS app presence (drives the WS-vs-APNs delivery decision in
