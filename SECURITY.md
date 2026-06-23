@@ -46,3 +46,5 @@ HiMe processes sensitive personal health data and runs an autonomous LLM agent t
 HiMe is designed to be self-hosted. By default it stores all health data, agent memory, and chat history (including the in-app iOS transcript in the memory DB) locally on the operator's machine. The platform does not phone home. Optional IM gateways (Telegram, Feishu, WeChat) route messages through those providers' infrastructure. Optional APNs push sends notification metadata to Apple's servers when configured.
 
 If you intend to expose HiMe beyond `localhost`, you **must** configure authentication (`API_AUTH_TOKEN`) and tighten `CORS_ORIGINS`. See `docs/DEPLOYMENT.md` for guidance.
+
+The agent's `code` tool executes agent-written Python in-process by default (`CODE_TOOL_DOCKER_SANDBOX=false`). This is acceptable only because the messaging gateways are default-deny and the deployment is single-user — i.e. only the operator can drive the agent. If you widen that trust boundary (allowlist additional chats, share the endpoint, or feed in untrusted data), set `CODE_TOOL_DOCKER_SANDBOX=true` to isolate code execution in a sandboxed container.

@@ -64,6 +64,7 @@ Mostly defer to [`docs/DEPLOYMENT.md`](DEPLOYMENT.md), but the critical steps ar
 2. Add your public origin to `CORS_ORIGINS=`.
 3. Reverse-proxy 8000 + 8765 behind nginx/Caddy with TLS — do NOT expose backend ports directly.
 4. Configure the iOS app with the same `API_AUTH_TOKEN` in Settings → Auth Token.
+5. Set `CODE_TOOL_DOCKER_SANDBOX=true` once the agent is reachable by anyone other than you. The `code` tool runs agent-written Python **in-process** by default (no import sandbox) — acceptable for a single-user, default-deny deployment where only you can message the agent, but a code-execution risk the moment the trust boundary widens (extra allowlisted chats, a shared/public endpoint, or untrusted data that could carry prompt injection). The Docker sandbox isolates execution, at the cost of the persistent-notebook session.
 
 Full nginx + Caddy examples: [`docs/DEPLOYMENT.md`](DEPLOYMENT.md).
 

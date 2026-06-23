@@ -30,7 +30,7 @@ const NAV_ITEMS = [
 ]
 
 // -----------------------------------------------------------------------
-// Persistent views — all four pages stay mounted, only visibility toggles.
+// Persistent views — all pages stay mounted, only visibility toggles.
 // Prevents WebSocket/stream/state loss when switching pages.
 // -----------------------------------------------------------------------
 
