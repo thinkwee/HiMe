@@ -10,6 +10,8 @@
 #   ./data     — health DBs (SQLite)
 #   ./memory   — agent memory DBs, state JSON, last config
 #   ./logs     — backend / watch exporter logs
+#   ./prompts  — agent prompt files (editable; survives rebuilds)
+#   ./skills   — analysis-skill playbooks + enable/disable state
 #
 # These dirs are mounted into the backend container so your data survives
 # container restarts and lives on the host filesystem.
@@ -34,6 +36,7 @@ services:
       - ./memory:/app/memory
       - ./logs:/app/logs
       - ./prompts:/app/prompts
+      - ./skills:/app/skills
       - watch-data:/app/ios/Server
     ports:
       - "8000:8000"

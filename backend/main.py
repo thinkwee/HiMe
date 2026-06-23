@@ -584,9 +584,11 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
       - GET /health        (health check)
       - OPTIONS /*         (CORS preflight)
 
-    WebSocket connections accept the token via either the
-    ``Authorization`` header or a ``?token=...`` query string parameter,
-    since browsers can't set custom headers on WebSocket handshakes.
+    The token may arrive via the ``Authorization: Bearer`` header or, for
+    header-less clients (e.g. an ``<img>`` tag loading an authed ``/api/``
+    URL), a ``?token=...`` query string parameter. WebSocket handshakes are
+    authenticated separately in the stream routes (``_ws_token_ok``), since
+    Starlette's ``BaseHTTPMiddleware`` never runs for ``websocket`` scopes.
     """
 
     _PUBLIC_PATHS = {"/", "/health"}
@@ -607,11 +609,12 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         if path == getattr(settings, "FEISHU_WEBHOOK_PATH", "/api/feishu/webhook"):
             return await call_next(request)
         # Only guard the API surface; static / docs are left alone.
-        if not (path.startswith("/api/") or path.startswith("/ws/")):
+        if not path.startswith("/api/"):
             return await call_next(request)
 
-        # WebSocket upgrade handshakes go through HTTP middleware too.
-        # Accept the token from the query string for browser compatibility.
+        # Accept the token from the Authorization header, or from a ?token=
+        # query param for header-less clients (e.g. an <img>/media tag that
+        # loads an authed /api/ URL directly and can't set custom headers).
         provided: str | None = None
         auth_header = request.headers.get("authorization")
         if auth_header and auth_header.lower().startswith("bearer "):
