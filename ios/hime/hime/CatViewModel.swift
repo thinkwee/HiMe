@@ -1141,7 +1141,6 @@ class CatViewModel: ObservableObject {
         // Cat rolls onto back, paws in air, lazily sips tea while lying down
         // ══════════════════════════════════════════════════════
         case .relaxed:
-            let sx = catX.f, sy = catY.f
             configSprings(stiffness: 80, damping: 16)
             costume = .sunglasses
             eyeShape = .happy; mouthShape = .smile; tailSpeed = 2.0; tailAmplitude = 0.6
