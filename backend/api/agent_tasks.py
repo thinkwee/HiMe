@@ -3,7 +3,9 @@ Scheduled task CRUD endpoints, trigger rules CRUD, and manual analysis trigger.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import sqlite3
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -45,17 +47,20 @@ async def list_scheduled_tasks(user_id: str):
     memory = _get_or_create_memory(user_id)
     if not memory:
         return {"success": True, "tasks": [], "timezone": settings.TIMEZONE}
-    try:
-        import sqlite3
+    def _query() -> list[dict]:
         with sqlite3.connect(str(memory.db_file), timeout=5) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT id, cron_expr, prompt_goal, status, last_run_at, created_at "
                 "FROM scheduled_tasks WHERE status != 'deleted' ORDER BY id"
             ).fetchall()
+        return [dict(r) for r in rows]
+
+    try:
+        tasks = await asyncio.to_thread(_query)
         return {
             "success": True,
-            "tasks": [dict(r) for r in rows],
+            "tasks": tasks,
             "timezone": settings.TIMEZONE,
         }
     except Exception as e:
@@ -78,15 +83,18 @@ async def create_scheduled_task(user_id: str, body: ScheduledTaskCreate):
         _croniter.croniter(body.cron_expr)
     except Exception:
         raise HTTPException(status_code=400, detail=f"Invalid cron expression: {body.cron_expr}")
-    try:
-        import sqlite3
+    def _insert() -> int:
         with sqlite3.connect(str(memory.db_file), timeout=5) as conn:
             cur = conn.execute(
                 "INSERT INTO scheduled_tasks (cron_expr, prompt_goal, status) VALUES (?, ?, 'active')",
                 (body.cron_expr, body.prompt_goal),
             )
             conn.commit()
-            return {"success": True, "id": cur.lastrowid}
+            return cur.lastrowid
+
+    try:
+        new_id = await asyncio.to_thread(_insert)
+        return {"success": True, "id": new_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -122,14 +130,22 @@ async def update_scheduled_task(user_id: str, task_id: int, body: ScheduledTaskU
     if not updates:
         return {"success": True, "message": "Nothing to update"}
     params.append(task_id)
-    try:
-        import sqlite3
+
+    def _update() -> int:
         with sqlite3.connect(str(memory.db_file), timeout=5) as conn:
-            conn.execute(f"UPDATE scheduled_tasks SET {', '.join(updates)} WHERE id = ?", params)
+            cur = conn.execute(
+                f"UPDATE scheduled_tasks SET {', '.join(updates)} WHERE id = ?", params
+            )
             conn.commit()
-        return {"success": True}
+            return cur.rowcount
+
+    try:
+        rowcount = await asyncio.to_thread(_update)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    if rowcount == 0:
+        raise HTTPException(status_code=404, detail=f"Scheduled task {task_id} not found")
+    return {"success": True}
 
 
 # ---------------------------------------------------------------------------
@@ -187,14 +203,16 @@ async def list_trigger_rules(user_id: str):
     memory = _get_or_create_memory(user_id)
     if not memory:
         return {"success": True, "rules": []}
-    try:
-        import sqlite3
+    def _query() -> list[dict]:
         with sqlite3.connect(str(memory.db_file), timeout=5) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT * FROM trigger_rules WHERE status != 'deleted' ORDER BY id"
             ).fetchall()
-        return {"success": True, "rules": [dict(r) for r in rows]}
+        return [dict(r) for r in rows]
+
+    try:
+        return {"success": True, "rules": await asyncio.to_thread(_query)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -210,8 +228,7 @@ async def create_trigger_rule(user_id: str, body: TriggerRuleCreate):
             status_code=400,
             detail=f"Invalid condition '{body.condition}'. Must be one of: {sorted(_VALID_CONDITIONS)}",
         )
-    try:
-        import sqlite3
+    def _insert() -> int:
         with sqlite3.connect(str(memory.db_file), timeout=5) as conn:
             cur = conn.execute(
                 "INSERT INTO trigger_rules (name, feature_type, condition, threshold, window_minutes, cooldown_minutes, prompt_goal) "
@@ -220,7 +237,10 @@ async def create_trigger_rule(user_id: str, body: TriggerRuleCreate):
                  body.window_minutes, body.cooldown_minutes, body.prompt_goal),
             )
             conn.commit()
-            return {"success": True, "id": cur.lastrowid}
+            return cur.lastrowid
+
+    try:
+        return {"success": True, "id": await asyncio.to_thread(_insert)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -250,11 +270,19 @@ async def update_trigger_rule(user_id: str, rule_id: int, body: TriggerRuleUpdat
     if not updates:
         return {"success": True, "message": "Nothing to update"}
     params.append(rule_id)
-    try:
-        import sqlite3
+
+    def _update() -> int:
         with sqlite3.connect(str(memory.db_file), timeout=5) as conn:
-            conn.execute(f"UPDATE trigger_rules SET {', '.join(updates)} WHERE id = ?", params)
+            cur = conn.execute(
+                f"UPDATE trigger_rules SET {', '.join(updates)} WHERE id = ?", params
+            )
             conn.commit()
-        return {"success": True}
+            return cur.rowcount
+
+    try:
+        rowcount = await asyncio.to_thread(_update)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    if rowcount == 0:
+        raise HTTPException(status_code=404, detail=f"Trigger rule {rule_id} not found")
+    return {"success": True}

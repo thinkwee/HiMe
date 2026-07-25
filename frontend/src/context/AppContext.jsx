@@ -13,6 +13,7 @@
  */
 import { createContext, useCallback, useContext, useEffect, useReducer, useRef } from 'react'
 import { api } from '../lib/api'
+import { parseBackendDate } from '../lib/utils'
 
 // -----------------------------------------------------------------------
 // Shape
@@ -37,6 +38,39 @@ const initialState = {
 }
 
 // -----------------------------------------------------------------------
+// Historical buffer limits
+// -----------------------------------------------------------------------
+// The stream appends live batches forever, so without a bound the buffer
+// grows all day. Nothing older than the widest selectable window (1 month)
+// can ever be rendered, so those records are dropped. Trimming only kicks in
+// past MAX and cuts down to TARGET so the cost is amortised across batches.
+
+const HISTORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
+const HISTORY_MAX_RECORDS = 100000
+const HISTORY_TARGET_RECORDS = 80000
+
+function _trimHistorical(records) {
+  if (records.length <= HISTORY_MAX_RECORDS) return records
+  const tsOf = (r) => (r && r.date ? parseBackendDate(r.date).getTime() : NaN)
+  let maxTs = null
+  for (const r of records) {
+    const ts = tsOf(r)
+    if (!isNaN(ts) && (maxTs === null || ts > maxTs)) maxTs = ts
+  }
+  let trimmed = records
+  if (maxTs !== null) {
+    const cutoff = maxTs - HISTORY_RETENTION_MS
+    trimmed = records.filter((r) => {
+      const ts = tsOf(r)
+      return isNaN(ts) || ts >= cutoff
+    })
+  }
+  return trimmed.length > HISTORY_TARGET_RECORDS
+    ? trimmed.slice(trimmed.length - HISTORY_TARGET_RECORDS)
+    : trimmed
+}
+
+// -----------------------------------------------------------------------
 // Reducer
 // -----------------------------------------------------------------------
 
@@ -57,7 +91,7 @@ function reducer(state, action) {
         ...state,
         streaming: {
           ...state.streaming,
-          historicalData: [...state.streaming.historicalData, ...action.payload],
+          historicalData: _trimHistorical([...state.streaming.historicalData, ...action.payload]),
         },
       }
     default:
@@ -113,7 +147,7 @@ export function AppProvider({ children }) {
 
       // Close any existing WebSocket before starting a new one
       if (wsRef.current) {
-        try { wsRef.current.close() } catch (_) {}
+        try { wsRef.current.close() } catch (err) { console.error('stream close failed:', err) }
         wsRef.current = null
       }
 
@@ -147,19 +181,28 @@ export function AppProvider({ children }) {
               dispatch({ type: 'APPEND_HISTORICAL', payload: data.batch.data })
             }
           } else if (data.type === 'stream_complete' || data.type === 'error') {
+            // The stream is finished — don't auto-reconnect, otherwise the
+            // reset below is immediately undone by a fresh startStream().
+            stoppedRef.current = true
             websocket.close()
             dispatch({ type: 'SET_STREAMING', payload: { isStreaming: false } })
             Promise.resolve(api.setStreamConfig(false)).catch(err => console.error('stream config reset failed:', err))
             if (data.type === 'error') console.error(`Stream error: ${data.error}`)
           }
-        } catch (_) {}
+        } catch (err) {
+          console.error('Failed to parse stream message:', err)
+        }
       }
 
       websocket.onerror = () => {
+        if (wsRef.current !== websocket) return
         dispatch({ type: 'SET_STREAMING', payload: { isStreaming: false } })
       }
 
       websocket.onclose = () => {
+        // close() fires asynchronously: a socket replaced by a newer one must
+        // not clear the live ref, flip isStreaming or schedule a reconnect.
+        if (wsRef.current !== websocket) return
         wsRef.current = null
         dispatch({ type: 'SET_STREAMING', payload: { isStreaming: false } })
         // Auto-reconnect unless intentionally stopped
@@ -175,7 +218,9 @@ export function AppProvider({ children }) {
   }, [_scheduleReconnect])
 
   // Keep ref in sync so _scheduleReconnect can call the latest startStream
-  startStreamRef.current = startStream
+  useEffect(() => {
+    startStreamRef.current = startStream
+  }, [startStream])
 
   /** Stop Dashboard data stream. */
   const stopStream = useCallback(() => {
@@ -187,7 +232,9 @@ export function AppProvider({ children }) {
     if (wsRef.current) {
       try {
         wsRef.current.close()
-      } catch (_) {}
+      } catch (err) {
+        console.error('stream close failed:', err)
+      }
       wsRef.current = null
     }
     dispatch({ type: 'SET_STREAMING', payload: { isStreaming: false } })

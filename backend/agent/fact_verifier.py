@@ -157,6 +157,20 @@ class FactVerifier:
         """Ensure message_hash has a UNIQUE index for INSERT OR REPLACE."""
         try:
             with sqlite3.connect(str(self.memory_db_file), timeout=10) as conn:
+                # A table that already carries duplicate hashes (written before
+                # the index existed) makes CREATE UNIQUE INDEX fail on every
+                # startup, silently degrading INSERT OR REPLACE into
+                # append-only growth. De-duplicate first, keeping the newest row.
+                try:
+                    conn.execute(
+                        "DELETE FROM message_evidence WHERE id NOT IN ("
+                        "  SELECT MAX(id) FROM message_evidence GROUP BY message_hash"
+                        ")"
+                    )
+                except sqlite3.Error as exc:
+                    # Table may not exist yet — the index creation below is
+                    # wrapped by the same handler.
+                    logger.debug("message_evidence de-duplication skipped: %s", exc)
                 conn.execute(
                     "CREATE UNIQUE INDEX IF NOT EXISTS idx_message_evidence_hash_unique "
                     "ON message_evidence(message_hash)"

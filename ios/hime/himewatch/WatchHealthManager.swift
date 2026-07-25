@@ -89,6 +89,13 @@ class WatchHealthManager: ObservableObject {
 
     private init() {}
 
+    /// Guards against duplicate observer registration. setup() runs from the
+    /// watch ContentView's `.task`, which re-fires whenever the view identity
+    /// resets; without this flag every rebuild attaches a second observer and
+    /// each HK change then fires two fetch+send pipelines. Mirrors the iPhone
+    /// side's `HealthKitManager.didRegisterObservers`.
+    private var didRegisterObservers = false
+
     func setup() async {
         guard HKHealthStore.isHealthDataAvailable() else { return }
 
@@ -117,22 +124,26 @@ class WatchHealthManager: ObservableObject {
             isAuthorized = false
         }
 
-        // Instantaneous metrics: observe + sync to server
-        for (f, id, unit) in instantMetrics {
-            registerObserver(feature: f, sampleType: HKQuantityType(id), unit: unit)
-        }
-        // Category metrics (sleep): observe + sync to server
-        for (f, id) in categoryMetrics {
-            registerObserver(feature: f, sampleType: HKCategoryType(id), unit: nil)
-        }
-        // Workouts: observe + sync to server
-        registerWorkoutObserver()
-        // Cumulative metrics: observe for local UI display only (no server sync)
-        for (_, id, _) in cumulativeMetrics {
-            registerLocalObserver(sampleType: HKQuantityType(id))
+        if !didRegisterObservers {
+            didRegisterObservers = true
+
+            // Instantaneous metrics: observe + sync to server
+            for (f, id, unit) in instantMetrics {
+                registerObserver(feature: f, sampleType: HKQuantityType(id), unit: unit)
+            }
+            // Category metrics (sleep): observe + sync to server
+            for (f, id) in categoryMetrics {
+                registerObserver(feature: f, sampleType: HKCategoryType(id), unit: nil)
+            }
+            // Workouts: observe + sync to server
+            registerWorkoutObserver()
+            // Cumulative metrics: observe for local UI display only (no server sync)
+            for (_, id, _) in cumulativeMetrics {
+                registerLocalObserver(sampleType: HKQuantityType(id))
+            }
         }
 
-        // Fetch initial today stats
+        // Fetch initial today stats (cheap, and safe to repeat on re-entry)
         await fetchTodayStats()
     }
 

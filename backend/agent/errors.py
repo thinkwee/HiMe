@@ -9,7 +9,19 @@ Provides:
 from __future__ import annotations
 
 import asyncio
+import re
 from enum import Enum
+
+# ``500`` must not match inside "Requested 1500 tokens" — anchor on word
+# boundaries when scraping a status code out of a free-form error message.
+_STATUS_CODE_RES = {
+    code: re.compile(rf"\b{code}\b")
+    for code in (429, 529, 503, 500, 502, 504, 400, 401, 403, 404)
+}
+
+# "max tokens", "max_tokens", "maximum output tokens", ... — a literal
+# substring test on the pattern ``max.*token`` can never match anything.
+_MAX_TOKEN_RE = re.compile(r"max\w*[\s_-]*(?:\w+[\s_-]+)?tokens?")
 
 
 class ErrorCategory(Enum):
@@ -83,8 +95,8 @@ def _extract_status_code(exc: Exception) -> int | None:
 
     # Parse from error message
     msg = str(exc)
-    for code in (429, 529, 503, 500, 502, 504, 400, 401, 403, 404):
-        if str(code) in msg:
+    for code, pattern in _STATUS_CODE_RES.items():
+        if pattern.search(msg):
             return code
 
     return None
@@ -161,7 +173,10 @@ def classify_error(error: Exception, context: str = "") -> AgentError:
         )
 
     # Context overflow
-    if any(kw in msg for kw in ("context", "prompt too long", "token limit", "max.*token")):
+    if (
+        any(kw in msg for kw in ("context", "prompt too long", "token limit"))
+        or _MAX_TOKEN_RE.search(msg)
+    ):
         if any(kw in msg for kw in ("long", "length", "exceed", "limit", "overflow")):
             return AgentError(
                 ErrorCategory.CONTEXT_OVERFLOW,

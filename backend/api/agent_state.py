@@ -29,31 +29,63 @@ startup_lock = asyncio.Lock()
 # Rate limiter (simple token-bucket, in-process)
 # ---------------------------------------------------------------------------
 _RATE_LIMIT_WINDOW_S = 60
-_RATE_LIMIT_MAX_CALLS = 5
-_rate_buckets: dict[str, list[float]] = defaultdict(list)
+# Per-endpoint budgets. Lifecycle mutations (/start, /stop) stay tight; chat is
+# a normal interactive action and must not share the lifecycle bucket, or a
+# chatty user locks themselves out of starting/stopping the agent.
+_RATE_LIMIT_MAX_CALLS = 5           # default (lifecycle endpoints)
+_RATE_LIMIT_CHAT_MAX_CALLS = 60     # /chat — one message per second sustained
+# Keyed by (client_ip, endpoint) so the budgets are genuinely independent.
+_rate_buckets: dict[tuple[str, str], list[float]] = defaultdict(list)
+# Hard cap on the number of tracked keys so a forged-IP flood can't grow the
+# dict without bound.
+_RATE_BUCKETS_MAX_KEYS = 10_000
 
 
-def _check_rate_limit(client_ip: str) -> None:
-    """Raise 429 if the client IP has exceeded the mutation rate limit."""
+def _check_rate_limit(client_ip: str, endpoint: str = "default",
+                      max_calls: int = _RATE_LIMIT_MAX_CALLS) -> None:
+    """Raise 429 if *client_ip* exceeded the budget for *endpoint*."""
     now = time.monotonic()
-    bucket = _rate_buckets[client_ip]
-    # Prune old timestamps
-    _rate_buckets[client_ip] = [t for t in bucket if now - t < _RATE_LIMIT_WINDOW_S]
-    if len(_rate_buckets[client_ip]) >= _RATE_LIMIT_MAX_CALLS:
+    key = (client_ip, endpoint)
+    bucket = [t for t in _rate_buckets[key] if now - t < _RATE_LIMIT_WINDOW_S]
+    if len(bucket) >= max_calls:
+        _rate_buckets[key] = bucket
         raise HTTPException(
             status_code=429,
             detail=(
-                f"Rate limit exceeded: max {_RATE_LIMIT_MAX_CALLS} calls "
-                f"per {_RATE_LIMIT_WINDOW_S}s per IP."
+                f"Rate limit exceeded: max {max_calls} calls "
+                f"per {_RATE_LIMIT_WINDOW_S}s per IP for this endpoint."
             ),
         )
-    _rate_buckets[client_ip].append(now)
+    bucket.append(now)
+    _rate_buckets[key] = bucket
+    _evict_stale_buckets(now)
+
+
+def _evict_stale_buckets(now: float) -> None:
+    """Drop buckets whose timestamps have all aged out of the window."""
+    if len(_rate_buckets) <= _RATE_BUCKETS_MAX_KEYS // 2:
+        return
+    for k in [k for k, v in _rate_buckets.items()
+              if not v or now - v[-1] >= _RATE_LIMIT_WINDOW_S]:
+        _rate_buckets.pop(k, None)
+    if len(_rate_buckets) > _RATE_BUCKETS_MAX_KEYS:
+        # Still oversized (a burst inside one window) — start over rather than
+        # let a forged-IP flood consume unbounded memory.
+        _rate_buckets.clear()
 
 
 def _client_ip(request) -> str:
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    """Best-effort client IP.
+
+    ``X-Forwarded-For`` is attacker-controlled unless a reverse proxy rewrites
+    it, so it is only honoured when the operator opts in via
+    ``TRUST_PROXY_HEADERS``. Otherwise a direct caller could rotate the header
+    per request and defeat the rate limiter.
+    """
+    if settings.TRUST_PROXY_HEADERS:
+        forwarded = request.headers.get("X-Forwarded-For")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
 
 

@@ -164,15 +164,18 @@ _check_docker_prereqs() {
 }
 
 _check_native_prereqs() {
+    # Supported floor is Python 3.10 — matches pyproject.toml's
+    # requires-python, the ruff target-version and the CI test matrix.
+    # (The Docker images ship 3.11.)
     command -v python3 >/dev/null 2>&1 \
-        || fail "python3 not found. Install Python 3.12+ (e.g. brew install python@3.12)."
+        || fail "python3 not found. Install Python 3.10+ (e.g. brew install python@3.12)."
     command -v npm >/dev/null 2>&1 \
         || fail "npm not found. Install Node.js 20+ (e.g. brew install node@20)."
     local py_major py_minor
     py_major="$(python3 -c 'import sys; print(sys.version_info[0])' 2>/dev/null || echo 0)"
     py_minor="$(python3 -c 'import sys; print(sys.version_info[1])' 2>/dev/null || echo 0)"
-    if [ "$py_major" -lt 3 ] || { [ "$py_major" -eq 3 ] && [ "$py_minor" -lt 12 ]; }; then
-        fail "Python 3.12+ required (found ${py_major}.${py_minor}). Upgrade Python."
+    if [ "$py_major" -lt 3 ] || { [ "$py_major" -eq 3 ] && [ "$py_minor" -lt 10 ]; }; then
+        fail "Python 3.10+ required (found ${py_major}.${py_minor}). Upgrade Python."
     fi
     ok "python3 (${py_major}.${py_minor}) and npm are ready."
 }
@@ -183,7 +186,7 @@ select_mode() {
 
 How do you want to run HiMe?
   1) Docker       (managed stack -- containers for backend/frontend/watch)
-  2) Native       (processes on host -- needs python3.12+ and node.js 20+)
+  2) Native       (processes on host -- needs python3.10+ and node.js 20+)
 MENU
     local sel
     while true; do
@@ -656,31 +659,39 @@ TIP
 }
 
 # ============================================================================
-# Step 6 — API auth token (optional, public-facing only)
+# Step 6 — API auth token (always generated)
 # ============================================================================
 gen_token() {
     if command -v openssl >/dev/null 2>&1; then
         openssl rand -hex 32
     else
-        head -c 32 /dev/urandom | xxd -p -c 32
+        # `od` is in coreutils and present everywhere; `xxd` ships with
+        # vim-common and is commonly absent on minimal Linux images.
+        head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
+        printf '\n'
     fi
 }
 
 collect_auth_token() {
     info "[7/10] API auth token"
-    local ans
-    read -r -p "Will this server be reachable from the public internet? (y/N): " ans || true
-    ans="${ans:-N}"
-    if [[ "$ans" =~ ^[Yy]$ ]]; then
-        local tok
-        tok="$(gen_token)"
-        wizard_set API_AUTH_TOKEN "$tok"
-        ok "Generated bearer token: $tok"
-        warn "SAVE THIS — you'll paste it into the iOS app's Auth Token field."
-    else
-        wizard_set API_AUTH_TOKEN ""
-        info "OK — local-only mode, no auth token."
-    fi
+    # Always generated — not a question any more. The backend (0.0.0.0:8000)
+    # and the watch exporter (0.0.0.0:8765) bind to every interface, so without
+    # a token any device on the same Wi-Fi can post fake health samples to
+    # /ingest and switch syncing off via /sync-control.
+    #
+    # This used to be opt-in because a token broke the Docker dashboard: the
+    # SPA only read it from the build-time VITE_API_AUTH_TOKEN, which no image
+    # build ever sets. The dashboard now asks for the token in the browser and
+    # keeps it in session/localStorage, so enabling auth by default is safe.
+    local tok
+    tok="$(gen_token)"
+    wizard_set API_AUTH_TOKEN "$tok"
+    ok "Generated bearer token:"
+    printf "    %s\n" "$tok"
+    warn "SAVE THIS — you will paste it into:"
+    warn "  1. the dashboard, the first time it asks for an API token, and"
+    warn "  2. the iOS app: Settings -> Auth Token."
+    warn "It is also kept in .env as API_AUTH_TOKEN if you lose it."
 }
 
 # ============================================================================
@@ -826,6 +837,8 @@ wait_for() {
     return 1
 }
 
+HEALTH_FAILED=""   # space-separated names of services that never came up
+
 health_checks() {
     info "[10/10] Waiting for services (up to 90s each)..."
     local auth_hdr="" tok
@@ -833,18 +846,21 @@ health_checks() {
     if [ -n "$tok" ]; then
         auth_hdr="Authorization: Bearer $tok"
     fi
-    wait_for "Watch"    "http://localhost:8765/ping" || true
-    wait_for "Backend"  "http://localhost:8000/health" "$auth_hdr" || true
-    wait_for "Frontend" "http://localhost:5173/" || true
+    # Record failures instead of swallowing them — the summary below must not
+    # claim "HiMe is running." when a container never became healthy.
+    wait_for "Watch"    "http://localhost:8765/ping"   || HEALTH_FAILED="$HEALTH_FAILED Watch"
+    wait_for "Backend"  "http://localhost:8000/health" "$auth_hdr" || HEALTH_FAILED="$HEALTH_FAILED Backend"
+    wait_for "Frontend" "http://localhost:5173/"       || HEALTH_FAILED="$HEALTH_FAILED Frontend"
 }
 
 # ============================================================================
 # Final summary
 # ============================================================================
 print_summary() {
-    local gw mode lan_ip lan_line
+    local gw mode lan_ip lan_line tok
     gw="$(wizard_get __GATEWAY_LABEL__ Telegram)"
     mode="$(wizard_get HIME_RUN_MODE docker)"
+    tok="$(wizard_get API_AUTH_TOKEN)"
     lan_ip="$(_detect_lan_ip || true)"
     if [ -n "$lan_ip" ]; then
         lan_line="Server Address: ${lan_ip}         <- this Mac's LAN IP (detected just now)"
@@ -852,20 +868,33 @@ print_summary() {
         lan_line="Server Address: 192.168.1.100    (couldn't auto-detect; run 'ipconfig getifaddr en0')"
     fi
     printf "\n"
-    printf "${GREEN}${BOLD}HiMe is running.${NC} (${mode} mode)\n\n"
+    if [ -n "${HEALTH_FAILED:-}" ]; then
+        printf "${YELLOW}${BOLD}HiMe started, but these services never responded:${NC}%s\n" "$HEALTH_FAILED"
+        printf "${YELLOW}Check 'docker compose logs' / './hime.sh logs' before continuing.${NC}\n\n"
+    else
+        printf "${GREEN}${BOLD}HiMe is running.${NC} (${mode} mode)\n\n"
+    fi
     cat <<EOF
   Dashboard:        http://localhost:5173
   Backend API:      http://localhost:8000
   Watch exporter:   http://localhost:8765/ping
 
+Your API token (also in .env as API_AUTH_TOKEN):
+  ${tok}
+  Every API call needs it -- the dashboard asks for it on first visit, and the
+  iOS app takes it under Settings -> Auth Token.
+
 Next steps:
   1) Open the dashboard: http://localhost:5173
+     -> paste the API token above when the dashboard asks for it
+        (tick "Remember on this device" to skip it next time).
      -> go to "Agent Monitor" -> click Start.
      (The provider/model selectors pre-fill from your .env -- just click Start.)
   2) Install the HiMe iOS app:
        https://apps.apple.com/app/id6762160735      (App Store)
        OR build from source -- see docs/INSTALL.md
-  3) Open the iOS app -> Settings -> "Server Address".
+  3) Open the iOS app -> Settings -> paste the API token into "Auth Token",
+     then fill in "Server Address".
      Enter a BARE HOST only -- the app adds scheme/port automatically
      (http on LAN, https on tunnel; ports 8000 for API, 8765 for watch):
        - iOS Simulator or Mac Catalyst (iPhone IS the host)

@@ -75,15 +75,26 @@ def upsert_device_token(
         )
 
 
-def list_device_tokens(user_id: str) -> list[dict]:
-    """Return active (non-revoked) device tokens for a user."""
+def list_device_tokens(user_id: str, environment: str | None = None) -> list[dict]:
+    """Return active (non-revoked) device tokens for a user.
+
+    ``environment`` filters to tokens registered against that APNs environment
+    ("sandbox" / "production"). The sender is bound to a single environment, so
+    pushing a debug-build sandbox token through the production client only ever
+    yields ``BadDeviceToken`` — noise on every send.
+    """
+    sql = (
+        "SELECT id, user_id, device_token, bundle_id, environment, created_at, last_seen_at "
+        "FROM device_tokens WHERE user_id = ? AND revoked_at IS NULL"
+    )
+    params: list = [user_id]
+    if environment:
+        # Case-insensitive: the value comes from the client's registration body.
+        sql += " AND LOWER(environment) = ?"
+        params.append(environment.lower())
+    sql += " ORDER BY created_at DESC"
     with _connect() as conn:
-        rows = conn.execute(
-            "SELECT id, user_id, device_token, bundle_id, environment, created_at, last_seen_at "
-            "FROM device_tokens WHERE user_id = ? AND revoked_at IS NULL "
-            "ORDER BY created_at DESC",
-            (user_id,),
-        ).fetchall()
+        rows = conn.execute(sql, tuple(params)).fetchall()
     return [dict(r) for r in rows]
 
 

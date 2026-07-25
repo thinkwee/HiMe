@@ -37,15 +37,135 @@
   }
 
   // ---------------- Network ----------------
+  //
+  // Personalised pages are agent-generated, so the HiMe dashboard embeds them
+  // in a `sandbox="allow-scripts"` iframe — WITHOUT `allow-same-origin`. That
+  // makes the page a genuinely opaque origin: it cannot reach `window.parent`,
+  // the app's localStorage, or any `/api/*` endpoint. The trade-off is that
+  // its OWN data endpoint becomes cross-origin too (`Origin: null`), so a
+  // direct fetch() is refused by CORS.
+  //
+  // To keep pages working without punching a hole in that isolation, every
+  // request goes over a postMessage bridge: the page asks its embedder for
+  // data, and the embedder — which pins the URL to *this page's* /data
+  // endpoint and refuses anything else — performs the fetch and posts the
+  // JSON back. The child never chooses a URL or an endpoint.
+  //
+  // Top-level contexts (the "open in new tab" link, the iOS WKWebView) are
+  // same-origin and keep using fetch() directly; the bridge is only engaged
+  // when the page is framed, and it falls back to a direct fetch if no
+  // embedder ever answers.
 
-  /** GET /api/personalised-pages/<pageId>/data with optional query params.
-   *  Returns parsed JSON. Throws on non-2xx. */
-  async function fetchData(pageId, params) {
-    let url = '/api/personalised-pages/' + encodeURIComponent(pageId) + '/data';
-    if (params && Object.keys(params).length) {
-      url += '?' + new URLSearchParams(params).toString();
+  var _bridge = {
+    // Framed at all? If so, assume a bridge until proven otherwise.
+    active: (function () {
+      try { return !!window.parent && window.parent !== window; }
+      catch (e) { return false; }
+    })(),
+    proven: false,          // an embedder has answered at least once
+    seq: 0,
+    pending: {},            // requestId -> {resolve, reject, timer}
+    timeoutMs: 10000
+  };
+
+  if (_bridge.active) {
+    window.addEventListener('message', function (ev) {
+      // Only the embedder may answer. The page's origin is opaque, so we can
+      // neither read nor check ev.origin — the source check is what matters.
+      if (ev.source !== window.parent) return;
+      var d = ev.data;
+      if (!d || d.type !== 'hime:data-response') return;
+      var p = _bridge.pending[d.requestId];
+      if (!p) return;
+      delete _bridge.pending[d.requestId];
+      clearTimeout(p.timer);
+      _bridge.proven = true;
+      if (d.ok) p.resolve(d.payload === undefined ? {} : d.payload);
+      else p.reject(new Error(d.error || ('HTTP ' + (d.status || '?'))));
+    });
+  }
+
+  /** Ask the embedder to run this page's /data request and return the JSON. */
+  function _bridgeRequest(req) {
+    return new Promise(function (resolve, reject) {
+      var id = 'hime-' + (++_bridge.seq) + '-' + Math.random().toString(36).slice(2, 8);
+      var timer = setTimeout(function () {
+        delete _bridge.pending[id];
+        if (_bridge.proven) {
+          reject(new Error('Request timed out'));
+          return;
+        }
+        // Nobody is listening — we are framed by something that is not the
+        // HiMe dashboard. Stop using the bridge and try the network directly
+        // so a same-origin embedder still works (and so an opaque-origin one
+        // surfaces the real network error instead of a silent timeout).
+        _bridge.active = false;
+        _directRequest(req).then(resolve, reject);
+      }, _bridge.timeoutMs);
+      _bridge.pending[id] = { resolve: resolve, reject: reject, timer: timer };
+      // targetOrigin '*': a sandboxed page cannot know its embedder's origin.
+      // Safe because the message carries no secrets — only a page id and the
+      // page's own query params / form body.
+      window.parent.postMessage({
+        type: 'hime:data-request',
+        requestId: id,
+        pageId: req.pageId,
+        method: req.method,
+        params: req.params || null,
+        body: req.body === undefined ? null : req.body
+      }, '*');
+    });
+  }
+
+  /**
+   * The API bearer token, if this page was itself loaded with one.
+   *
+   * Only ever non-empty on a TOP-LEVEL load (someone opened the page URL
+   * directly, which under API_AUTH_TOKEN means the URL had to carry ?token=).
+   * In that context the document already has the app's own origin and could
+   * read the token regardless, so forwarding it to the page's own /data call
+   * grants nothing new — it just stops the request 401ing.
+   *
+   * Inside the dashboard the page is a srcdoc document with no query string at
+   * all, so this is '' and nothing is ever appended. That is deliberate: the
+   * embedder holds the token and the bridge below never exposes it.
+   */
+  var _selfToken = (function () {
+    try {
+      if (window.parent && window.parent !== window) return '';  // framed: never
+      return new URLSearchParams(window.location.search).get('token') || '';
+    } catch (e) { return ''; }
+  })();
+
+  /** Append ?token= to a same-origin /data URL when we were given one. */
+  function _withToken(url) {
+    if (!_selfToken) return url;
+    return url + (url.indexOf('?') === -1 ? '?' : '&') + 'token=' + encodeURIComponent(_selfToken);
+  }
+
+  /** Same-origin path: talk to /data over the network ourselves. */
+  async function _directRequest(req) {
+    const url = '/api/personalised-pages/' + encodeURIComponent(req.pageId) + '/data';
+    if (req.method === 'POST') {
+      const resp = await fetch(_withToken(url), {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req.body || {})
+      });
+      let payload = null;
+      try { payload = await resp.json(); } catch (e) { payload = null; }
+      if (!resp.ok) {
+        const msg = (payload && (payload.detail || payload.error)) || ('HTTP ' + resp.status);
+        throw new Error(msg);
+      }
+      return payload || {};
     }
-    const resp = await fetch(url, { credentials: 'same-origin' });
+    let getUrl = url;
+    if (req.params && Object.keys(req.params).length) {
+      getUrl += '?' + new URLSearchParams(req.params).toString();
+    }
+    const resp = await fetch(_withToken(getUrl), { credentials: 'same-origin' });
     if (!resp.ok) {
       let msg = 'HTTP ' + resp.status;
       try { const j = await resp.json(); if (j && j.detail) msg = j.detail; } catch (e) {}
@@ -54,22 +174,20 @@
     return resp.json();
   }
 
+  /** Route one /data request over the bridge or straight to the network. */
+  function _request(req) {
+    return _bridge.active ? _bridgeRequest(req) : _directRequest(req);
+  }
+
+  /** GET /api/personalised-pages/<pageId>/data with optional query params.
+   *  Returns parsed JSON. Throws on non-2xx. */
+  function fetchData(pageId, params) {
+    return _request({ method: 'GET', pageId: pageId, params: params || null });
+  }
+
   /** POST a JSON body to the page's /data endpoint. */
-  async function postData(pageId, body) {
-    const url = '/api/personalised-pages/' + encodeURIComponent(pageId) + '/data';
-    const resp = await fetch(url, {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body || {})
-    });
-    let payload = null;
-    try { payload = await resp.json(); } catch (e) { payload = null; }
-    if (!resp.ok) {
-      const msg = (payload && (payload.detail || payload.error)) || ('HTTP ' + resp.status);
-      throw new Error(msg);
-    }
-    return payload || {};
+  function postData(pageId, body) {
+    return _request({ method: 'POST', pageId: pageId, body: body || {} });
   }
 
   // ---------------- Toast ----------------

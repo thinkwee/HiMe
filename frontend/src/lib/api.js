@@ -11,17 +11,116 @@
 const API_BASE = '/api'
 
 // -----------------------------------------------------------------------
-// Auth token (optional)
+// Auth token (optional) — resolved at RUNTIME, never baked into the bundle
 // -----------------------------------------------------------------------
-// Set VITE_API_AUTH_TOKEN in frontend/.env.local (gitignored) to match the
-// backend's API_AUTH_TOKEN. When set, every HTTP request and WebSocket
-// connection includes the Bearer token.
+// The backend enables bearer auth whenever API_AUTH_TOKEN is set. The token
+// is looked up on every single request, in this order:
+//
+//   1. sessionStorage  — what <AuthTokenPrompt> writes by default. Lives only
+//                        as long as the tab, so a shared/other-user browser
+//                        does not keep the secret around.
+//   2. localStorage    — only when the user ticked "remember on this device".
+//   3. VITE_API_AUTH_TOKEN — build-time fallback, kept so existing native /
+//                        dev setups (hime.sh writes frontend/.env.local) keep
+//                        working unchanged.
+//
+// Docker images are built once and shipped to everyone, so a build-time-only
+// token is both impossible to configure (no build arg) and wrong to use: the
+// bundle in dist/ is served to every browser that loads the dashboard.
 
-const AUTH_TOKEN = import.meta.env.VITE_API_AUTH_TOKEN || ''
+const TOKEN_STORAGE_KEY = 'hime.apiAuthToken'
+const BUILD_TIME_TOKEN = import.meta.env.VITE_API_AUTH_TOKEN || ''
+
+/** Storage accessor that survives Safari private mode / disabled storage. */
+function _store(kind) {
+  try {
+    const s = kind === 'local' ? window.localStorage : window.sessionStorage
+    // Touch the API so a throwing/absent implementation is caught here.
+    return s && typeof s.getItem === 'function' ? s : null
+  } catch (_) {
+    return null
+  }
+}
+
+function _read(kind) {
+  try {
+    return _store(kind)?.getItem(TOKEN_STORAGE_KEY) || ''
+  } catch (_) {
+    return ''
+  }
+}
+
+/** Current bearer token, or '' when auth is not configured. */
+export function getAuthToken() {
+  return _read('session') || _read('local') || BUILD_TIME_TOKEN
+}
+
+/**
+ * Persist a token for subsequent requests.
+ *
+ * @param {string} token           Raw token; blank clears the stored token.
+ * @param {object} [opts]
+ * @param {boolean} [opts.remember] true → localStorage (survives browser
+ *                                  restarts); false → sessionStorage (tab only).
+ */
+export function setAuthToken(token, { remember = false } = {}) {
+  const value = (token || '').trim()
+  // Always clear both stores first, otherwise a stale copy in the other one
+  // could win (or linger) after the user changes their mind.
+  for (const kind of ['session', 'local']) {
+    try {
+      _store(kind)?.removeItem(TOKEN_STORAGE_KEY)
+    } catch (_) { /* storage unavailable — nothing to clear */ }
+  }
+  if (!value) return
+  try {
+    _store(remember ? 'local' : 'session')?.setItem(TOKEN_STORAGE_KEY, value)
+  } catch (_) { /* quota / private mode — request will simply stay unauthed */ }
+}
+
+/** Forget any stored token (both stores). */
+export function clearAuthToken() {
+  setAuthToken('')
+}
+
+/**
+ * Reload the page after the token changed.
+ *
+ * Deliberately blunt: a reload re-runs every page's initial fetch and
+ * re-opens every WebSocket with the new token, so no per-page retry plumbing
+ * is needed. Kept in this module so it can be stubbed in tests.
+ */
+export function reloadForAuth() {
+  window.location.reload()
+}
+
+// --- 401/403 notification -------------------------------------------------
+// api.js has no UI, so it just broadcasts; <AuthTokenPrompt> subscribes and
+// asks the user for a token.
+
+const _authListeners = new Set()
+
+/** Subscribe to auth failures. Returns an unsubscribe function. */
+export function onAuthRequired(listener) {
+  _authListeners.add(listener)
+  return () => _authListeners.delete(listener)
+}
+
+function _noteAuthStatus(status) {
+  if (status !== 401 && status !== 403) return
+  for (const listener of Array.from(_authListeners)) {
+    try {
+      listener(status)
+    } catch (e) {
+      console.error('auth listener failed:', e)
+    }
+  }
+}
 
 function _authHeaders() {
   const h = {}
-  if (AUTH_TOKEN) h['Authorization'] = `Bearer ${AUTH_TOKEN}`
+  const token = getAuthToken()
+  if (token) h['Authorization'] = `Bearer ${token}`
   return h
 }
 
@@ -29,39 +128,56 @@ function _authHeaders() {
 // Generic fetch wrappers
 // -----------------------------------------------------------------------
 
-async function _get(path) {
-  const res = await fetch(`${API_BASE}${path}`, { headers: _authHeaders() })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) {
-    return { success: false, error: data.detail || data.error || `HTTP ${res.status}` }
+async function _get(path, options = {}) {
+  try {
+    const res = await fetch(`${API_BASE}${path}`, { headers: _authHeaders(), ...options })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      _noteAuthStatus(res.status)
+      return { success: false, error: data.detail || data.error || `HTTP ${res.status}` }
+    }
+    return data
+  } catch (e) {
+    // Network-level failure (backend down, request aborted). Honour the
+    // contract above: callers only ever have to inspect `success`.
+    return { success: false, error: e?.message || 'Network error' }
   }
-  return data
 }
 
 async function _put(path, body) {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json', ..._authHeaders() },
-    body: JSON.stringify(body),
-  })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) {
-    return { success: false, error: data.detail || data.error || `HTTP ${res.status}` }
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ..._authHeaders() },
+      body: JSON.stringify(body),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      _noteAuthStatus(res.status)
+      return { success: false, error: data.detail || data.error || `HTTP ${res.status}` }
+    }
+    return data
+  } catch (e) {
+    return { success: false, error: e?.message || 'Network error' }
   }
-  return data
 }
 
 async function _post(path, body) {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ..._authHeaders() },
-    body: JSON.stringify(body),
-  })
-  const data = await res.json().catch(() => ({}))
-  if (!res.ok) {
-    return { success: false, error: data.detail || data.error || `HTTP ${res.status}` }
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ..._authHeaders() },
+      body: JSON.stringify(body),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      _noteAuthStatus(res.status)
+      return { success: false, error: data.detail || data.error || `HTTP ${res.status}` }
+    }
+    return data
+  } catch (e) {
+    return { success: false, error: e?.message || 'Network error' }
   }
-  return data
 }
 
 // -----------------------------------------------------------------------
@@ -78,10 +194,13 @@ function _ws(path) {
     url = `${proto}//${window.location.host}${API_BASE}${path}`;
   }
   // Append auth token as query parameter for WebSocket (browsers can't set
-  // custom headers on WebSocket handshakes).
-  if (AUTH_TOKEN) {
+  // custom headers on WebSocket handshakes). Read at connect time, so a token
+  // entered in <AuthTokenPrompt> is picked up by every later connection —
+  // including the auto-reconnects of the data stream and agent monitor.
+  const token = getAuthToken()
+  if (token) {
     const sep = url.includes('?') ? '&' : '?'
-    url += `${sep}token=${encodeURIComponent(AUTH_TOKEN)}`
+    url += `${sep}token=${encodeURIComponent(token)}`
   }
   return new WebSocket(url);
 }
@@ -100,6 +219,9 @@ export const api = {
 
   /** Force-reload data reader (e.g. after updating files on disk) */
   reloadDataReader: () => _post('/data/reload', {}),
+
+  /** Total stored record count — { success, count }. Accepts an AbortSignal. */
+  getDataCount: (signal = null) => _get('/data/count', signal ? { signal } : {}),
 
   // ------------------------------------------------------------------ //
   // Participants & features
@@ -125,7 +247,10 @@ export const api = {
     // Sanitise NaN/Infinity that SQLite may emit before JSON.parse
     const text = (await res.text()).replace(/\bNaN\b|-?Infinity\b/g, 'null')
     const data = JSON.parse(text)
-    if (!res.ok) return { success: false, error: data.detail || data.error || `HTTP ${res.status}` }
+    if (!res.ok) {
+      _noteAuthStatus(res.status)
+      return { success: false, error: data.detail || data.error || `HTTP ${res.status}` }
+    }
     return data
   },
 
@@ -241,7 +366,10 @@ export const api = {
     fetch(`${API_BASE}/skills/${name}`, { method: 'DELETE', headers: _authHeaders() })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}))
-        if (!res.ok) return { success: false, error: data.detail || `HTTP ${res.status}` }
+        if (!res.ok) {
+          _noteAuthStatus(res.status)
+          return { success: false, error: data.detail || `HTTP ${res.status}` }
+        }
         return data
       }),
   setSkillState: (disabled) => _put('/skills/state', { disabled }),
@@ -252,11 +380,44 @@ export const api = {
 
   listPersonalisedPages: () => _get('/personalised-pages/list'),
 
+  /**
+   * Fetch a personalised page's HTML document.
+   *
+   * The dashboard renders these pages via `srcdoc` rather than pointing an
+   * `<iframe src>` at this URL. The endpoint is behind the API bearer token,
+   * and the only way to authenticate a frame navigation is `?token=` in the
+   * URL — which the sandboxed, agent-generated page could then read straight
+   * out of its own `location.search`. Fetching the markup here keeps the token
+   * in a request header the page never sees.
+   *
+   * Returns { success: true, html } or { success: false, status?, error }.
+   */
+  getPersonalisedPageHtml: (pageId) =>
+    fetch(`${API_BASE}/personalised-pages/${encodeURIComponent(pageId)}/`, {
+      headers: _authHeaders(),
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          _noteAuthStatus(res.status)
+          const data = await res.json().catch(() => ({}))
+          return {
+            success: false,
+            status: res.status,
+            error: data.detail || data.error || `HTTP ${res.status}`,
+          }
+        }
+        return { success: true, html: await res.text() }
+      })
+      .catch((e) => ({ success: false, error: e?.message || 'Network error' })),
+
   deletePersonalisedPage: (pageId) =>
     fetch(`${API_BASE}/personalised-pages/${pageId}`, { method: 'DELETE', headers: _authHeaders() })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}))
-        if (!res.ok) return { success: false, error: data.detail || `HTTP ${res.status}` }
+        if (!res.ok) {
+          _noteAuthStatus(res.status)
+          return { success: false, error: data.detail || `HTTP ${res.status}` }
+        }
         return data
       }),
 }

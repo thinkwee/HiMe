@@ -131,11 +131,14 @@ class IOSGateway(BaseGateway):
         now = time.monotonic()
         if now - self._last_apns_ts < _APNS_COALESCE_S:
             return
-        self._last_apns_ts = now
         try:
             await self._apns.send(self.user_id, title=_APP_NAME, body=body, data=data)
         except Exception as e:  # pragma: no cover — network/credential errors
             logger.warning("IOSGateway[user=%s]: APNs send failed: %s", self.user_id, e)
+        else:
+            # Only start the coalescing window on a send that actually went out —
+            # otherwise one failure silently suppresses the whole burst.
+            self._last_apns_ts = now
 
     # ------------------------------------------------------------------
     # Outbound messaging
@@ -151,7 +154,7 @@ class IOSGateway(BaseGateway):
     ) -> bool:
         target = chat_id or self.default_chat_id
         msg_hash = extract_message_hash(reply_markup)
-        await self._emit_to_stream({
+        delivered = await self._emit_to_stream({
             "type": "chat_reply",
             "content": text,
             "chat_id": target,
@@ -168,7 +171,10 @@ class IOSGateway(BaseGateway):
             body=(text or "")[:120],
             data={"chat_id": target, "message_hash": msg_hash},
         )
-        return True
+        # Report the real outcome: _emit_to_stream returns False when there is no
+        # active agent (e.g. mid supervisor-restart). Returning True regardless
+        # made callers believe a dropped message had been delivered.
+        return delivered
 
     async def send_photo(
         self,
@@ -190,7 +196,7 @@ class IOSGateway(BaseGateway):
                 self.last_image_id = image_id
         except Exception as e:  # pragma: no cover — defensive
             logger.warning("IOSGateway[user=%s]: image register failed: %s", self.user_id, e)
-        await self._emit_to_stream({
+        delivered = await self._emit_to_stream({
             "type": "chat_image",
             "image_id": image_id,
             "url": f"/api/agent/chat-image/{image_id}" if image_id else None,
@@ -203,7 +209,7 @@ class IOSGateway(BaseGateway):
             body=(caption or "📷 Image")[:120],
             data={"chat_id": target, "message_hash": msg_hash},
         )
-        return True
+        return delivered
 
     async def edit_message(
         self,

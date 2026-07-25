@@ -1,4 +1,4 @@
-"""InboxQueue — thread-safe async queue for inbound user messages.
+"""InboxQueue — async queue for inbound user messages.
 
 Every messaging gateway (Telegram, Feishu, ...) pushes ``MessageEnvelope``
 objects into a single shared queue when a user sends free-form text. The
@@ -21,8 +21,13 @@ _DEBOUNCE_WINDOW_S = 5.0  # merge messages within this window
 class InboxQueue:
     """Async queue bridging gateway user messages and the agent loop.
 
-    Thread-safe: ``push`` can be called from any gateway coroutine while
-    ``pop_all`` is called inside the agent's ``run_forever`` loop.
+    NOT thread-safe. It wraps ``asyncio.Queue``, which is only safe for
+    coroutines running on the same event loop: ``push`` may be awaited from any
+    gateway coroutine on the agent's loop while ``pop_all`` runs inside
+    ``run_forever``. A gateway that receives messages on a *different* thread
+    must hand them over with
+    ``asyncio.run_coroutine_threadsafe(inbox.push(env), loop)`` rather than
+    driving this queue directly.
     """
 
     def __init__(self, maxsize: int = 50) -> None:

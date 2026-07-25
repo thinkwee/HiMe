@@ -45,8 +45,19 @@ _BLOCKED_TOKENS = frozenset([
     "__globals__", "__getattribute__",
     "globals", "locals", "vars",
     "open",   # the helpers expose query_health/write_memory; raw open() not needed
+    # The generated route.py preamble injects ``pathlib.Path``, so the
+    # filesystem-mutating Path methods have to be blocked too — otherwise
+    # ``Path(x).write_text(...)`` walks straight past the ``open`` ban and the
+    # documented "no filesystem damage" guarantee is void.
+    "write_text", "write_bytes", "unlink", "rmdir", "mkdir",
+    "chmod", "touch", "symlink_to", "hardlink_to",
 ])
 _TOKEN_RE = re.compile(r"\b(" + "|".join(re.escape(t) for t in _BLOCKED_TOKENS) + r")\b")
+
+# The preamble also injects ``sqlite3``. Only the two DB paths the framework
+# provides may be opened — anything else is an arbitrary-file write.
+_SQLITE_CONNECT_RE = re.compile(r"\bsqlite3\s*\.\s*connect\s*\(\s*([^,)]*)")
+_ALLOWED_DB_ARGS = frozenset(["HEALTH_DB_PATH", "MEMORY_DB_PATH"])
 
 # Deduplication: track recent page creations {page_id: timestamp}
 _recent_creations: dict[str, float] = {}
@@ -123,18 +134,19 @@ class CreatePageTool(BaseTool):
                     "message": f"Page '{display_name}' already exists (created moments ago). No duplicate created.",
                 }
 
-        # 0b. Patch mode: update existing page preserving unmodified parts
-        if patch:
-            page_dir = self._pages_dir / page_id
-            if page_dir.exists():
-                return await self._patch_page(
-                    page_id, display_name, description, backend_code, frontend_html
-                )
-            # Page doesn't exist yet — fall through to normal creation
-
-        # 1. Validate page_id format
+        # 1. Validate page_id format. This MUST run before the patch branch —
+        #    otherwise ``patch=True`` with a traversing page_id ("../../x")
+        #    writes index.html / route.py outside the pages directory.
         if not re.match(r'^[a-z0-9_]{1,64}$', page_id):
             return {"success": False, "error": "page_id must be lowercase alphanumeric/underscore, max 64 chars"}
+
+        # 1a. Defence in depth: the resolved directory must stay inside the
+        #     pages root even if the regex above is ever loosened.
+        page_dir = self._pages_dir / page_id
+        try:
+            page_dir.resolve().relative_to(self._pages_dir.resolve())
+        except ValueError:
+            return {"success": False, "error": "page_id resolves outside the personalised pages directory"}
 
         # 2. Security: block dangerous imports in backend code
         for blocked in _BLOCKED_IMPORTS:
@@ -158,6 +170,28 @@ class CreatePageTool(BaseTool):
                 ),
             }
 
+        # 2b-i. Only the framework-provided DB paths may be opened.
+        for m in _SQLITE_CONNECT_RE.finditer(backend_code):
+            arg = m.group(1).strip()
+            if not any(name in arg for name in _ALLOWED_DB_ARGS):
+                return {
+                    "success": False,
+                    "error": (
+                        "sqlite3.connect() may only be called with HEALTH_DB_PATH "
+                        "or MEMORY_DB_PATH (the framework-injected database paths)."
+                    ),
+                }
+
+        # 2c. Patch mode: update existing page preserving unmodified parts.
+        #     Runs *after* validation so a patch cannot bypass the page_id and
+        #     sandbox checks above.
+        if patch:
+            if page_dir.exists():
+                return await self._patch_page(
+                    page_id, display_name, description, backend_code, frontend_html
+                )
+            # Page doesn't exist yet — fall through to normal creation
+
         # 2b. Syntax-check the backend Python code before writing to disk
         #     Build the full source that will actually be saved (with preamble).
         db_path = self.data_store_path or Path("data/data_stores")
@@ -175,7 +209,6 @@ class CreatePageTool(BaseTool):
             }
 
         # 3. Write frontend asset
-        page_dir = self._pages_dir / page_id
         page_dir.mkdir(parents=True, exist_ok=True)
         html_path = page_dir / "index.html"
         html_path.write_text(frontend_html, encoding="utf-8")

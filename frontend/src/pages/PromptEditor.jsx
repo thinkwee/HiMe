@@ -28,17 +28,24 @@ export default function PromptEditor() {
   const [prompts, setPrompts] = useState([])
   const [selectedId, setSelectedId] = useState(null)
   const selectedIdRef = useRef(selectedId)
-  selectedIdRef.current = selectedId
   const [content, setContent] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [status, setStatus] = useState(null) // { type: 'success' | 'error', message: string }
 
+  // Mirror of selectedId readable from async callbacks without re-creating them
   useEffect(() => {
-    loadPrompts()
-  }, [])
+    selectedIdRef.current = selectedId
+  }, [selectedId])
+
+  /** True when the editor holds edits that were never saved. */
+  const hasUnsavedEdits = () => {
+    const current = prompts.find(p => p.id === selectedIdRef.current)
+    return !!current && content !== current.content
+  }
 
   const loadPrompts = async () => {
+    const dirtyAtStart = hasUnsavedEdits()
     setLoading(true)
     try {
       const res = await api.listPrompts()
@@ -51,7 +58,10 @@ export default function PromptEditor() {
           setContent(filtered[0].content)
         } else if (currentSelectedId) {
           const selected = filtered.find(p => p.id === currentSelectedId)
-          if (selected) setContent(selected.content)
+          // Never silently drop unsaved edits when refreshing.
+          if (selected && (!dirtyAtStart || window.confirm(t('prompts.confirm_discard')))) {
+            setContent(selected.content)
+          }
         }
       } else {
         setStatus({
@@ -67,7 +77,21 @@ export default function PromptEditor() {
     }
   }
 
+  // Load once on mount. Deliberately not memoized into the dependency array:
+  // loadPrompts closes over `t`, so a language switch would re-run it and pop the
+  // "discard unsaved changes?" confirm at the user.
+  //
+  // set-state-in-effect is a false positive here — the only synchronous update is
+  // setLoading(true), and `loading` already starts as true, so React bails out and
+  // nothing cascades. Everything else happens after `await api.listPrompts()`.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadPrompts()
+  }, [])
+
   const handleSelect = (id) => {
+    if (id === selectedId) return
+    if (hasUnsavedEdits() && !window.confirm(t('prompts.confirm_discard'))) return
     setSelectedId(id)
     const selected = prompts.find(p => p.id === id)
     if (selected) {
@@ -203,9 +227,9 @@ export default function PromptEditor() {
                   <h4 className="font-bold text-lg">{t('prompts.editor_note')}</h4>
                 </div>
                 <p className="text-gray-300 text-sm leading-relaxed mb-4">
-                  <Trans i18nKey="prompts.editor_note_body_1" components={[<strong />]} />
+                  <Trans i18nKey="prompts.editor_note_body_1" components={[<strong key="b" />]} />
                   <br/><br/>
-                  <Trans i18nKey="prompts.editor_note_body_2" components={[<strong />]} />
+                  <Trans i18nKey="prompts.editor_note_body_2" components={[<strong key="b" />]} />
                 </p>
              </div>
              {/* Decorative blob */}
@@ -230,7 +254,7 @@ export default function PromptEditor() {
               className="w-full flex-1 p-8 bg-white rounded-2xl border-none focus:ring-0 font-mono text-sm leading-relaxed text-gray-800 resize-none shadow-sm placeholder-gray-400"
               placeholder={t('prompts.writer_placeholder', { title: selectedPrompt?.title || t('prompts.this_prompt') })}
               onKeyDown={(e) => {
-                if (e.ctrlKey && e.key === 's') {
+                if ((e.ctrlKey || e.metaKey) && e.key === 's') {
                   e.preventDefault()
                   handleSave()
                 }

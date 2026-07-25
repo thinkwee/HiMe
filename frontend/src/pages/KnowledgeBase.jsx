@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api.js'
 import { parseBackendDate } from '../lib/utils'
@@ -27,12 +27,11 @@ export default function MemoryAndTools() {
 
   // Expansion State
   const [expandedTable, setExpandedTable] = useState(null)
+  // Mirrors expandedTable so in-flight inspect responses can be discarded
+  // when they arrive after the user moved to another table.
+  const expandedTableRef = useRef(null)
   const [tableData, setTableData] = useState([])
   const [inspectLoading, setInspectLoading] = useState(false)
-
-  useEffect(() => {
-    fetchData()
-  }, [])
 
   const fetchData = async () => {
     setLoading(true)
@@ -56,18 +55,37 @@ export default function MemoryAndTools() {
     }
   }
 
+  // Load once on mount. Not memoized into the dependency array on purpose:
+  // fetchData closes over `t`, so a language switch would re-run it and flash
+  // the loading skeleton over data that is already correct.
+  //
+  // set-state-in-effect is a false positive here — the only synchronous updates
+  // are setLoading(true)/setError(null), and `loading` already starts as true
+  // and `error` as null, so React bails out of both and no render cascades.
+  // Everything else happens after `await`. (The rule accepts the identical call
+  // when it is wrapped in a local async function, which is why it fires here.)
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchData()
+  }, [])
+
   const toggleExpand = async (tableName) => {
     if (expandedTable === tableName) {
       setExpandedTable(null)
+      expandedTableRef.current = null
       return
     }
 
     setExpandedTable(tableName)
+    expandedTableRef.current = tableName
     setInspectLoading(true)
     setTableData([])
     setError(null)
     try {
       const res = await api.inspectMemoryTable(tableName)
+      // A slower earlier request must not overwrite the table the user is
+      // looking at now.
+      if (expandedTableRef.current !== tableName) return
       if (res.success) {
         setTableData(Array.isArray(res.rows) ? res.rows : [])
       } else {
@@ -75,9 +93,10 @@ export default function MemoryAndTools() {
       }
     } catch (err) {
       console.error('Failed to inspect table:', err)
+      if (expandedTableRef.current !== tableName) return
       setError(err.message || t('knowledge.failed_inspect', { name: tableName }))
     } finally {
-      setInspectLoading(false)
+      if (expandedTableRef.current === tableName) setInspectLoading(false)
     }
   }
 

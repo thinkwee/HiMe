@@ -108,7 +108,16 @@ class TriggerEvaluator:
                     rule["id"], rule["name"], rule["feature_type"], rule["condition"],
                 )
                 if agent_queue is not None:
-                    await agent_queue.put(goal)
+                    # Never block the ingest callback on a full (maxsize=50)
+                    # queue — a stalled agent would otherwise back-pressure
+                    # data ingestion indefinitely. Drop instead.
+                    try:
+                        agent_queue.put_nowait(goal)
+                    except asyncio.QueueFull:
+                        logger.warning(
+                            "Analysis queue full — dropping trigger goal for rule %d ('%s')",
+                            rule["id"], rule["name"],
+                        )
 
         return triggered
 

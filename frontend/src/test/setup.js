@@ -39,7 +39,7 @@ class MockWebSocket {
     })
   }
 
-  send(data) {
+  send(_data) {
     // no-op in tests
   }
 

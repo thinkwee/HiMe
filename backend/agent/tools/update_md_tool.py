@@ -19,14 +19,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
 from typing import Any
 
+from ..prompt_loader import PROMPTS_DIR as _PROMPTS_DIR  # repo-anchored, not CWD-relative
 from .base import BaseTool
 
 logger = logging.getLogger(__name__)
-
-_PROMPTS_DIR = Path("prompts")
 
 _FILE_CONFIG = {
     "user.md": {

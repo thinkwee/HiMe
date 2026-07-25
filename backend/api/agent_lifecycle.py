@@ -19,6 +19,7 @@ from ..agent.data_store import DataStore
 from ..config import settings
 from ..utils import ts_fmt
 from .agent_state import (
+    _RATE_LIMIT_CHAT_MAX_CALLS,
     ChatMessageRequest,
     QuickAnalysisResponse,
     StartAgentRequest,
@@ -69,8 +70,8 @@ async def get_last_config():
                     return json.load(f)
             config = await asyncio.to_thread(_read_config)
             return {"success": True, "config": config}
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to read last agent config: %s", exc)
     return {"success": False, "config": None}
 
 
@@ -90,7 +91,7 @@ async def start_autonomous_agent(request: Request, body: StartAgentRequest):
     emitting ``startup_progress`` events via the event queue so the frontend
     can show real-time feedback.
     """
-    _check_rate_limit(_client_ip(request))
+    _check_rate_limit(_client_ip(request), "start")
 
     async with startup_lock:
         if active_agents:
@@ -230,7 +231,7 @@ async def _start_agent_internal(
         gw = get_telegram_gateway()
         if gw:
             telegram_sender = gw.sender
-            default_chat_id = getattr(settings, "chat_id", None)
+            default_chat_id = settings.CHAT_ID
         gateway_registry = get_gateway_registry()
     except Exception:
         pass
@@ -531,7 +532,7 @@ async def _agent_supervisor(
                 _enqueue_event(event_queue, event)
                 etype = event.get("type", "")
                 if etype not in _EPHEMERAL_EVENT_TYPES:
-                    asyncio.create_task(memory.persist_activity(event))
+                    _spawn_persist(memory, event)
                 _log_event(event)
             # run_forever returned normally (stop was called)
             break
@@ -550,6 +551,26 @@ async def _agent_supervisor(
             _enqueue_event(event_queue, {"type": "agent_error", "error": str(exc)})
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, _MAX_RESTART_BACKOFF_S)
+
+
+# Strong references to in-flight activity-persist tasks. asyncio only keeps a
+# weak reference to a running task, so a bare create_task() can be garbage
+# collected mid-write; keeping the set alive also gives us a place to surface
+# exceptions that would otherwise be swallowed as "never retrieved".
+_persist_tasks: set[asyncio.Task] = set()
+
+
+def _spawn_persist(memory: MemoryManager, event: dict) -> None:
+    """Persist an activity event in the background, keeping a hard reference."""
+    task = asyncio.create_task(memory.persist_activity(event))
+    _persist_tasks.add(task)
+
+    def _done(t: asyncio.Task) -> None:
+        _persist_tasks.discard(t)
+        if not t.cancelled() and t.exception() is not None:
+            logger.warning("persist_activity failed: %s", t.exception())
+
+    task.add_done_callback(_done)
 
 
 def _enqueue_event(queue: asyncio.Queue, event: dict) -> None:
@@ -585,7 +606,7 @@ def _log_event(event: dict) -> None:
 @lifecycle_router.post("/stop")
 async def stop_autonomous_agent(request: Request, user_id: str = Query("LiveUser")):
     """Stop the running agent. Defaults to LiveUser (single-user mode)."""
-    _check_rate_limit(_client_ip(request))
+    _check_rate_limit(_client_ip(request), "stop")
 
     async with startup_lock:
         info = active_agents.pop(user_id, None)
@@ -714,8 +735,10 @@ def _last_config_start_request() -> StartAgentRequest:
                 body.model = cfg["model"]
             if cfg.get("granularity"):
                 body.granularity = cfg["granularity"]
-    except Exception:
-        pass
+            if cfg.get("speed_multiplier"):
+                body.speed_multiplier = cfg["speed_multiplier"]
+    except Exception as exc:
+        logger.warning("Could not read last agent config (%s) — using defaults", exc)
     return body
 
 
@@ -759,6 +782,15 @@ async def _store_inbound_image(image_base64: str, image_mime: str | None) -> dic
     """
     import base64
 
+    # Reject oversized payloads *before* decoding — base64 inflates memory by
+    # ~4/3, so decoding first would materialise the whole thing just to throw
+    # it away. 3/4 of the encoded length is an upper bound on the decoded size.
+    if len(image_base64) * 3 // 4 > settings.IOS_MAX_IMAGE_BYTES:
+        logger.warning(
+            "Inbound image rejected before decode (encoded=%d, max=%d)",
+            len(image_base64), settings.IOS_MAX_IMAGE_BYTES,
+        )
+        return None
     try:
         raw = base64.b64decode(image_base64)
     except Exception as e:
@@ -797,7 +829,7 @@ async def post_chat_message(request: Request, body: ChatMessageRequest):
     chunks followed by a final ``chat_reply`` event (and ``chat_image`` for
     charts).
     """
-    _check_rate_limit(_client_ip(request))
+    _check_rate_limit(_client_ip(request), "chat", _RATE_LIMIT_CHAT_MAX_CALLS)
 
     text = (body.text or "").strip()
     attachments: list[dict] = []
@@ -877,15 +909,48 @@ async def restart_agent(user_id: str) -> bool:
             return False
         if info.get("agent"):
             info["agent"].stop()
-        t = info.get("task")
-        if t:
+        # Cancel the fan-out pump as well as the supervisor (mirrors /stop).
+        # A surviving pump would keep draining the OLD event_queue while every
+        # connected monitor stays subscribed to the OLD hub — the new
+        # supervisor's events would then never reach them.
+        for key in ("task", "fanout_task"):
+            t: asyncio.Task | None = info.get(key)
+            if t is None:
+                continue
             t.cancel()
             try:
                 await asyncio.wait_for(asyncio.shield(t), timeout=5.0)
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 pass
 
-    await try_restore_agent()
+        # Start again directly from the saved config. Going through
+        # try_restore_agent() would make /restart a no-op stop whenever
+        # AUTO_RESTORE_AGENT is false (the default).
+        body = _last_config_start_request()
+        body.user_id = user_id
+        try:
+            new_info = await _start_agent_internal(body)
+        except Exception as exc:
+            logger.error("Agent restart failed for %s: %s", user_id, exc, exc_info=True)
+            return False
+
+        # Carry the EventHub across so already-connected monitors keep their
+        # subscriptions, but re-point its pump at the NEW event_queue — a pump
+        # is bound to the queue it was created with, so reusing the old one
+        # would leave every viewer deaf. No await between create_task and the
+        # registry write, so the pump sees the uid as registered.
+        hub = info.get("event_hub")
+        if hub is not None:
+            from .event_hub import _fanout_pump
+            new_info["event_hub"] = hub
+            new_info["fanout_task"] = asyncio.create_task(
+                _fanout_pump(user_id, new_info["event_queue"], hub),
+                name=f"fanout-{user_id}",
+            )
+        active_agents[user_id] = new_info
+
+    await _save_last_config(body)
+    logger.info("Restarted autonomous agent for %s", user_id)
     return user_id in active_agents
 
 
@@ -899,6 +964,13 @@ async def shutdown_agents() -> None:
         try:
             if info.get("agent"):
                 info["agent"].stop()
+                # Flush the latest in-memory state to disk. Transitions already
+                # persist continuously, so this is only a final safety net.
+                if hasattr(info["agent"], "_save_state"):
+                    try:
+                        info["agent"]._save_state()
+                    except Exception as exc:
+                        logger.error("State save failed for %s: %s", pid, exc)
             if info.get("data_store"):
                 info["data_store"].stop_ingestion()
             for key in ("task", "ingest_task", "fanout_task"):

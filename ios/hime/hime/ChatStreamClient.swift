@@ -36,12 +36,7 @@ final class ChatStreamClient: NSObject {
         // in the path (always "LiveUser" here). ?client=ios marks this socket
         // as the app's presence connection (drives the WS-vs-APNs decision).
         var comps = URLComponents(string: "\(wsBase)/api/stream/agent/LiveUser")
-        var items = [URLQueryItem(name: "client", value: "ios")]
-        let token = ServerConfig.authToken
-        if !token.isEmpty {
-            items.append(URLQueryItem(name: "token", value: token))
-        }
-        comps?.queryItems = items
+        comps?.queryItems = [URLQueryItem(name: "client", value: "ios")]
         return comps?.url
     }
 
@@ -50,7 +45,16 @@ final class ChatStreamClient: NSObject {
         let cfg = URLSessionConfiguration.default
         cfg.timeoutIntervalForRequest = 60
         let session = URLSession(configuration: cfg)
-        let task = session.webSocketTask(with: url)
+        // Bearer header rather than `?token=`: query strings are recorded verbatim
+        // in reverse-proxy / tunnel access logs. `webSocketTask(with: URLRequest)`
+        // carries custom headers through the HTTP upgrade, and the backend's
+        // `_ws_token_ok` (backend/api/stream_routes.py) reads either form.
+        var req = URLRequest(url: url)
+        let token = ServerConfig.authToken
+        if !token.isEmpty {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let task = session.webSocketTask(with: req)
         self.session = session
         self.task = task
         isConnected = true

@@ -48,6 +48,20 @@ def parse_window_to_minutes(window_str: str) -> int:
         return 30 * 24 * 60
     return 60
 
+def _client_gone(recv_task) -> bool:
+    """True if a completed ``websocket.receive()`` task signals a disconnect.
+
+    Starlette delivers the close as a ``{"type": "websocket.disconnect"}``
+    message; a raw transport failure surfaces as an exception instead. Any
+    other message is ordinary client traffic and is simply ignored.
+    """
+    try:
+        message = recv_task.result()
+    except Exception:
+        return True
+    return isinstance(message, dict) and message.get("type") == "websocket.disconnect"
+
+
 class DataStreamingService:
     """Service to handle live data streaming to WebSockets."""
 
@@ -64,6 +78,7 @@ class DataStreamingService:
         Streams ALL features currently in the database. New feature types
         (e.g. workouts recorded mid-stream) are auto-discovered every ~30s.
         """
+        recv_task: asyncio.Task | None = None
         try:
             loop = asyncio.get_running_loop()
 
@@ -149,8 +164,21 @@ class DataStreamingService:
                 })
                 logger.info(f"Live: sent {len(batch_data)} historical samples")
 
+            # Watch the inbound half of the socket. ``active_connections`` is
+            # only cleaned up by the route handler's ``finally`` — which cannot
+            # run while it is awaiting *this* coroutine — so without an explicit
+            # receive() the loop only notices a disconnect when send_json()
+            # raises. During a quiet period there is nothing to send, so a dead
+            # connection would poll SQLite through the shared executor forever
+            # and eventually saturate the pool.
+            recv_task = asyncio.create_task(websocket.receive())
+
             _poll_count = 0
             while websocket in active_connections:
+                if recv_task.done():
+                    if _client_gone(recv_task):
+                        break
+                    recv_task = asyncio.create_task(websocket.receive())
                 try:
                     # Refresh feature list every ~30 polls (~30s) to pick up
                     # newly ingested feature types (e.g. first workout recorded).
@@ -227,7 +255,9 @@ class DataStreamingService:
                             }
                         })
 
-                    await asyncio.sleep(1)
+                    # Poll interval — but wake immediately if the client sends
+                    # anything (a normal frame, or the disconnect frame).
+                    await asyncio.wait({recv_task}, timeout=1)
                 except Exception as e:
                     _disconnect_types = tuple(t for t in [
                         _WsConnectionClosed, _WsConnectionClosedOK, _WsDisconnect
@@ -247,3 +277,6 @@ class DataStreamingService:
                     await websocket.send_json({'type': 'error', 'error': str(e)})
                 except Exception:
                     pass
+        finally:
+            if recv_task is not None and not recv_task.done():
+                recv_task.cancel()

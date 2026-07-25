@@ -26,6 +26,15 @@
     "unexpected_error": "An unexpected error occurred",
     "reload_page": "Reload Page"
   },
+  "auth": {
+    "title": "API token required",
+    "description": "This server rejected the request. Paste the API_AUTH_TOKEN from the server's .env file to use the dashboard.",
+    "token_label": "API token",
+    "token_placeholder": "Paste API_AUTH_TOKEN",
+    "remember": "Remember on this device",
+    "remember_hint": "Keeps the token in this browser after you close it. Otherwise it is kept only for this tab.",
+    "submit": "Save and reload"
+  },
   "nav": {
     "dashboard": "Dashboard",
     "agent_monitor": "Agent Monitor",
@@ -120,7 +129,10 @@
     "cron_timezone_hint": "Cron times are interpreted in {{tz}}.",
     "analysis_goal_placeholder": "Analysis goal...",
     "cron_expression": "Cron expression",
+    "cron_daily": "daily",
     "failed_create_task": "Failed to create task",
+    "confirm_delete_task": "Delete this scheduled task?",
+    "confirm_delete_rule": "Delete this trigger rule?",
     "trigger_rules": "Trigger Rules",
     "no_trigger_rules": "No trigger rules",
     "rule_name": "Rule name",
@@ -227,6 +239,7 @@
     "title": "Prompt Manager",
     "subtitle": "Fine-tune the agent's behavior by editing its core instructions. Changes take effect immediately on the next agent cycle.",
     "refresh_tooltip": "Reload from disk (picks up agent-written changes to user.md / experience.md)",
+    "confirm_discard": "You have unsaved changes. Discard them?",
     "save_changes": "Save Changes",
     "prompt_library": "Prompt Library",
     "agent_editable": "Agent Editable",
@@ -275,6 +288,7 @@
     "title": "Personalised Pages",
     "refresh": "Refresh",
     "loading": "Loading pages...",
+    "loading_page": "Loading page...",
     "empty": "No personalised pages yet.",
     "empty_hint": "Pages created by the agent via chat will appear here.",
     "open_new_tab": "Open in new tab",
@@ -283,7 +297,8 @@
     "minimize": "Minimize",
     "maximize": "Maximize",
     "confirm_delete": "Delete page \"{{pageId}}\"? This cannot be undone.",
-    "delete_failed": "Failed to delete page: {{error}}"
+    "delete_failed": "Failed to delete page: {{error}}",
+    "load_failed": "Failed to load page: {{error}}"
   },
   "skills": {
     "title": "Skills",

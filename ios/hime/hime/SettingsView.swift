@@ -10,6 +10,7 @@ struct SettingsView: View {
     @State private var serverAddress: String = ServerConfig.load().baseAddress
     @State private var authToken: String = ServerConfig.authToken
     @State private var saveTask: Task<Void, Never>? = nil
+    @State private var tokenSaveTask: Task<Void, Never>? = nil
 
     @AppStorage("hime.hasOnboarded") private var hasOnboarded: Bool = false
     @AppStorage("hime.hasConsentedToAIDataSharing") private var hasConsentedToAI: Bool = false
@@ -107,14 +108,23 @@ struct SettingsView: View {
                         .textInputAutocapitalization(.never)
                         .foregroundColor(.secondary)
                         .onSubmit {
+                            tokenSaveTask?.cancel()
                             ServerConfig.authToken = authToken
                             // A survey captured during onboarding (before the
                             // token existed) is stashed locally — flush it now.
                             Task { await ServerConfig.flushPendingSurvey() }
                         }
-                        .onChange(of: authToken) {
-                            ServerConfig.authToken = authToken
-                            Task { await ServerConfig.flushPendingSurvey() }
+                        .onChange(of: authToken) { _, newValue in
+                            // Debounced: this fires on every keystroke, and
+                            // firing a survey flush per character is what made
+                            // the single-flight guard race in the first place.
+                            tokenSaveTask?.cancel()
+                            tokenSaveTask = Task {
+                                try? await Task.sleep(nanoseconds: 800_000_000)
+                                guard !Task.isCancelled else { return }
+                                ServerConfig.authToken = newValue
+                                await ServerConfig.flushPendingSurvey()
+                            }
                         }
                 }
 
@@ -236,8 +246,12 @@ struct SettingsView: View {
                 HStack {
                     Label("Authorization", systemImage: "heart.text.square")
                     Spacer()
-                    Text(hk.authStatus)
-                        .foregroundColor(hk.authStatus == "Authorized" ? .green : .red)
+                    // iOS never discloses READ authorization status, so
+                    // hk.authStatus can only say the prompt completed. Colour
+                    // by whether samples have actually arrived — that is the
+                    // only observable "it's working" signal.
+                    Text(hk.recentSamples.isEmpty ? hk.authStatus : "Receiving data")
+                        .foregroundColor(hk.recentSamples.isEmpty ? .orange : .green)
                         .font(.subheadline)
                 }
 

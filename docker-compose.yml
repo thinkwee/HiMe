@@ -51,6 +51,9 @@ services:
       start_period: 10s
 
   frontend:
+    # No API_AUTH_TOKEN here on purpose: the image is a static bundle served to
+    # every visitor, so the token is entered in the browser at runtime (the
+    # dashboard prompts on the first 401) rather than compiled in.
     build:
       context: .
       dockerfile: Dockerfile.frontend
@@ -68,6 +71,11 @@ services:
       dockerfile: Dockerfile.watch
     container_name: hime-watch-exporter
     restart: unless-stopped
+    # The exporter reads API_AUTH_TOKEN from the same .env the backend uses;
+    # without this the published port 8765 would accept /ingest and
+    # /sync-control from anyone even when a token is configured.
+    env_file:
+      - .env
     volumes:
       - watch-data:/app/watch-data
     command: ["python", "ios/Server/server.py", "--db", "/app/watch-data/watch.db"]

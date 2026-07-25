@@ -25,7 +25,7 @@ from pathlib import Path
 from ..config import settings
 from ..messaging.inbox import InboxQueue
 from ..utils import ts_now
-from .agent_loops import AgentLoopsMixin
+from .agent_loops import AgentLoopsMixin, spawn_background
 from .agent_prompts import AgentPromptsMixin
 from .agent_tools import AgentToolsMixin
 from .cancellation import CancellationToken
@@ -340,7 +340,7 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
         # tool call doesn't spend its entire 30 s timeout on initialisation.
         code_tool = self.tool_registry.get_tool("code")
         if code_tool and hasattr(code_tool, "warm_up"):
-            asyncio.create_task(code_tool.warm_up())
+            spawn_background(code_tool.warm_up(), label="code tool warm-up")
             logger.info("Code tool warm-up task started")
 
         active_task: asyncio.Task | None = None

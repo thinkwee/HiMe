@@ -106,6 +106,30 @@ def _resolve_path(name: str) -> Path:
     return candidate
 
 
+def _existing_skill_path(name: str) -> Path | None:
+    """Return the real on-disk path of an existing skill, or None.
+
+    Reads resolve a skill through the registry, which scans *every* root, so
+    writes and deletes must too. Using ``_resolve_path`` (writable root only)
+    meant a PUT on a skill living in ``~/.hime/skills`` wrote a shadow copy
+    into ``./skills``, and a DELETE 404'd on a skill that was plainly listed.
+    The path the registry hands back is re-validated against the known roots.
+    """
+    _validate_name(name)
+    entry = _build_registry().get(name)
+    if entry is None:
+        return None
+    candidate = Path(entry.file_path).resolve()
+    for root in _resolve_skill_roots():
+        try:
+            candidate.relative_to(root.resolve())
+            return candidate
+        except (ValueError, OSError):
+            continue
+    logger.warning("Skill %s resolved outside every skill root: %s", name, candidate)
+    return None
+
+
 def _refresh_running_agents() -> None:
     """Tell every running agent to re-scan its skills directory.
 
@@ -125,9 +149,18 @@ def _build_markdown(description: str, body: str) -> str:
     """Compose a SKILL.md from the editor inputs.
 
     Quotes the description to keep YAML happy with values like ``yes``
-    or ``no``.  ``"`` inside descriptions is escaped.
+    or ``no``.  ``"`` inside descriptions is escaped, and newlines are
+    flattened — a raw newline would either break the frontmatter or let the
+    caller inject extra frontmatter keys.
     """
-    safe_desc = description.strip().replace('"', '\\"')
+    safe_desc = (
+        description.strip()
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\r\n", " ")
+        .replace("\r", " ")
+        .replace("\n", " ")
+    )
     body_clean = body.rstrip() + "\n" if body else ""
     return f'---\ndescription: "{safe_desc}"\n---\n{body_clean}'
 
@@ -256,9 +289,10 @@ async def create_skill(payload: SkillCreate):
 
 @router.put("/{name}")
 async def update_skill(name: str, payload: SkillUpdate):
-    """Overwrite an existing skill's description and body."""
-    path = _resolve_path(name)
-    if not path.exists():
+    """Overwrite an existing skill's description and body (in place, whichever
+    root it actually lives in)."""
+    path = await asyncio.to_thread(_existing_skill_path, name)
+    if path is None or not path.exists():
         raise HTTPException(status_code=404, detail=f"Skill '{name}' not found")
     content = _build_markdown(payload.description, payload.body)
     try:
@@ -272,9 +306,9 @@ async def update_skill(name: str, payload: SkillUpdate):
 
 @router.delete("/{name}")
 async def delete_skill(name: str):
-    """Remove a skill file."""
-    path = _resolve_path(name)
-    if not path.exists():
+    """Remove a skill file (from whichever root it actually lives in)."""
+    path = await asyncio.to_thread(_existing_skill_path, name)
+    if path is None or not path.exists():
         raise HTTPException(status_code=404, detail=f"Skill '{name}' not found")
     try:
         await asyncio.to_thread(path.unlink)

@@ -64,6 +64,85 @@ def _shared_version() -> str:
     return _shared_version_cache
 
 
+# --- Inlining the shared assets -------------------------------------------
+#
+# The HiMe dashboard embeds these pages in a `sandbox="allow-scripts"` iframe
+# (no `allow-same-origin`), which puts the document in an OPAQUE origin. Browser
+# engines disagree about what CSP `'self'` means there, and the disagreement is
+# fatal rather than cosmetic:
+#
+#   * Chromium 131 / Firefox 132 resolve `'self'` against the *response URL's*
+#     origin, so `<script src="/api/personalised-pages/_shared/hime-ui.js">`
+#     loads normally.
+#   * WebKit 18.2 (Safari 18.x, i.e. macOS Safari and iOS) resolves `'self'`
+#     against the *document's* opaque origin, which matches nothing. It refuses
+#     both shared assets outright ("Refused to load … because it does not appear
+#     in the style-src directive"), leaving a completely blank page.
+#
+# Verified empirically with Playwright across all three engines. The options
+# that make WebKit work by loosening CSP are all worse: naming the origin
+# explicitly means trusting the Host header, and `script-src http: https:` would
+# let an agent-generated page pull code from any host — exactly the exfiltration
+# path the policy exists to close.
+#
+# So we remove the subresource instead: the shared CSS/JS are inlined into the
+# page HTML at serve time. Inline content is covered by the `'unsafe-inline'`
+# already in the policy (the agent ships inline JS regardless), needs no new
+# host source, is origin-agnostic, and saves two round trips. The `_shared/`
+# endpoint below is kept for any page HTML whose tags don't match the patterns,
+# and for top-level (non-opaque) loads such as the iOS WKWebView.
+
+_SHARED_CSS_LINK_RE = re.compile(
+    r'<link\b[^>]*href\s*=\s*["\'][^"\']*_shared/hime-ui\.css[^"\']*["\'][^>]*>',
+    re.IGNORECASE,
+)
+_SHARED_JS_SCRIPT_RE = re.compile(
+    r'<script\b[^>]*src\s*=\s*["\'][^"\']*_shared/hime-ui\.js[^"\']*["\'][^>]*>\s*</script\s*>',
+    re.IGNORECASE,
+)
+
+_shared_assets_cache: tuple[str, str] = ("", "")
+_shared_assets_mtime: float = -1.0
+
+
+def _read_shared_assets() -> tuple[str, str]:
+    """Return (css_text, js_text), re-read only when either file changes."""
+    global _shared_assets_cache, _shared_assets_mtime
+    css = _SHARED_DIR / "hime-ui.css"
+    js = _SHARED_DIR / "hime-ui.js"
+    try:
+        mtime = max(css.stat().st_mtime if css.exists() else 0,
+                    js.stat().st_mtime if js.exists() else 0)
+        if mtime != _shared_assets_mtime:
+            _shared_assets_cache = (
+                css.read_text(encoding="utf-8") if css.exists() else "",
+                js.read_text(encoding="utf-8") if js.exists() else "",
+            )
+            _shared_assets_mtime = mtime
+    except Exception:
+        logger.warning("Could not read shared page assets for inlining", exc_info=True)
+        return ("", "")
+    return _shared_assets_cache
+
+
+def _inline_shared_assets(html: str) -> str:
+    """Replace the shared <link>/<script src> tags with their inline contents."""
+    css_text, js_text = _read_shared_assets()
+    if css_text:
+        # A literal '</style' inside the CSS would terminate the block early.
+        safe_css = css_text.replace("</style", "<\\/style")
+        html = _SHARED_CSS_LINK_RE.sub(
+            lambda _m: f"<style>\n{safe_css}\n</style>", html, count=1
+        )
+    if js_text:
+        # Likewise for '</script' inside the JS.
+        safe_js = js_text.replace("</script", "<\\/script")
+        html = _SHARED_JS_SCRIPT_RE.sub(
+            lambda _m: f"<script>\n{safe_js}\n</script>", html, count=1
+        )
+    return html
+
+
 def _get_db_file(user_id: str) -> Path:
     return settings.MEMORY_DB_PATH / f"{user_id}.db"
 
@@ -91,13 +170,17 @@ def _all_memory_dbs() -> list[Path]:
 async def serve_shared_asset(filename: str):
     """Serve shared UI component assets (CSS/JS) with no-cache headers."""
     from fastapi.responses import Response
+    # Don't rely on the route pattern alone to keep traversal out — whitelist
+    # the filename shape and the extensions this endpoint is meant to serve.
+    content_types = {".css": "text/css", ".js": "application/javascript"}
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+', filename) or not filename.endswith(tuple(content_types)):
+        raise HTTPException(status_code=400, detail="Invalid asset name")
     path = _SHARED_DIR / filename
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail=f"Shared asset '{filename}' not found")
-    content_types = {".css": "text/css", ".js": "application/javascript"}
-    ct = content_types.get(path.suffix, "application/octet-stream")
+    ct = content_types[path.suffix]
     return Response(
-        content=path.read_text(encoding="utf-8"),
+        content=await asyncio.to_thread(path.read_text, encoding="utf-8"),
         media_type=ct,
         headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache"},
     )
@@ -106,52 +189,60 @@ async def serve_shared_asset(filename: str):
 @router.get("/list")
 async def list_personalised_pages():
     """List all active personalised pages across all users."""
-    pages: list[dict] = []
-    seen_ids: set[str] = set()
+    def _scan() -> list[dict]:
+        pages: list[dict] = []
+        seen_ids: set[str] = set()
 
-    for db_file in _all_memory_dbs():
-        try:
-            with sqlite3.connect(str(db_file), timeout=10) as conn:
-                conn.row_factory = sqlite3.Row
-                rows = conn.execute(
-                    "SELECT page_id, display_name, description, backend_route, "
-                    "frontend_asset, created_at "
-                    "FROM personalised_pages WHERE status='active' ORDER BY created_at ASC"
-                ).fetchall()
-            for row in rows:
-                d = dict(row)
-                if d["page_id"] not in seen_ids:
-                    seen_ids.add(d["page_id"])
-                    pages.append(d)
-        except Exception:
-            continue
+        for db_file in _all_memory_dbs():
+            try:
+                with sqlite3.connect(str(db_file), timeout=10) as conn:
+                    conn.row_factory = sqlite3.Row
+                    rows = conn.execute(
+                        "SELECT page_id, display_name, description, backend_route, "
+                        "frontend_asset, created_at "
+                        "FROM personalised_pages WHERE status='active' ORDER BY created_at ASC"
+                    ).fetchall()
+                for row in rows:
+                    d = dict(row)
+                    if d["page_id"] not in seen_ids:
+                        seen_ids.add(d["page_id"])
+                        pages.append(d)
+            except Exception:
+                continue
+        return pages
 
-    return {"success": True, "pages": pages}
+    # Walks every memory DB — keep it off the event loop.
+    return {"success": True, "pages": await asyncio.to_thread(_scan)}
 
 
 @router.delete("/{page_id}")
 async def delete_personalised_page(page_id: str):
     """Soft-delete a personalised page: set status='deleted' in all DBs and remove files."""
     _validate_page_id(page_id)
-    updated = False
-    for db_file in _all_memory_dbs():
-        try:
-            with sqlite3.connect(str(db_file), timeout=10) as conn:
-                cur = conn.execute(
-                    "UPDATE personalised_pages SET status='deleted' WHERE page_id=? AND status='active'",
-                    (page_id,),
-                )
-                if cur.rowcount > 0:
-                    updated = True
-        except Exception:
-            continue
+
+    def _mark_deleted() -> bool:
+        marked = False
+        for db_file in _all_memory_dbs():
+            try:
+                with sqlite3.connect(str(db_file), timeout=10) as conn:
+                    cur = conn.execute(
+                        "UPDATE personalised_pages SET status='deleted' WHERE page_id=? AND status='active'",
+                        (page_id,),
+                    )
+                    if cur.rowcount > 0:
+                        marked = True
+            except Exception:
+                continue
+        return marked
+
+    updated = await asyncio.to_thread(_mark_deleted)
 
     # Remove files on disk (protect _shared assets directory)
     if page_id == "_shared":
         raise HTTPException(status_code=400, detail="Cannot delete shared assets")
     page_dir = _PAGES_DIR / page_id
     if page_dir.exists():
-        shutil.rmtree(page_dir, ignore_errors=True)
+        await asyncio.to_thread(shutil.rmtree, page_dir, ignore_errors=True)
         updated = True
 
     if not updated:
@@ -171,14 +262,18 @@ async def delete_personalised_page(page_id: str):
 #   - frame-ancestors 'self': may be iframed by HIME frontend (same origin)
 #                             but not by any third-party site (clickjacking)
 #   - base-uri 'none'       : no <base> override tricks
+#   - form-action 'self'    : a form cannot POST harvested data to a third-party
+#                             host. Without this, connect-src is trivially
+#                             sidestepped by submitting a form instead of fetch().
 _PAGE_CSP = (
     "default-src 'self'; "
-    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+    "script-src 'self' 'unsafe-inline'; "
     "style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data:; "
     "font-src 'self' data:; "
     "connect-src 'self'; "
     "frame-ancestors 'self'; "
+    "form-action 'self'; "
     "base-uri 'none'"
 )
 _PAGE_SECURITY_HEADERS = {
@@ -189,6 +284,54 @@ _PAGE_SECURITY_HEADERS = {
     "Referrer-Policy": "no-referrer",
 }
 
+# The same policy, carried INSIDE the document as a <meta> tag.
+#
+# Why both: the HiMe dashboard no longer points the iframe at this URL. The
+# endpoint is behind the API bearer token, and putting that token in an
+# `<iframe src>` would hand a full-privilege credential to the very code the
+# sandbox exists to contain (the page can read its own location.search). So the
+# dashboard fetches this HTML with an Authorization header and injects it via
+# `srcdoc` instead — no URL, no token, nothing to steal.
+#
+# A `srcdoc` document is not an HTTP response, so it never sees the headers
+# above. Its policy has to travel in the markup, which is what this is. The
+# response header is kept for the loads that DO have a URL (top-level "open in
+# a new tab" via the SPA, the iOS WKWebView, curl), so both paths end up under
+# the same rules.
+#
+# Two directives are deliberately dropped: `frame-ancestors` and `sandbox` are
+# ignored in a meta policy by every engine (and log a console warning if
+# present). Neither is needed here — `frame-ancestors` protects a URL from being
+# framed by a third-party site, and a srcdoc document has no URL for anyone else
+# to frame; the sandbox is applied by the embedder's `sandbox` attribute.
+_PAGE_CSP_META = "; ".join(
+    d for d in _PAGE_CSP.split("; ") if not d.startswith("frame-ancestors")
+)
+_PAGE_META_TAGS = (
+    f'<meta http-equiv="Content-Security-Policy" content="{_PAGE_CSP_META}">'
+    '<meta name="referrer" content="no-referrer">'
+)
+
+
+def _inject_head(html: str, snippet: str) -> str:
+    """Insert `snippet` as early inside <head> as possible.
+
+    A meta CSP only governs what comes *after* it, so this has to land before
+    the page's own tags — hence the insert right after the opening <head>, with
+    fallbacks for agent HTML that omits <head> or <html> entirely.
+    """
+    lowered = html.lower()
+    idx = lowered.find("<head>")
+    if idx != -1:
+        cut = idx + len("<head>")
+        return html[:cut] + "\n    " + snippet + html[cut:]
+    idx = lowered.find("<html")
+    if idx != -1:
+        end = html.find(">", idx)
+        if end != -1:
+            return html[: end + 1] + "\n" + snippet + html[end + 1:]
+    return snippet + html
+
 
 @router.get("/{page_id}/", response_class=HTMLResponse)
 async def serve_page_frontend(page_id: str):
@@ -197,9 +340,14 @@ async def serve_page_frontend(page_id: str):
     html_path = _PAGES_DIR / page_id / "index.html"
     if not html_path.exists():
         raise HTTPException(status_code=404, detail=f"Page '{page_id}' not found")
-    html = html_path.read_text(encoding="utf-8")
-    # Inject cache-busting version into _shared asset URLs so browsers/WKWebView
-    # don't serve stale 404 responses from when _shared was temporarily deleted.
+    html = await asyncio.to_thread(html_path.read_text, encoding="utf-8")
+    # Inline the shared CSS/JS. This is what makes the page work inside the
+    # dashboard's opaque-origin sandbox — see the block comment above
+    # _SHARED_CSS_LINK_RE for why a subresource cannot be used there.
+    html = await asyncio.to_thread(_inline_shared_assets, html)
+    # Any shared reference the patterns above didn't match still gets the
+    # cache-busting version, so browsers/WKWebView don't serve a stale 404
+    # from when _shared was temporarily deleted.
     html = html.replace(
         '/api/personalised-pages/_shared/hime-ui.css',
         f'/api/personalised-pages/_shared/hime-ui.css?v={_shared_version()}',
@@ -211,17 +359,17 @@ async def serve_page_frontend(page_id: str):
     # omits it. Without this, WKWebView renders at 980px CSS width and scales
     # down, making pages feel tiny and horizontally pannable.
     if 'name="viewport"' not in html and "name='viewport'" not in html:
-        meta = (
+        html = _inject_head(
+            html,
             '<meta name="viewport" '
             'content="width=device-width, initial-scale=1, '
-            'viewport-fit=cover">'
+            'viewport-fit=cover">',
         )
-        if "<head>" in html:
-            html = html.replace("<head>", "<head>\n    " + meta, 1)
-        elif "<html" in html:
-            html = html.replace("<html", meta + "<html", 1)
-        else:
-            html = meta + html
+    # Carry the CSP in the markup as well as the header, so the policy still
+    # applies when the dashboard renders this HTML through `srcdoc` (which has
+    # no HTTP response, hence no headers). Injected last so it ends up FIRST in
+    # <head> — a meta policy does not govern what precedes it.
+    html = _inject_head(html, _PAGE_META_TAGS)
     return HTMLResponse(content=html, headers=_PAGE_SECURITY_HEADERS)
 
 
@@ -236,9 +384,9 @@ async def _exec_route_handler(page_id: str, request: Request | None):
         )
 
     # Pre-validate syntax before attempting to import
-    source = route_path.read_text(encoding="utf-8")
+    source = await asyncio.to_thread(route_path.read_text, encoding="utf-8")
     try:
-        compile(source, str(route_path), "exec")
+        await asyncio.to_thread(compile, source, str(route_path), "exec")
     except SyntaxError as se:
         logger.error(
             "serve_page_data syntax error for %s: %s (line %s)",
@@ -255,9 +403,17 @@ async def _exec_route_handler(page_id: str, request: Request | None):
         )
 
     try:
-        spec = importlib.util.spec_from_file_location(f"personalised_page_{page_id}", route_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        def _load_module():
+            spec = importlib.util.spec_from_file_location(
+                f"personalised_page_{page_id}", route_path
+            )
+            mod = importlib.util.module_from_spec(spec)
+            # Agent-generated module top level can do arbitrary slow work
+            # (heavy imports, opening a DB) — never run it on the event loop.
+            spec.loader.exec_module(mod)
+            return mod
+
+        module = await asyncio.to_thread(_load_module)
 
         if not hasattr(module, "route_handler"):
             return JSONResponse(

@@ -14,7 +14,7 @@ import WidgetKit
 // JSON-compatible with the `HimeWatchSnapshot` struct duplicated inside
 // the HimeWatchWidgets target.
 
-struct HimeWatchWidgetSnapshot: Codable {
+struct HimeWatchWidgetSnapshot: Codable, Equatable {
     var catStateRaw: String
     var catMessage: String
     var heartRate: Double?
@@ -44,17 +44,38 @@ enum HimeWatchWidgetStore {
         return snap
     }
 
-    static func write(_ snap: HimeWatchWidgetSnapshot) {
+    /// Minimum spacing between budget-spending complication reloads.
+    private static let minReloadInterval: TimeInterval = 15 * 60
+    private static var lastReload: Date = .distantPast
+
+    static func write(_ snap: HimeWatchWidgetSnapshot, reload: Bool) {
         guard let url = fileURL else { return }
         guard let data = try? JSONEncoder().encode(snap) else { return }
         try? data.write(to: url, options: .atomic)
+        guard reload else { return }
+        lastReload = Date()
         WidgetCenter.shared.reloadAllTimelines()
     }
 
     static func update(_ mutate: (inout HimeWatchWidgetSnapshot) -> Void) {
         var s = read()
+        let before = s
         mutate(&s)
-        write(s)
+        // watchOS caps how often complications may refresh. Reloading on every
+        // observer tick (even when nothing changed) exhausts that budget and
+        // the watch face stops updating entirely — only write on real changes.
+        guard s != before else { return }
+
+        // Heart rate and step count drift on virtually every observer tick, so
+        // the equality check above doesn't throttle them at all. Spend the
+        // reload budget on what the face actually shows changing — the cat
+        // state/message — and let numeric drift ride the next scheduled
+        // timeline refresh unless it's been quiet for a while. The file is
+        // always written, so whenever the widget does refresh it reads fresh
+        // values.
+        let stateChanged = s.catStateRaw != before.catStateRaw || s.catMessage != before.catMessage
+        let staleEnough = Date().timeIntervalSince(lastReload) >= minReloadInterval
+        write(s, reload: stateChanged || staleEnough)
     }
 }
 
@@ -109,14 +130,28 @@ class WatchConnectivityManager: NSObject, ObservableObject {
         }
     }
 
+    /// Timestamp of the last log transfer, for coalescing (see `flushLogs`).
+    private var lastLogFlush: Date = .distantPast
+    private let logFlushInterval: TimeInterval = 300
+
     /// Flush buffered logs to iPhone via transferUserInfo (best-effort, won't block health data).
+    ///
+    /// Coalesced: this is called after *every* observer tick, including the very
+    /// common "0 new samples" case, and watchOS budgets `transferUserInfo`.
+    /// Firing one transfer per tick just to ship debug lines backs the queue up
+    /// and delays the health-data transfers that share it.
     nonisolated func flushLogs() {
         Task { @MainActor in
-            let lines = self.logBuffer
-            guard !lines.isEmpty else { return }
-            self.logBuffer.removeAll()
-
+            guard !self.logBuffer.isEmpty else { return }
+            let now = Date()
+            guard now.timeIntervalSince(self.lastLogFlush) >= self.logFlushInterval else { return }
+            // Check activation before draining — the previous order dropped the
+            // buffer on the floor whenever the session wasn't up yet.
             guard WCSession.default.activationState == .activated else { return }
+
+            let lines = self.logBuffer
+            self.logBuffer.removeAll()
+            self.lastLogFlush = now
             let message: [String: Any] = ["type": "watch_logs", "lines": lines]
             WCSession.default.transferUserInfo(message)
         }
@@ -252,6 +287,25 @@ extension WatchConnectivityManager: WCSessionDelegate {
     private func handleIncoming(_ data: [String: Any]) {
         guard let type = data["type"] as? String else { return }
         switch type {
+        case "composite":
+            // Merged application context from the iPhone — carries whichever
+            // of cat state / server config is currently known. Each key is
+            // applied independently so a cat-state update can never wipe the
+            // ingest URL (and vice versa).
+            var catChanged = false
+            if let state = data["cat_state"] as? String, state != self.catState {
+                self.catState = state
+                catChanged = true
+            }
+            if let message = data["cat_message"] as? String, message != self.catMessage {
+                self.catMessage = message
+                catChanged = true
+            }
+            if let ingestURL = data["ingest_url"] as? String, ingestURL != self.serverIngestURL {
+                self.serverIngestURL = ingestURL
+                UserDefaults.standard.set(ingestURL, forKey: "serverIngestURL")
+            }
+            if catChanged { self.publishWatchSnapshot() }
         case "cat_state":
             self.catState = data["state"] as? String ?? "relaxed"
             self.catMessage = data["message"] as? String ?? ""

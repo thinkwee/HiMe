@@ -31,6 +31,69 @@ _BOLD_DBL_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
 _BOLD_SGL_RE = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)")
 _ITALIC_RE = re.compile(r"(?<![_\w])_([^_]+)_(?![_\w])")
 _STRIKE_RE = re.compile(r"~~(.+?)~~")
+_TAG_RE = re.compile(r"</?([a-zA-Z][a-zA-Z0-9]*)[^>]*>")
+
+
+def _html_to_plain(text: str) -> str:
+    """Strip Telegram HTML back to plain text for the ``parse_mode=""`` retry.
+
+    Resending the HTML verbatim (what the retry used to do) shows the user raw
+    ``<b>`` / ``&amp;`` markup, which is worse than the formatting we lost.
+    """
+    text = _TAG_RE.sub("", text)
+    return (
+        text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")  # last: never re-introduce an entity
+    )
+
+
+def _cut_on_safe_boundary(chunk: str) -> str:
+    """Drop a half-written tag or HTML entity from the tail of ``chunk``."""
+    lt = chunk.rfind("<")
+    if lt > chunk.rfind(">"):
+        chunk = chunk[:lt]
+    amp = chunk.rfind("&")
+    if amp > chunk.rfind(";") and len(chunk) - amp <= 8:
+        chunk = chunk[:amp]
+    return chunk
+
+
+def _closing_tags(chunk: str) -> str:
+    """Return the tags needed to close everything still open in ``chunk``."""
+    open_tags: list[str] = []
+    for m in _TAG_RE.finditer(chunk):
+        name = m.group(1).lower()
+        if m.group(0).startswith("</"):
+            for i in range(len(open_tags) - 1, -1, -1):
+                if open_tags[i] == name:
+                    del open_tags[i]
+                    break
+        else:
+            open_tags.append(name)
+    return "".join(f"</{name}>" for name in reversed(open_tags))
+
+
+def _truncate_telegram_html(text: str, limit: int) -> str:
+    """Truncate ``text`` to ``limit`` chars without breaking its HTML.
+
+    A blind character slice can land inside a tag or entity, or leave a ``<pre>``
+    unclosed — Telegram then 400s and the plain-text retry exposes the markup.
+    So we cut on a safe boundary and close whatever is still open, shrinking the
+    budget until the closing tags and the suffix also fit inside ``limit``.
+    """
+    if len(text) <= limit:
+        return text
+    budget = max(0, limit - len(_TRUNCATION_SUFFIX))
+    for _ in range(4):
+        cut = _cut_on_safe_boundary(text[:budget])
+        closers = _closing_tags(cut)
+        if len(cut) + len(closers) <= budget:
+            return cut + closers + _TRUNCATION_SUFFIX
+        budget -= len(closers)
+        if budget <= 0:
+            return _TRUNCATION_SUFFIX.strip()
+    return cut + closers + _TRUNCATION_SUFFIX
 
 
 def _markdown_to_telegram_html(text: str) -> str:
@@ -66,6 +129,7 @@ def _markdown_to_telegram_html(text: str) -> str:
     # --- 4. Line-level elements ----------------------------------------
     lines = text.split("\n")
     out: list[str] = []
+    tables: list[str] = []
     i = 0
     while i < len(lines):
         stripped = lines[i].strip()
@@ -92,7 +156,12 @@ def _markdown_to_telegram_html(text: str) -> str:
                 else:
                     break
             if table:
-                out.append("<pre>" + "\n".join(table) + "</pre>")
+                # Placeholder-protect the table exactly like a code block: step 5
+                # would otherwise turn a cell's ``*x*`` / ``_x_`` into <b>/<i>
+                # *inside* <pre>, which Telegram rejects (only <code> may nest
+                # there) — a 400 that degrades the whole message to plain text.
+                tables.append("\n".join(table))
+                out.append(f"\x00TB{len(tables) - 1}\x00")
             continue
 
         # Unordered list items → bullet char
@@ -112,6 +181,10 @@ def _markdown_to_telegram_html(text: str) -> str:
     text = _BOLD_SGL_RE.sub(r"<b>\1</b>", text)   # *text*
     text = _ITALIC_RE.sub(r"<i>\1</i>", text)     # _text_
     text = _STRIKE_RE.sub(r"<s>\1</s>", text)     # ~~text~~
+
+    # --- 6a. Restore tables (already escaped in step 3) ------------------
+    for idx, table_text in enumerate(tables):
+        text = text.replace(f"\x00TB{idx}\x00", f"<pre>{table_text}</pre>")
 
     # --- 6. Restore code blocks (escaped) ------------------------------
     for idx, (_lang, code) in enumerate(code_blocks):
@@ -208,9 +281,8 @@ class TelegramSender:
         # Convert Markdown → Telegram HTML
         text = _markdown_to_telegram_html(text)
 
-        # Truncate if needed
-        if len(text) > _MAX_MESSAGE_LENGTH - len(_TRUNCATION_SUFFIX):
-            text = text[: _MAX_MESSAGE_LENGTH - len(_TRUNCATION_SUFFIX)] + _TRUNCATION_SUFFIX
+        # Truncate if needed (on tag boundaries — see _truncate_telegram_html)
+        text = _truncate_telegram_html(text, _MAX_MESSAGE_LENGTH)
 
         payload: dict = {
             "chat_id": target,
@@ -229,9 +301,12 @@ class TelegramSender:
                 logger.debug("Telegram message sent to %s", target)
                 return True
 
-            # Retry without parse_mode if HTML parsing fails
+            # Retry without parse_mode if HTML parsing fails. Strip the markup
+            # too — resending the HTML verbatim would show the user raw tags
+            # and &amp;-escapes.
             if resp.status_code == 400 and "parse" in resp.text.lower():
                 payload["parse_mode"] = ""
+                payload["text"] = _html_to_plain(payload["text"])
                 resp2 = await client.post(f"{self._base_url}/sendMessage", json=payload)
                 if resp2.status_code == 200:
                     logger.debug("Telegram message sent (plain) to %s", target)
@@ -265,8 +340,8 @@ class TelegramSender:
 
         if caption:
             caption = _markdown_to_telegram_html(caption)
-            if len(caption) > 1024:
-                caption = caption[:1020] + "..."
+            # Same tag-safe truncation as send_message — Telegram's caption cap.
+            caption = _truncate_telegram_html(caption, 1024)
 
         data: dict = {"chat_id": target, "caption": caption, "parse_mode": parse_mode}
         if reply_markup:
@@ -303,10 +378,9 @@ class TelegramSender:
     ) -> bool:
         """Edit an existing message's text.  Returns ``True`` on success."""
         # Convert Markdown → Telegram HTML
-        text = _markdown_to_telegram_html(text)
-
-        if len(text) > _MAX_MESSAGE_LENGTH - len(_TRUNCATION_SUFFIX):
-            text = text[: _MAX_MESSAGE_LENGTH - len(_TRUNCATION_SUFFIX)] + _TRUNCATION_SUFFIX
+        text = _truncate_telegram_html(
+            _markdown_to_telegram_html(text), _MAX_MESSAGE_LENGTH,
+        )
 
         payload: dict = {
             "chat_id": chat_id,
@@ -326,6 +400,7 @@ class TelegramSender:
             # Retry without parse_mode if HTML parsing fails
             if resp.status_code == 400 and "parse" in resp.text.lower():
                 payload["parse_mode"] = ""
+                payload["text"] = _html_to_plain(payload["text"])
                 resp2 = await client.post(
                     f"{self._base_url}/editMessageText", json=payload
                 )

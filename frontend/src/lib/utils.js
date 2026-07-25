@@ -4,8 +4,10 @@
  * but they are always UTC. Without 'Z', JS Date() interprets them as local time.
  */
 const ensureUTC = (ts) => {
-  if (typeof ts === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(ts)) {
-    return ts + 'Z'
+  // Accepts both ISO ('2026-07-24T10:00:00[.123456]') and SQLite
+  // ('2026-07-24 10:00:00') shapes — both are UTC on the wire.
+  if (typeof ts === 'string' && /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(ts)) {
+    return ts.replace(' ', 'T') + 'Z'
   }
   return ts
 }

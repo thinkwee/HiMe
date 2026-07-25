@@ -8,6 +8,9 @@ import { githubGist } from 'react-syntax-highlighter/dist/esm/styles/hljs'
 import { api } from '../lib/api'
 import { formatFullDateTime, parseBackendDate } from '../lib/utils'
 import { useApp } from '../context/AppContext'
+// Module-level helpers below run outside React, so they translate through the
+// i18next instance directly instead of the useTranslation() hook.
+import i18n from '../i18n'
 import { Play, Square, Brain, Activity, Database, Wifi, WifiOff, Calendar, X, Clock, Plus, Pause, Trash2, Zap, RotateCcw, Pencil, Check, Loader2, CheckCircle2, AlertCircle, Server, HardDrive, Cpu, ListChecks, Rocket } from 'lucide-react'
 
 SyntaxHighlighter.registerLanguage('python', python)
@@ -40,9 +43,16 @@ function saveConfig(config) {
 
 // formatFullDateTime imported from ../lib/utils
 
+/** Unique log id. crypto.randomUUID() only exists in secure contexts, and the
+ *  dashboard is routinely served over plain http:// on the LAN. */
+const genId = () =>
+  (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+
 function eventToMessage(ev) {
   const d = ev.data || ev
-  const t = ev.type || d.type
+  const t = ev.type || d.type || ''
   if (t === 'status_update') return null
 
   // Determine task type for badge
@@ -53,7 +63,7 @@ function eventToMessage(ev) {
   let msg = null
   switch (t) {
     case 'user_message':
-      msg = { text: `${d.sender || 'User'}: ${d.content}`, type: 'user_input' }
+      msg = { text: `${d.sender || i18n.t('agent.evt_user')}: ${d.content}`, type: 'user_input' }
       break
     case 'chat_thinking':
       msg = { text: `💭 ${d.content}`, rawDelta: d.content, type: 'thinking', isStreaming: true }
@@ -92,7 +102,10 @@ function eventToMessage(ev) {
       if (d.success) {
         const r = d.result || {}
         if (toolName === 'sql' && r.columns && r.rows) {
-          const meta = `${r.row_count ?? r.rows.length} rows${r.truncated ? ' (truncated)' : ''}`
+          const n = r.row_count ?? r.rows.length
+          const meta = r.truncated
+            ? i18n.t('agent.evt_rows_truncated', { n })
+            : i18n.t('agent.evt_rows', { n })
           msg = { text: meta, type: 'tool_result', toolName, toolSuccess: true, sqlData: { columns: r.columns, rows: r.rows } }
         } else {
           let content = r.output ?? r.data ?? r.message ?? ''
@@ -217,7 +230,7 @@ const TOOL_THEME = {
 }
 const DEFAULT_TOOL_THEME = { bg: 'bg-gray-50/60', text: 'text-gray-600', header: 'bg-gray-100/60 text-gray-700', border: 'border-gray-200/50', labelKey: 'agent.tool_generic', icon: '🔧' }
 
-function ToolResultBlock({ text, toolName, sqlData, theme }) {
+function ToolResultBlock({ text, sqlData, theme }) {
   // SQL table
   if (sqlData) {
     return (
@@ -315,7 +328,7 @@ function LogItem({ update }) {
         </span>
         {text && (
           <div className="mt-1 text-[10px] text-gray-500 pl-4 truncate" title={text}>
-            "{text}"
+            &quot;{text}&quot;
           </div>
         )}
         {detail && (
@@ -427,6 +440,11 @@ function ScheduledTasksPanel({ isRunning }) {
   }, [])
 
   useEffect(() => {
+    // set-state-in-effect is a false positive here: fetchTasks is async and every
+    // setState inside it runs after `await api.getScheduledTasks()`, i.e. in a
+    // later microtask, never synchronously during this effect body. The rule
+    // cannot see through the await when the callee is a memoized function.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchTasks()
     const interval = setInterval(fetchTasks, 15000)
     return () => clearInterval(interval)
@@ -447,12 +465,15 @@ function ScheduledTasksPanel({ isRunning }) {
 
   const handleToggle = async (task) => {
     const newStatus = task.status === 'active' ? 'paused' : 'active'
-    await api.updateScheduledTask(task.id, { status: newStatus })
+    const res = await api.updateScheduledTask(task.id, { status: newStatus })
+    if (!res.success) alert(res.error || t('common.unknown_error'))
     fetchTasks()
   }
 
   const handleDelete = async (task) => {
-    await api.updateScheduledTask(task.id, { status: 'deleted' })
+    if (!window.confirm(t('agent.confirm_delete_task'))) return
+    const res = await api.updateScheduledTask(task.id, { status: 'deleted' })
+    if (!res.success) alert(res.error || t('common.unknown_error'))
     fetchTasks()
   }
 
@@ -469,7 +490,8 @@ function ScheduledTasksPanel({ isRunning }) {
 
   const handleSaveEdit = async () => {
     if (!editCron.trim() || !editGoal.trim()) return
-    await api.updateScheduledTask(editingId, { cron_expr: editCron.trim(), prompt_goal: editGoal.trim() })
+    const res = await api.updateScheduledTask(editingId, { cron_expr: editCron.trim(), prompt_goal: editGoal.trim() })
+    if (!res.success) { alert(res.error || t('common.unknown_error')); return }
     setEditingId(null)
     fetchTasks()
   }
@@ -477,8 +499,14 @@ function ScheduledTasksPanel({ isRunning }) {
   const cronHuman = (expr) => {
     const parts = expr.split(' ')
     if (parts.length !== 5) return expr
-    const [min, hour, , , dow] = parts
-    const dowMap = { '0': 'Sun', '1': 'Mon', '2': 'Tue', '3': 'Wed', '4': 'Thu', '5': 'Fri', '6': 'Sat', '*': 'daily' }
+    const [min, hour, dom, month, dow] = parts
+    // Only plain "every day / every weekday at HH:MM" expressions can be
+    // summarised; anything with ranges, steps, lists or a day/month
+    // restriction is shown verbatim so it isn't mis-described.
+    if (dom !== '*' || month !== '*') return expr
+    if ([min, hour, dow].some((f) => /[*/,-]/.test(f) && f !== '*')) return expr
+    if (min === '*' || hour === '*') return expr
+    const dowMap = { '0': 'Sun', '1': 'Mon', '2': 'Tue', '3': 'Wed', '4': 'Thu', '5': 'Fri', '6': 'Sat', '*': t('agent.cron_daily') }
     const time = `${hour.padStart(2, '0')}:${min.padStart(2, '0')}`
     return `${dowMap[dow] || dow} ${time}`
   }
@@ -614,6 +642,9 @@ function TriggerRulesPanel({ isRunning }) {
   }, [])
 
   useEffect(() => {
+    // False positive — see the note on the scheduled-tasks poll above: fetchRules
+    // only setStates after `await api.getTriggerRules()`, never synchronously.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchRules()
     const interval = setInterval(fetchRules, 15000)
     return () => clearInterval(interval)
@@ -638,12 +669,15 @@ function TriggerRulesPanel({ isRunning }) {
 
   const handleToggle = async (rule) => {
     const newStatus = rule.status === 'active' ? 'paused' : 'active'
-    await api.updateTriggerRule(rule.id, { status: newStatus })
+    const res = await api.updateTriggerRule(rule.id, { status: newStatus })
+    if (!res.success) alert(res.error || t('common.unknown_error'))
     fetchRules()
   }
 
   const handleDelete = async (rule) => {
-    await api.updateTriggerRule(rule.id, { status: 'deleted' })
+    if (!window.confirm(t('agent.confirm_delete_rule'))) return
+    const res = await api.updateTriggerRule(rule.id, { status: 'deleted' })
+    if (!res.success) alert(res.error || t('common.unknown_error'))
     fetchRules()
   }
 
@@ -663,12 +697,13 @@ function TriggerRulesPanel({ isRunning }) {
 
   const handleSaveEdit = async () => {
     if (!editRule.name?.trim() || !editRule.feature_type?.trim()) return
-    await api.updateTriggerRule(editingId, {
+    const res = await api.updateTriggerRule(editingId, {
       ...editRule,
       threshold: parseFloat(editRule.threshold) || 0,
       window_minutes: parseInt(editRule.window_minutes) || 60,
       cooldown_minutes: parseInt(editRule.cooldown_minutes) || 30,
     })
+    if (!res.success) { alert(res.error || t('common.unknown_error')); return }
     setEditingId(null)
     fetchRules()
   }
@@ -896,6 +931,9 @@ function StartupModal({ currentStep, error, onClose }) {
 // ---------------------------------------------------------------------------
 export default function AutonomousAgentMonitor() {
   const { t } = useTranslation()
+  // Global app state — the sidebar's running indicator reads agentStatus,
+  // so this page keeps it in sync with what it polls.
+  const { dispatch: appDispatch } = useApp()
   // State
   const [agentStatus, setAgentStatus] = useState(null)
   const [isRunning, setIsRunning] = useState(false)
@@ -903,13 +941,17 @@ export default function AutonomousAgentMonitor() {
   const [logFilter, setLogFilter] = useState('all') // 'all' | 'analysis' | 'chat'
   const [llmProvider, setLlmProvider] = useState('gemini')
   const [model, setModel] = useState('')
-  const [defaultModel, setDefaultModel] = useState('')
+  // Only the setter is used — the backend default is stored but never rendered.
+  const [, setDefaultModel] = useState('')
   const [providerModels, setProviderModels] = useState({})
   const [wsConnected, setWsConnected] = useState(false)
-  const [reports, setReports] = useState([])
+  // Only the setter is used — the polled report list is not rendered here.
+  const [, setReports] = useState([])
   const [selectedReport, setSelectedReport] = useState(null)
   const [cumulativeTokens, setCumulativeTokens] = useState({ prompt: 0, thoughts: 0, response: 0, cacheRead: 0, cacheCreation: 0 })
-  const [localDurations, setLocalDurations] = useState({ analysis: 0, chat: 0 })
+  // Only the setter is used — the 1s timer writes it purely to force a re-render
+  // tick; the elapsed values themselves are recomputed from refs while rendering.
+  const [, setLocalDurations] = useState({ analysis: 0, chat: 0 })
   const [liveStream, setLiveStream] = useState({ thinking: '', content: '' })
 
   const [wsReconnecting, setWsReconnecting] = useState(false)
@@ -921,6 +963,7 @@ export default function AutonomousAgentMonitor() {
   const wsReconnectTimerRef = useRef(null)
   const wsReconnectAttemptsRef = useRef(0)
   const configSyncedRef = useRef(false) // track whether we've synced config from running agent
+  const configHydratedRef = useRef(false) // true once the initial provider/model resolution finished
   const connectMonitorRef = useRef(null) // stable ref for reconnect to call
   const isRunningRef = useRef(false) // track isRunning for WS onclose to check
   const analysisStateKeyRef = useRef(null)
@@ -945,11 +988,11 @@ export default function AutonomousAgentMonitor() {
       const buf = buckets[tt]
       if (!buf) continue
       if (buf.thinking) {
-        toAdd.push({ id: crypto.randomUUID(), time, message: { text: `💭 ${buf.thinking}`, type: 'thinking', taskType: tt } })
+        toAdd.push({ id: genId(), time, message: { text: `💭 ${buf.thinking}`, type: 'thinking', taskType: tt } })
       }
       const contentStripped = stripToolCallXml(buf.content)
       if (contentStripped) {
-        toAdd.push({ id: crypto.randomUUID(), time, message: { text: `🤖 Assistant: ${contentStripped}`, type: 'content', taskType: tt } })
+        toAdd.push({ id: genId(), time, message: { text: `🤖 Assistant: ${contentStripped}`, type: 'content', taskType: tt } })
       }
       buf.content = ''
       buf.thinking = ''
@@ -983,7 +1026,7 @@ export default function AutonomousAgentMonitor() {
     // Non-streaming event: flush only its own bucket so concurrent loops keep
     // their in-flight streaming text intact.
     flushStreamBuffer(tt)
-    const update = { id: crypto.randomUUID(), time: new Date().toLocaleTimeString(), message: { ...message, taskType: tt } }
+    const update = { id: genId(), time: new Date().toLocaleTimeString(), message: { ...message, taskType: tt } }
     setLogUpdates((prev) => [update, ...prev.slice(0, 499)])
   }, [flushStreamBuffer])
 
@@ -1061,6 +1104,7 @@ export default function AutonomousAgentMonitor() {
       if (result.success && result.running) {
         setAgentStatus(result)
         setIsRunning(true)
+        appDispatch({ type: 'SET_AGENT_STATUS', payload: { ...result, running: true, user_id: 'LiveUser' } })
         updateTimingRefs(result.status)
         if (result.status?.cumulative_tokens) {
           const ct = result.status.cumulative_tokens
@@ -1081,12 +1125,14 @@ export default function AutonomousAgentMonitor() {
       } else {
         setAgentStatus(null)
         setIsRunning(false)
+        setWsReconnecting(false)
         configSyncedRef.current = false
+        appDispatch({ type: 'SET_AGENT_STATUS', payload: { running: false } })
       }
     } catch (error) {
       console.error('Failed to get agent status:', error)
     }
-  }, [])
+  }, [appDispatch])
 
   const fetchReports = useCallback(async () => {
     try {
@@ -1105,7 +1151,7 @@ export default function AutonomousAgentMonitor() {
           if (!msg) return
           if (msg.isStreaming) return
           items.push({
-            id: crypto.randomUUID(),
+            id: genId(),
             time: ev.created_at ? parseBackendDate(ev.created_at).toLocaleTimeString() : '',
             message: msg,
           })
@@ -1187,18 +1233,20 @@ export default function AutonomousAgentMonitor() {
           setLiveStream({ thinking: '', content: '' })
           const toPrepend = []
           if (buf.thinking) {
-            toPrepend.push({ id: crypto.randomUUID(), time, message: { text: `💭 ${buf.thinking}`, type: 'thinking', taskType: tt } })
+            toPrepend.push({ id: genId(), time, message: { text: `💭 ${buf.thinking}`, type: 'thinking', taskType: tt } })
           }
           const contentStripped = stripToolCallXml(buf.content)
           if (contentStripped) {
-            toPrepend.push({ id: crypto.randomUUID(), time, message: { text: `🤖 Assistant: ${contentStripped}`, type: 'content', taskType: tt } })
+            toPrepend.push({ id: genId(), time, message: { text: `🤖 Assistant: ${contentStripped}`, type: 'content', taskType: tt } })
           }
           buf.thinking = ''
           buf.content = ''
           setLogUpdates((prev) => {
             const withFlushed = [...toPrepend, ...prev]
+            // The list is newest-first, so scan forward to find the most
+            // recent reply — that's the one this usage belongs to.
             let idx = -1
-            for (let i = withFlushed.length - 1; i >= 0; i--) {
+            for (let i = 0; i < withFlushed.length; i++) {
               if (withFlushed[i].message?.type === 'content') { idx = i; break }
             }
             if (idx >= 0) {
@@ -1208,7 +1256,7 @@ export default function AutonomousAgentMonitor() {
             }
             const tokenLine = formatTokenUsage(tokenUsage)
             if (tokenLine) {
-              return [{ id: crypto.randomUUID(), time, message: { text: tokenLine, type: 'token_usage', tokenUsage, taskType: isChat ? 'chat' : 'analysis' } }, ...withFlushed.slice(0, 199)]
+              return [{ id: genId(), time, message: { text: tokenLine, type: 'token_usage', tokenUsage, taskType: isChat ? 'chat' : 'analysis' } }, ...withFlushed.slice(0, 499)]
             }
             return withFlushed.slice(0, 500)
           })
@@ -1224,6 +1272,7 @@ export default function AutonomousAgentMonitor() {
           } else if (data.type === 'startup_error') {
             setStartupModal((prev) => ({ step: prev?.step || 0, error: data.error || 'Unknown error' }))
             setIsRunning(false)
+            setWsReconnecting(false)
           }
           const msg = eventToMessage(data)
           if (msg) addStatusUpdate(msg)
@@ -1252,11 +1301,13 @@ export default function AutonomousAgentMonitor() {
       }
     }
     wsRef.current = websocket
-  }, [addStatusUpdate, addCumulativeTokens, fetchReports, scheduleReconnect])
+  }, [addStatusUpdate, addCumulativeTokens, fetchReports, scheduleReconnect, t])
 
-  // Keep stable refs for callbacks
-  connectMonitorRef.current = connectMonitor
-  isRunningRef.current = isRunning
+  // Keep stable refs for callbacks (updated after commit, never during render)
+  useEffect(() => {
+    connectMonitorRef.current = connectMonitor
+    isRunningRef.current = isRunning
+  }, [connectMonitor, isRunning])
 
   // Handlers
   const handleStartAgent = async () => {
@@ -1308,13 +1359,15 @@ export default function AutonomousAgentMonitor() {
     //   3. Persisted localStorage (user's last manual selection in this browser)
     //   4. Agent's last-run config (freshest source of truth)
     // Sequential so later layers win; each try/catch isolates failures.
-    ;(async () => {
+    (async () => {
       try {
         const res = await api.getDefaults()
         if (res.model) setDefaultModel(res.model)
         if (res.provider_models) setProviderModels(res.provider_models)
         if (res.llm_provider) setLlmProvider(res.llm_provider)
-      } catch {}
+      } catch (e) {
+        console.warn('Failed to load backend defaults:', e)
+      }
 
       const stored = loadStoredConfig()
       if (stored) {
@@ -1329,15 +1382,27 @@ export default function AutonomousAgentMonitor() {
           if (cfg.llm_provider) setLlmProvider(cfg.llm_provider)
           if (cfg.model) setModel(cfg.model)
         }
-      } catch {}
+      } catch (e) {
+        console.warn('Failed to load agent last config:', e)
+      } finally {
+        // Only from here on does (llmProvider, model) reflect a real choice
+        // rather than the initial useState values.
+        configHydratedRef.current = true
+      }
     })()
   }, [])
 
   useEffect(() => {
+    // Don't persist the pre-hydration defaults — that would clobber the
+    // user's stored selection before it has even been read back.
+    if (!configHydratedRef.current) return
     saveConfig({ llmProvider, model })
   }, [llmProvider, model])
 
   useEffect(() => {
+    // False positive — all three are async and only setState after their `await`
+    // on the API call, so nothing is set synchronously in this effect body.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchActivityLog()
     checkAgentStatus()
     fetchReports()
@@ -1351,11 +1416,12 @@ export default function AutonomousAgentMonitor() {
     if (isRunning && wsStateRef.current === 'disconnected' && !wsReconnectTimerRef.current) {
       connectMonitor()
     }
-    // If agent stopped, cancel any pending reconnect
+    // If agent stopped, cancel any pending reconnect. Clearing the "reconnecting"
+    // flag is done at each place that flips isRunning to false rather than here,
+    // so this effect never setStates synchronously.
     if (!isRunning) {
       if (wsReconnectTimerRef.current) { clearTimeout(wsReconnectTimerRef.current); wsReconnectTimerRef.current = null }
       wsReconnectAttemptsRef.current = 0
-      setWsReconnecting(false)
     }
   }, [isRunning, connectMonitor])
 

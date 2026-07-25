@@ -4,7 +4,7 @@ import Charts
 // MARK: - Dashboard View
 
 struct DashboardView: View {
-    @StateObject private var viewModel = DashboardViewModel()
+    @StateObject private var viewModel = DashboardViewModel.shared
     @StateObject private var tasksVM = TasksViewModel()
     @ObservedObject private var router = AppRouter.shared
     @State private var hasStarted = false
@@ -182,6 +182,9 @@ private struct AgentStatusCard: View {
         if seconds < 86400 * 7 { return "\(seconds / 86400)d ago" }
 
         let df = DateFormatter()
+        // Fixed numeric pattern — pin the locale so a non-Gregorian device
+        // calendar (or non-Latin digits) can't reinterpret it.
+        df.locale = Locale(identifier: "en_US_POSIX")
         df.dateFormat = "M/d HH:mm"
         return df.string(from: date)
     }
@@ -658,6 +661,11 @@ private struct NightBarView: View {
 
     private var nightLabel: String {
         let formatter = DateFormatter()
+        // This label shows weekday/month *names*, so keep the user's locale for
+        // translation and pin only the calendar — en_US_POSIX here would force
+        // English names on every device. A Buddhist/Japanese device calendar
+        // would otherwise renumber the date.
+        formatter.calendar = Calendar(identifier: .gregorian)
         formatter.dateFormat = "E, MMM d"
         return formatter.string(from: night.date)
     }
@@ -691,6 +699,8 @@ private struct NightBarView: View {
     /// Time range label per session (e.g. "23:00–07:00" or "23:00–07:00 + 14:00–15:30")
     private var timeRangeLabel: String {
         let fmt = DateFormatter()
+        // Same fixed-pattern rule as formatRelativeTime above.
+        fmt.locale = Locale(identifier: "en_US_POSIX")
         fmt.dateFormat = "HH:mm"
         let parts = sessions.compactMap { session -> String? in
             guard let first = session.first, let last = session.last else { return nil }

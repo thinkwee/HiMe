@@ -73,7 +73,7 @@ async def reload_reader():
 @router.get("/users")
 async def list_users(datasets: list[str] | None = Query(None)):
     """List all available users."""
-    reader = _init_or_raise()
+    reader = await _init_or_raise()
     try:
         users = await asyncio.to_thread(reader.get_available_users, datasets)
         ds = datasets or await asyncio.to_thread(reader.get_datasets)
@@ -99,7 +99,7 @@ async def get_user_features(
     feature_type: str = Query("steps"),
 ):
     """Get available feature columns for a user."""
-    reader = _init_or_raise()
+    reader = await _init_or_raise()
     try:
         df = await asyncio.to_thread(reader.load_feature_data, [pid], feature_type)
         if df.empty:
@@ -140,7 +140,7 @@ async def inspect_user_data(
     limit:        int = Query(100, ge=1, le=1000),
 ):
     """Return a raw data sample for a user + feature combination."""
-    reader = _init_or_raise()
+    reader = await _init_or_raise()
     try:
         df = await asyncio.to_thread(reader.load_feature_data, [pid], feature_type)
         if df.empty:
@@ -170,8 +170,10 @@ async def inspect_user_data(
             "data":         data_records,
         }
 
-        json_str = json.dumps(result).replace("-Infinity", "null").replace("Infinity", "null").replace("NaN", "null")
-        return Response(content=json_str, media_type="application/json")
+        # ``dataframe_to_json_safe`` already maps non-finite floats to None, so
+        # no string surgery is needed here — and a blanket replace would also
+        # rewrite legitimate values/column names containing "NaN"/"Infinity".
+        return Response(content=json.dumps(result), media_type="application/json")
 
     except Exception as exc:
         logger.error("Error inspecting data for %s/%s: %s", pid, feature_type, exc, exc_info=True)
@@ -184,14 +186,14 @@ async def inspect_user_data(
 
 @router.get("/datasets")
 async def list_datasets():
-    reader = _init_or_raise()
+    reader = await _init_or_raise()
     datasets = await asyncio.to_thread(reader.get_datasets)
     return {"success": True, "datasets": datasets, "count": len(datasets), "data_source": "live"}
 
 
 @router.get("/feature_types")
 async def list_feature_types():
-    reader = _init_or_raise()
+    reader = await _init_or_raise()
     feature_types = await asyncio.to_thread(reader.get_feature_types)
     return {"success": True, "feature_types": feature_types, "data_source": "live"}
 
@@ -236,7 +238,7 @@ async def get_storage_count():
     load any sample payloads, so it's not subject to the dashboard endpoint's
     per-feature truncation cap.
     """
-    reader = _init_or_raise()
+    reader = await _init_or_raise()
     try:
         total = await asyncio.to_thread(reader.get_total_sample_count)
         return {"success": True, "count": int(total)}
@@ -253,7 +255,7 @@ async def get_dashboard_data(minutes: int = Query(1440, ge=10, le=43200)):
     ``{ts, v}`` objects sorted ascending by timestamp.
     """
     _MAX_POINTS_PER_FEATURE = 2000
-    reader = _init_or_raise()
+    reader = await _init_or_raise()
     try:
         feature_types = await asyncio.to_thread(reader.get_feature_types)
 
@@ -290,10 +292,14 @@ async def get_dashboard_data(minutes: int = Query(1440, ge=10, le=43200)):
 # Helper
 # ---------------------------------------------------------------------------
 
-def _init_or_raise() -> BaseDataReader:
-    """Initialise reader or surface a clean 500 error."""
+async def _init_or_raise() -> BaseDataReader:
+    """Initialise reader or surface a clean 500 error.
+
+    Opening the SQLite store cold can take seconds, so the (synchronous)
+    initialisation is offloaded to a thread — same as ``/reload`` already does.
+    """
     try:
-        return _ensure_reader()
+        return await asyncio.to_thread(_ensure_reader)
     except Exception as exc:
         raise HTTPException(
             status_code=500,

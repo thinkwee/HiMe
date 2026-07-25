@@ -19,11 +19,19 @@ PROJECT_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$PROJECT_ROOT"
 
 # ── Configuration ──────────────────────────────────────────────
-# Load environment variables from .env if it exists
-if [ -f ".env" ]; then
-    # Read the whole line and split on the FIRST '=' manually. Using
-    # `IFS='=' read` strips trailing IFS chars and would corrupt base64
-    # values ending in '=' (e.g. a 32-byte API token).
+# Load environment variables from a .env file.
+#
+# Read the whole line and split on the FIRST '=' manually. Using
+# `IFS='=' read` strips trailing IFS chars and would corrupt base64
+# values ending in '=' (e.g. a 32-byte API token).
+#
+# Quote handling must come BEFORE comment stripping: setup.sh single-quotes
+# any value containing special characters, so a secret like 'abc#def' would
+# otherwise be truncated to `abc` — a silent, near-undebuggable auth failure
+# that also diverges from how docker compose reads the same file.
+_load_env_file() {
+    local file="$1" line key value quote rest
+    [ -f "$file" ] || return 0
     while IFS= read -r line || [ -n "$line" ]; do
         # Skip comments and empty lines
         [[ $line =~ ^[[:space:]]*# ]] && continue
@@ -31,16 +39,29 @@ if [ -f ".env" ]; then
         [[ $line != *=* ]] && continue
         key="${line%%=*}"
         value="${line#*=}"
-        # Remove trailing comments from value and any surrounding quotes
-        value="${value%%#*}"
-        value="${value%"${value##*[![:space:]]}"}" # trim trailing whitespace
-        value="${value#\"}" # remove leading quote
-        value="${value%\"}" # remove trailing quote
-        value="${value#\'}" # remove leading single quote
-        value="${value%\'}" # remove trailing single quote
+        value="${value#"${value%%[![:space:]]*}"}" # trim leading whitespace
+        case "$value" in
+            \'*|\"*)
+                # Quoted: take everything up to the LAST matching quote,
+                # which drops any trailing comment but keeps '#' inside.
+                quote="${value:0:1}"
+                rest="${value#?}"
+                value="${rest%"$quote"*}"
+                ;;
+            *)
+                # Unquoted: an inline comment only counts when preceded by
+                # whitespace, so values such as ab#cd survive intact.
+                case "$value" in
+                    *[[:space:]]#*) value="${value%%[[:space:]]#*}" ;;
+                esac
+                value="${value%"${value##*[![:space:]]}"}" # trim trailing whitespace
+                ;;
+        esac
         export "$key=$value"
-    done < .env
-fi
+    done < "$file"
+}
+
+_load_env_file .env
 
 # ── Colours ──────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'
@@ -172,16 +193,16 @@ _native_kill_processes() {
         fi
     done
 
-    # Process-name kill (safety net) — match by project root to avoid killing
-    # unrelated processes, and cover all Python entry-point variants.
+    # Process-name kill (safety net). Patterns are either anchored to this
+    # project root or to a HiMe-specific entry point. Bare patterns like
+    # "uvicorn", "vite" or "multiprocessing.*" are deliberately NOT used:
+    # they would SIGKILL unrelated dev servers and Python jobs elsewhere on
+    # the machine (the vite child process carries the project path, so
+    # "${PROJECT_ROOT}/frontend" already covers the frontend).
     pkill -9 -f "${PROJECT_ROOT}/backend" 2>/dev/null || true
     pkill -9 -f "python3 -m backend.main" 2>/dev/null || true
     pkill -9 -f "python.*backend.main"    2>/dev/null || true
-    pkill -9 -f "uvicorn"                 2>/dev/null || true
     pkill -9 -f "${PROJECT_ROOT}/frontend" 2>/dev/null || true
-    pkill -9 -f "vite"                    2>/dev/null || true
-    pkill -9 -f "multiprocessing.spawn"   2>/dev/null || true
-    pkill -9 -f "multiprocessing.resource_tracker" 2>/dev/null || true
     pkill -9 -f "${PROJECT_ROOT}/ios/Server/server.py" 2>/dev/null || true
     pkill -9 -f "ios/Server/server.py"            2>/dev/null || true
 }
@@ -240,11 +261,14 @@ _native_start() {
     _cleanup_on_fail() {
         echo ""
         warn "Startup failed, cleaning up child processes..."
-        for pid in "${_start_pids[@]}"; do
+        # `${arr[@]+…}` keeps an empty array from tripping `set -u` on bash
+        # 3.2 (macOS /bin/bash) — otherwise the trap aborts here and the
+        # pkill fallback below never runs.
+        for pid in ${_start_pids[@]+"${_start_pids[@]}"}; do
             kill "$pid" 2>/dev/null || true
         done
         pkill -9 -f "python3 -m backend.main" 2>/dev/null || true
-        pkill -9 -f "vite" 2>/dev/null || true
+        pkill -9 -f "${PROJECT_ROOT}/frontend" 2>/dev/null || true
         pkill -9 -f "ios/Server/server.py" 2>/dev/null || true
     }
     trap _cleanup_on_fail EXIT
@@ -266,26 +290,25 @@ _native_start() {
         fi
     fi
 
-    # Source .env again just in case it was created. Split on first '=' (see
-    # the loader near the top) so base64 values ending in '=' survive intact.
-    while IFS= read -r line || [ -n "$line" ]; do
-        [[ $line =~ ^[[:space:]]*# ]] && continue
-        [[ -z $line ]] && continue
-        [[ $line != *=* ]] && continue
-        key="${line%%=*}"
-        value="${line#*=}"
-        value="${value%%#*}"
-        value="${value%"${value##*[![:space:]]}"}"
-        value="${value#\"}"; value="${value%\"}"
-        value="${value#\'}"; value="${value%\'}"
-        export "$key=$value"
-    done < .env
+    # Source .env again just in case it was created.
+    _load_env_file .env
 
     command -v python3 &>/dev/null || fail "Python 3 not found."
 
     if ! python3 -c "import uvicorn" &>/dev/null; then
         info "Installing backend dependencies..."
-        pip install -r backend/requirements.txt
+        # `python3 -m pip` guarantees we install into the SAME interpreter
+        # that runs the backend; a bare `pip` may belong to another one.
+        if ! python3 -m pip install -r backend/requirements.txt; then
+            echo ""
+            warn "pip install failed."
+            warn "On Homebrew Python 3.12+ / Debian 12+ pip refuses to install into"
+            warn "the system interpreter (PEP 668 'externally-managed-environment')."
+            warn "Create and activate a virtualenv, then retry:"
+            echo "    python3 -m venv .venv && source .venv/bin/activate"
+            echo "    python3 -m pip install -r backend/requirements.txt"
+            fail "Backend dependencies not installed."
+        fi
     fi
 
     # ── Prepare logs/ ────────────────────────────────────────────
@@ -295,7 +318,7 @@ _native_start() {
 
     # ── Start Watch Exporter ─────────────────────────────────────
     info "Starting Watch Exporter (8765)..."
-    PYTHONUNBUFFERED=1 python3 ios/Server/server.py --port 8765 > logs/watch.log 2>&1 &
+    PYTHONUNBUFFERED=1 nohup python3 ios/Server/server.py --port 8765 > logs/watch.log 2>&1 &
     WATCH_PID=$!
     _start_pids+=("$WATCH_PID")
 
@@ -315,7 +338,7 @@ _native_start() {
 
     # ── Start backend ────────────────────────────────────────────
     info "Starting backend..."
-    PYTHONUNBUFFERED=1 python3 -m backend.main > logs/backend.log 2>&1 &
+    PYTHONUNBUFFERED=1 nohup python3 -m backend.main > logs/backend.log 2>&1 &
     BACKEND_PID=$!
     _start_pids+=("$BACKEND_PID")
     
@@ -388,10 +411,10 @@ _native_start() {
     trap - EXIT
     echo ""
     echo -e "${BOLD}🎉 HiMe is ready!${NC}"
-    if [ -n "$DASHBOARD_URL" ]; then
+    if [ -n "${DASHBOARD_URL:-}" ]; then
         echo "   External Dashboard: $DASHBOARD_URL"
-        echo "   External API:       $API_URL"
-        echo "   External Watch:     $WATCH_URL"
+        echo "   External API:       ${API_URL:-n/a}"
+        echo "   External Watch:     ${WATCH_URL:-n/a}"
     else
        echo "   Local UI:           http://localhost:5173"
        echo "   Local API:          http://localhost:8000"
@@ -410,7 +433,7 @@ _cleanup_start() {
         [ -n "$pid" ] && { pkill -9 -P "$pid" 2>/dev/null || true; kill -9 "$pid" 2>/dev/null || true; }
     done
     pkill -9 -f "python3 -m backend.main" 2>/dev/null || true
-    pkill -9 -f "vite" 2>/dev/null || true
+    pkill -9 -f "${PROJECT_ROOT}/frontend" 2>/dev/null || true
     pkill -9 -f "ios/Server/server.py" 2>/dev/null || true
     ok "All services stopped."
     exit 0

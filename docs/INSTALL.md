@@ -42,6 +42,22 @@ Endpoints when ready:
 - Backend API: http://localhost:8000
 - Watch exporter: http://localhost:8765/ping
 
+### API token and the dashboard
+
+`./setup.sh` always generates an `API_AUTH_TOKEN` (a manual `.env` may leave it
+empty, which disables auth). When a token is set, every `/api/*` call and every
+WebSocket stream requires it — including the dashboard's.
+
+The dashboard asks for it in the browser: the first `401` opens a small prompt,
+you paste the value of `API_AUTH_TOKEN` from `.env`, and it is stored in that
+tab's `sessionStorage` (or in `localStorage` if you tick **Remember on this
+device**) and reused for every request and WebSocket afterwards. Nothing has to
+be rebuilt, and the token is never baked into the JavaScript bundle — which
+matters because `dist/` is served to anyone who can load the page.
+
+To sign out of a browser, clear the site's storage (DevTools → Application →
+Storage → Clear site data).
+
 ## Native dev install
 
 For developers iterating on the code (Python venv + Vite dev server, no Docker):
@@ -262,6 +278,7 @@ The agent can generate single-page apps on demand using the `create_page` tool. 
 | `setup.sh` finishes but nothing responds | Containers crashed | `docker compose logs -f --tail=100` |
 | iOS app shows "Cannot connect" | Wrong Server URL or firewall | `curl http://<host>:8765/ping` from another LAN device |
 | `401 Unauthorized` from API | `API_AUTH_TOKEN` mismatch | Set the same value in iOS app's Settings → Auth Token |
+| Dashboard keeps asking for the API token | Pasted token ≠ `API_AUTH_TOKEN` in `.env` | Copy the value from `.env` (`grep API_AUTH_TOKEN .env`); it is re-asked on every 401 |
 | Telegram bot silent | `TELEGRAM_ALLOWED_CHAT_IDS` empty | Add your chat_id to the allowlist (setup.sh handles this) |
 | Feishu card buttons do nothing | Feishu Card Request URL not set | Set the public callback URL in Feishu console — see [`docs/DEPLOYMENT.md`](DEPLOYMENT.md) |
 | WeChat bot silent after restart | Token file missing or expired | Re-run `python -m backend.weixin.qr_login` and re-scan; check that `./data/weixin_bot_token.json` exists |

@@ -62,6 +62,10 @@ class DataStoreReader(BaseDataReader):
 
         try:
             db_path = self._get_db_path(pids[0])
+            # ``sqlite3.connect`` CREATES the file when missing, which would make
+            # ``get_available_users``' glob report a phantom user on the next call.
+            if not db_path.exists():
+                return default_features
             with sqlite3.connect(str(db_path), timeout=20, check_same_thread=False) as conn:
                 rows = conn.execute("SELECT DISTINCT feature_type FROM samples").fetchall()
             db_features = [r[0] for r in rows] if rows else []
@@ -73,17 +77,26 @@ class DataStoreReader(BaseDataReader):
         return ["value"]
 
     def get_date_range(self, pids: list[str]) -> tuple:
+        # ``timestamp`` is stored as a UTC ISO string (see ``ts_fmt``) and
+        # ``load_feature_data`` parses it with ``utc=True``. Parse it the same way
+        # here — a naive result cannot be compared against the aware ``date``
+        # column ("Cannot compare tz-naive and tz-aware timestamps").
         if not pids:
-            return (pd.Timestamp.now(), pd.Timestamp.now())
+            now = pd.Timestamp.now(tz="UTC")
+            return (now, now)
         try:
             db_path = self._get_db_path(pids[0])
-            with sqlite3.connect(str(db_path), timeout=20, check_same_thread=False) as conn:
-                row = conn.execute("SELECT MIN(timestamp), MAX(timestamp) FROM samples").fetchone()
-            if row and row[0]:
-                return (pd.to_datetime(row[0]), pd.to_datetime(row[1]))
+            if db_path.exists():
+                with sqlite3.connect(str(db_path), timeout=20, check_same_thread=False) as conn:
+                    row = conn.execute("SELECT MIN(timestamp), MAX(timestamp) FROM samples").fetchone()
+                if row and row[0]:
+                    return (
+                        pd.to_datetime(row[0], utc=True),
+                        pd.to_datetime(row[1], utc=True),
+                    )
         except Exception:
             pass
-        now = pd.Timestamp.now()
+        now = pd.Timestamp.now(tz="UTC")
         return (now - pd.Timedelta(hours=1), now)
 
     def load_feature_data(
@@ -128,6 +141,10 @@ class DataStoreReader(BaseDataReader):
 
         try:
             db_path = self._get_db_path(pid)
+            # ``sqlite3.connect`` CREATES the file when missing; bail out instead so
+            # an unknown pid never leaves a phantom ``{pid}_data.db`` behind.
+            if not db_path.exists():
+                return pd.DataFrame()
             with sqlite3.connect(str(db_path), timeout=20, check_same_thread=False) as conn:
                 df = pd.read_sql_query(query, conn, params=params)
 
@@ -205,6 +222,8 @@ class DataStoreReader(BaseDataReader):
 
         try:
             db_path = self._get_db_path(pid)
+            if not db_path.exists():
+                return pd.DataFrame()
             with sqlite3.connect(str(db_path), timeout=20, check_same_thread=False) as conn:
                 df = pd.read_sql_query(query, conn, params=params)
             if df.empty:

@@ -618,6 +618,12 @@ enum MetricCategory: String, CaseIterable {
 @MainActor
 class DashboardViewModel: ObservableObject {
 
+    /// Single shared instance. DashboardView and ReportsView used to build one
+    /// each, which meant two 30 s poll timers and two writers racing on the
+    /// widget snapshot (a non-atomic read-modify-write) — deleting a report
+    /// could let the other instance's stale list overwrite the widget.
+    static let shared = DashboardViewModel()
+
     @Published var isAgentRunning: Bool = false
     @Published var lastAnalysisTime: String? = nil
     @Published var agentModel: String? = nil
@@ -682,7 +688,14 @@ class DashboardViewModel: ObservableObject {
         defer { isLoadingStatus = false }
 
         do {
-            let (data, _) = try await URLSession.shared.data(for: APIClient.request(url))
+            let (data, http) = try await URLSession.shared.data(for: APIClient.request(url))
+            // A 401/403 is a credentials problem, not a stopped agent. Reporting
+            // it as "stopped" made a wrong or missing auth token undiagnosable.
+            if let response = http as? HTTPURLResponse, response.statusCode == 401 || response.statusCode == 403 {
+                isAgentRunning = false
+                errorMessage = "Server rejected the auth token (HTTP \(response.statusCode)) — check Settings › Auth Token."
+                return
+            }
             let response = try JSONDecoder().decode(AgentStatusResponse.self, from: data)
             isAgentRunning = response.running ?? false
             lastAnalysisTime = response.status?.last_analysis_time
@@ -1018,15 +1031,19 @@ class DashboardViewModel: ObservableObject {
             ("heart_rate",                "Heart",  "bpm",  { $0 }),
             ("sleep_unified",             "Sleep",  "h",    { $0 / 3600 }),     // seconds → hours
             ("steps",                     "Steps",  "",     { $0 }),
-            ("blood_oxygen",              "SpO₂",   "%",    { $0 }),            // already 0-100
+            // HealthKitManager collects oxygenSaturation with .percent(), i.e.
+            // a 0–1 fraction — rendering it raw showed "SpO₂ 1.0%".
+            ("blood_oxygen",              "SpO₂",   "%",    { $0 * 100 }),      // fraction → %
             ("heart_rate_variability",    "HRV",    "ms",   { $0 }),
             ("active_energy",             "Energy", "kcal", { $0 }),
             ("resting_heart_rate",        "RestHR", "bpm",  { $0 }),
             ("respiratory_rate",          "Resp",   "br",   { $0 }),
             ("walking_heart_rate_avg",    "WalkHR", "bpm",  { $0 }),
             ("vo2max",                    "VO₂",    "",     { $0 }),
-            ("exercise_time",             "Exer",   "min",  { $0 }),
-            ("stand_time",                "Stand",  "min",  { $0 }),
+            // Both are collected in .second() (see quantityMetrics), so the
+            // widget was showing things like "Exer 3600 min".
+            ("exercise_time",             "Exer",   "min",  { $0 / 60 }),       // seconds → minutes
+            ("stand_time",                "Stand",  "min",  { $0 / 60 }),       // seconds → minutes
             ("flights_climbed",           "Floors", "",     { $0 }),
             ("distance",                  "Dist",   "km",   { $0 / 1000 }),     // m → km
             ("sleeping_wrist_temp",       "Temp",   "°C",   { $0 }),

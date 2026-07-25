@@ -9,7 +9,11 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-PROMPTS_DIR = Path("prompts")
+# Anchored to the repo root via ``__file__`` (backend/agent/prompt_loader.py →
+# <root>/prompts). A CWD-relative path silently resolves to nothing whenever the
+# server is started from another directory — and because ``_load_cached`` is
+# LRU-cached, the agent would then run with an empty persona/ruleset forever.
+PROMPTS_DIR = Path(__file__).resolve().parent.parent.parent / "prompts"
 
 
 def safe_format(template: str, **kwargs: object) -> str:

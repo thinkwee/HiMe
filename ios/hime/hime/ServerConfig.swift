@@ -1,4 +1,50 @@
 import Foundation
+import Security
+
+/// Keychain-backed storage for the server bearer token.
+///
+/// The token used to live in UserDefaults, i.e. an unencrypted plist that is
+/// included in iTunes/iCloud backups — leaking it grants full read/write access
+/// to the health backend. `kSecAttrAccessibleAfterFirstUnlock` keeps it readable
+/// by background HealthKit wakes while excluding it from backups.
+private enum TokenKeychain {
+    private static let service = "com.hime.serverAuth"
+    private static let account = "serverAuthToken"
+
+    private static var baseQuery: [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+    }
+
+    static func read() -> String? {
+        var query = baseQuery
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    static func write(_ value: String) {
+        let query = baseQuery
+        guard !value.isEmpty else {
+            SecItemDelete(query as CFDictionary)
+            return
+        }
+        let attributes: [String: Any] = [
+            kSecValueData as String: Data(value.utf8),
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+        ]
+        if SecItemUpdate(query as CFDictionary, attributes as CFDictionary) == errSecSuccess { return }
+        var insert = query
+        insert.merge(attributes) { _, new in new }
+        SecItemAdd(insert as CFDictionary, nil)
+    }
+}
 
 /// Derives all service URLs from a single user-provided server address.
 ///
@@ -56,11 +102,26 @@ struct ServerConfig {
         }
     }
 
+    /// UserDefaults key the token used to live under, kept only for migration.
+    private static let legacyTokenKey = "serverAuthToken"
+
     /// Bearer token for server authentication. Empty means no auth
-    /// (fine for localhost). Set via the Settings screen.
+    /// (fine for localhost). Set via the Settings screen. Stored in the
+    /// Keychain; transparently migrated out of UserDefaults on first read.
     static var authToken: String {
-        get { UserDefaults.standard.string(forKey: "serverAuthToken") ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: "serverAuthToken") }
+        get {
+            if let stored = TokenKeychain.read() { return stored }
+            if let legacy = UserDefaults.standard.string(forKey: legacyTokenKey), !legacy.isEmpty {
+                TokenKeychain.write(legacy)
+                UserDefaults.standard.removeObject(forKey: legacyTokenKey)
+                return legacy
+            }
+            return ""
+        }
+        set {
+            TokenKeychain.write(newValue)
+            UserDefaults.standard.removeObject(forKey: legacyTokenKey)
+        }
     }
 
     // MARK: - Deferred onboarding survey
@@ -76,7 +137,11 @@ struct ServerConfig {
     // (onboarding completion, ContentView launch, two SettingsView token-save
     // paths); without this, two calls can read the stash before either clears
     // it and each POSTs the same survey → duplicate onboarding rows.
-    private static var isFlushingSurvey = false
+    //
+    // Isolated to the main actor: as a plain static Bool the check-then-set was
+    // itself racy, so two concurrent callers could both pass the guard and
+    // reproduce the very double-submit it exists to prevent.
+    @MainActor private static var isFlushingSurvey = false
 
     static var hasPendingSurvey: Bool {
         UserDefaults.standard.data(forKey: pendingSurveyKey) != nil
@@ -95,6 +160,7 @@ struct ServerConfig {
     /// Idempotency: the stash is claimed (removed) BEFORE the POST so a
     /// concurrent flush sees nothing and can't double-submit; on any failure
     /// the payload is restored so the next launch/Settings flush retries it.
+    @MainActor
     static func flushPendingSurvey() async {
         guard !isFlushingSurvey else { return }
         guard !authToken.isEmpty,
@@ -168,7 +234,15 @@ struct ServerConfig {
             if s.hasPrefix(prefix) { s = String(s.dropFirst(prefix.count)); break }
         }
         if let idx = s.firstIndex(of: "/") { s = String(s[..<idx]) }
-        if let idx = s.lastIndex(of: ":") {
+        // Strip the port. IPv6 literals are full of colons, so `lastIndex(of:)`
+        // alone mangles them ("fd00::1" → "fd00:"); handle the bracketed and
+        // bare forms explicitly.
+        if s.hasPrefix("[") {
+            // "[fd00::1]:8765" → "fd00::1"
+            if let close = s.firstIndex(of: "]") {
+                s = String(s[s.index(after: s.startIndex)..<close])
+            }
+        } else if s.filter({ $0 == ":" }).count <= 1, let idx = s.lastIndex(of: ":") {
             let after = String(s[s.index(after: idx)...])
             if after.allSatisfy(\.isNumber) { s = String(s[..<idx]) }
         }

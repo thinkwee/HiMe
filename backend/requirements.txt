@@ -39,6 +39,10 @@ httpx==0.28.1
 
 # Feishu / Lark gateway (optional — enabled via FEISHU_GATEWAY_ENABLED)
 lark-oapi>=1.4.0  # Optional: Feishu gateway (only needed if FEISHU_GATEWAY_ENABLED=true)
+# Decrypts Feishu webhook payloads when an Encrypt Key is set in the console.
+# The gateway falls back to pycryptodome (a hard dependency of lark-oapi), but
+# relying on a transitive dep for this would break if lark-oapi ever drops it.
+cryptography>=42.0
 
 # WeChat (Weixin ClawBot / iLink) gateway — used by `python -m backend.weixin.qr_login`
 # to render the login QR in the terminal. Pure Python, no system deps.

@@ -15,6 +15,7 @@ import asyncio
 import json
 import sqlite3
 import argparse
+import hmac
 import logging
 import os
 import socket
@@ -55,6 +56,14 @@ def _log_foreground(msg: str) -> None:
 def _log_background(msg: str) -> None:
     _log("background", msg, "bold yellow")
 
+
+
+# Timestamps at or above this value are epoch MILLISECONDS, not seconds.
+# Current epoch is ~1.7e9 s / ~1.7e12 ms, so 1e12 sits safely between the two
+# (it is year 33658 read as seconds). Every ms-detection site must use this
+# same constant — using different thresholds meant a timestamp could be
+# STORED as seconds but DISPLAYED as milliseconds, or vice versa.
+MS_THRESHOLD = 1e12
 
 
 SCHEMA = """
@@ -129,12 +138,13 @@ def insert_payload(con: sqlite3.Connection, payload: dict) -> int:
         log.warning(f"Payload missing 'ts' key. Using server current time.")
         ts = now
     elif not isinstance(ts, (int, float)):
-        try: ts = float(ts)
-        except: ts = now
+        try:
+            ts = float(ts)
+        except (ValueError, TypeError):
+            ts = now
 
-    # Detect milliseconds: timestamps > 1e12 are in milliseconds (epoch ms).
-    # Current epoch in seconds is ~1.7e9; in ms it's ~1.7e12.
-    if ts > 1e12:
+    # Detect milliseconds (see MS_THRESHOLD).
+    if ts > MS_THRESHOLD:
         ts = ts / 1000.0
 
     if ts > now + 3600:
@@ -202,9 +212,12 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
     _log_connection(f"iPhone connected (WS)  {request.remote}")
     try:
         async for msg in ws:
-            if not _sync_enabled:
-                continue
+            # NOTE: the sync-enabled gate lives inside the data branches only.
+            # Checking it here would also swallow protocol frames (PING/CLOSE),
+            # leaving the socket looking alive while nothing is handled.
             if msg.type in (aiohttp.WSMsgType.TEXT, aiohttp.WSMsgType.BINARY):
+                if not _sync_enabled:
+                    continue
                 try:
                     recv_time = _ts_fmt(time.time())
                     # json.loads works for both str and bytes
@@ -228,7 +241,7 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                             
                         ts = item.get("ts")
                         if isinstance(ts, (int, float)):
-                            ts_sec = ts / 1000.0 if ts > time.time() * 10 else ts
+                            ts_sec = ts / 1000.0 if ts > MS_THRESHOLD else ts
                             data_ts = _ts_fmt(ts_sec)
                             age = time.time() - ts_sec
                             _log_foreground(f"{f:20} = {v:>8.2f}  │  recv {recv_time}  data {data_ts}  age {age:.0f}s")
@@ -285,7 +298,7 @@ async def handle_ingest(request: web.Request) -> web.Response:
                 continue
             ts = item.get("ts")
             if isinstance(ts, (int, float)):
-                ts_sec = ts / 1000.0 if ts > time.time() * 10 else ts
+                ts_sec = ts / 1000.0 if ts > MS_THRESHOLD else ts
                 data_ts = _ts_fmt(ts_sec)
                 age = time.time() - ts_sec
                 log_fn(f"{f:20} = {v:>8.2f}  │  recv {recv_time}  data {data_ts}  age {age:.0f}s")
@@ -313,12 +326,16 @@ def _check_auth(request: web.Request) -> bool:
     """Return True if the request is authorized (or auth is disabled)."""
     if not _auth_token:
         return True
+    # Constant-time comparison — a plain `==` short-circuits on the first
+    # differing byte and leaks the token one character at a time.
     # HTTP header: Authorization: Bearer <token>
     auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Bearer ") and auth_header[7:].strip() == _auth_token:
+    if auth_header.startswith("Bearer ") and hmac.compare_digest(
+        auth_header[7:].strip(), _auth_token
+    ):
         return True
     # Query param: ?token=<token>  (WebSocket clients can't set headers)
-    if request.query.get("token", "") == _auth_token:
+    if hmac.compare_digest(request.query.get("token", ""), _auth_token):
         return True
     return False
 
@@ -388,13 +405,23 @@ def make_app(db_path: str) -> web.Application:
     # Catch-all MUST be last
     app.router.add_route("*", "/{tail:.*}", handle_any)
 
-    # Schedule cleanup task to start after the event loop is running
+    # Schedule cleanup task to start after the event loop is running.
+    # The task reference is stored on the app: asyncio keeps only a weak
+    # reference, so an unheld task can be garbage-collected mid-await and the
+    # 30-day retention sweep would silently stop running.
     async def _start_cleanup(application):
-        asyncio.create_task(cleanup_old_data(db_path))
+        application["cleanup_task"] = asyncio.create_task(cleanup_old_data(db_path))
 
     app.on_startup.append(_start_cleanup)
 
     async def cleanup_db(application: web.Application) -> None:
+        task = application.get("cleanup_task")
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         if "db" in application and application["db"]:
             application["db"].close()
 

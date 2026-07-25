@@ -26,6 +26,15 @@
     "unexpected_error": "发生了意外错误",
     "reload_page": "重新加载页面"
   },
+  "auth": {
+    "title": "需要 API 令牌",
+    "description": "服务器拒绝了本次请求。请粘贴服务器 .env 文件中的 API_AUTH_TOKEN 以使用仪表盘。",
+    "token_label": "API 令牌",
+    "token_placeholder": "粘贴 API_AUTH_TOKEN",
+    "remember": "在此设备上记住",
+    "remember_hint": "关闭浏览器后仍保留该令牌；否则仅在当前标签页内有效。",
+    "submit": "保存并重新加载"
+  },
   "nav": {
     "dashboard": "仪表盘",
     "agent_monitor": "智能体监控",
@@ -120,7 +129,10 @@
     "cron_timezone_hint": "Cron 时间按 {{tz}} 时区解读。",
     "analysis_goal_placeholder": "分析目标...",
     "cron_expression": "Cron 表达式",
+    "cron_daily": "每天",
     "failed_create_task": "创建任务失败",
+    "confirm_delete_task": "确认删除该定时任务?",
+    "confirm_delete_rule": "确认删除该触发规则?",
     "trigger_rules": "触发规则",
     "no_trigger_rules": "暂无触发规则",
     "rule_name": "规则名称",
@@ -227,6 +239,7 @@
     "title": "提示词管理",
     "subtitle": "通过编辑核心指令来微调智能体的行为。修改将在下一个智能体周期立即生效。",
     "refresh_tooltip": "从磁盘重新加载(获取智能体对 user.md / experience.md 的改动)",
+    "confirm_discard": "存在未保存的修改,确认放弃吗?",
     "save_changes": "保存修改",
     "prompt_library": "提示词库",
     "agent_editable": "智能体可编辑",
@@ -275,6 +288,7 @@
     "title": "个性化页面",
     "refresh": "刷新",
     "loading": "正在加载页面...",
+    "loading_page": "正在加载页面内容...",
     "empty": "暂无个性化页面。",
     "empty_hint": "通过聊天由智能体创建的页面将在此处显示。",
     "open_new_tab": "在新标签页打开",
@@ -283,7 +297,8 @@
     "minimize": "最小化",
     "maximize": "最大化",
     "confirm_delete": "确认删除页面 \"{{pageId}}\"?此操作无法撤销。",
-    "delete_failed": "删除页面失败: {{error}}"
+    "delete_failed": "删除页面失败: {{error}}",
+    "load_failed": "加载页面失败: {{error}}"
   },
   "skills": {
     "title": "技能",

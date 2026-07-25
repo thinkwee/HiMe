@@ -285,9 +285,11 @@ class PushReportTool(BaseTool):
         report["_im_text"] = im_text
         report["_reply_markup"] = verification["reply_markup"]
 
-        # User notification (all channels) — fully async, errors are non-fatal
-        task = asyncio.create_task(self._notify_user(report))
-        task.add_done_callback(lambda t: logger.error("User notify failed: %s", t.exception()) if not t.cancelled() and t.exception() else None)
+        # User notification (all channels) — fully async, errors are non-fatal.
+        # spawn_background keeps a strong reference so the task can't be
+        # garbage-collected before it finishes.
+        from ..agent_loops import spawn_background  # noqa: PLC0415 (avoid import cycle)
+        spawn_background(self._notify_user(report), label="User notify")
 
         logger.info("Report saved: '%s' (id=%d, level=%s, source=%s)", title, report_id, alert_level, source)
         return {
@@ -446,8 +448,8 @@ class PushReportTool(BaseTool):
         # the operator disables the gateway but forgets to clear the token.
         if not getattr(settings, "TELEGRAM_GATEWAY_ENABLED", False):
             return
-        token   = getattr(settings, "telegram_token", None)
-        chat_id = getattr(settings, "chat_id", None)
+        token   = getattr(settings, "TELEGRAM_TOKEN", None)
+        chat_id = getattr(settings, "CHAT_ID", None)
         if not token or not chat_id:
             return
 

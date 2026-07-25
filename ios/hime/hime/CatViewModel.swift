@@ -2025,7 +2025,13 @@ class CatViewModel: ObservableObject {
 
     private func scheduleIdleBehavior() {
         let delay = isConnected ? Double.random(in: 3.5...7) : Double.random(in: 7...14)
-        after(delay) {
+        // [weak self], as scheduleBlink already does. Capturing self strongly
+        // in an infinitely self-rescheduling closure pins the view model alive
+        // forever — deinit never runs, so every rebuilt CatView (Revoke
+        // Consent, Replay Onboarding …) leaks another 60 fps timer plus a 15 s
+        // agent-status poll.
+        after(delay) { [weak self] in
+            guard let self else { return }
             guard !self.isTapAnimating, !self.isLongPressAnimating else {
                 self.scheduleIdleBehavior(); return
             }
@@ -2371,7 +2377,17 @@ class CatViewModel: ObservableObject {
         }
     }
 
-    deinit { animTimer?.invalidate(); agentStatusTimer?.invalidate(); revealLoopTask?.cancel() }
+    deinit {
+        // deinit is nonisolated and can run on any thread, but a Timer must be
+        // invalidated on the run loop that scheduled it (the main one here) or
+        // it keeps firing. Task.cancel() is safe from anywhere.
+        revealLoopTask?.cancel()
+        // nonisolated(unsafe): Timer isn't Sendable, but deinit is the last
+        // reference to these and the hop is precisely to reach their own
+        // (main) run loop, so nothing else can touch them concurrently.
+        nonisolated(unsafe) let timers = [animTimer, agentStatusTimer]
+        DispatchQueue.main.async { timers.forEach { $0?.invalidate() } }
+    }
 
     /// Push the current cat state into the App Group snapshot so the
     /// home / lock-screen widgets can read it. Metric and report

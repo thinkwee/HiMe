@@ -202,6 +202,11 @@ class Settings(BaseSettings):
     # routes require an Authorization: Bearer <token> header. Leave empty to
     # disable auth (fine for localhost; NOT safe for public deployments).
     API_AUTH_TOKEN: str | None = None
+    # Trust ``X-Forwarded-For`` when deriving the client IP for rate limiting.
+    # Only enable this when the service genuinely sits behind a reverse proxy
+    # that overwrites the header — otherwise a direct caller can forge a fresh
+    # IP per request and bypass the limiter entirely.
+    TRUST_PROXY_HEADERS: bool = False
     # Public URLs for display in logs/scripts
     DASHBOARD_URL: str | None = None
     API_URL:       str | None = None

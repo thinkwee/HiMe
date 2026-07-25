@@ -268,7 +268,13 @@ final class HealthKitManager: ObservableObject {
 
         do {
             try await store.requestAuthorization(toShare: [], read: readTypes)
-            await MainActor.run { authStatus = "Authorized" }
+            // iOS deliberately never reveals READ authorization status (that
+            // would leak which conditions a user tracks), so a successful
+            // return means only that the prompt completed — NOT that anything
+            // was granted. Saying "Authorized" here made a full denial
+            // indistinguishable from a working setup. `lastSync` /
+            // `recentSamples` are the real data-flowing signal.
+            await MainActor.run { authStatus = "Permission request completed" }
         } catch {
             let msg = "Auth failed: \(error.localizedDescription)"
             await MainActor.run { authStatus = msg }
@@ -312,33 +318,30 @@ final class HealthKitManager: ObservableObject {
             }
             guard let self else { completion(); return }
 
-            let stateStr: String = DispatchQueue.main.sync {
-                let s = UIApplication.shared.applicationState
-                return s == .active ? "active" : s == .background ? "background" : "inactive"
-            }
-            HealthKitManager.bgLog("📱 HK-OBSERVER: \(feature) fired (appState=\(stateStr))")
-
-            let taskID: UIBackgroundTaskIdentifier = DispatchQueue.main.sync {
-                UIApplication.shared.beginBackgroundTask(withName: "HKFetch-\(feature)") {
-                    // expiration handler — taskID captured after assignment
-                }
-            }
-            guard taskID != .invalid else {
-                HealthKitManager.bgLog("📱 HK-OBSERVER: \(feature) — beginBackgroundTask returned .invalid, aborting")
-                completion()
-                return
-            }
-
             // Always route observer-triggered uploads via fgSession. bgSession
             // (URLSessionConfiguration.background) hands tasks to nsurlsessiond,
             // which can silently stall for tens of seconds — indefinitely during
             // first-install backfill when HK fires a burst with applicationState
-            // != .active. beginBackgroundTask above grants ~30s of guaranteed
+            // != .active. BackgroundTaskHandle below grants ~30s of guaranteed
             // execution, plenty for a 500-record POST even on a background wake.
+            //
+            // This Task is created from a nonisolated callback, so the fetch and
+            // its file writes stay off the main thread. UIApplication access is
+            // awaited on the main actor instead of DispatchQueue.main.sync —
+            // .sync from the main thread deadlocks it on itself (the same
+            // failure mode documented in PhoneConnectivityManager).
             Task {
+                let stateStr = await BackgroundTaskHandle.appStateDescription()
+                HealthKitManager.bgLog("📱 HK-OBSERVER: \(feature) fired (appState=\(stateStr))")
+
+                guard let handle = await BackgroundTaskHandle.begin(name: "HKFetch-\(feature)") else {
+                    HealthKitManager.bgLog("📱 HK-OBSERVER: \(feature) — beginBackgroundTask returned .invalid, aborting")
+                    completion()
+                    return
+                }
                 await self.fetchAndStore(feature: feature, sampleType: sampleType, unit: unit, appState: "foreground")
                 completion()
-                await MainActor.run { UIApplication.shared.endBackgroundTask(taskID) }
+                await handle.end()
             }
         }
         store.execute(observer)
@@ -355,29 +358,24 @@ final class HealthKitManager: ObservableObject {
             }
             guard let self else { completion(); return }
 
-            let stateStr: String = DispatchQueue.main.sync {
-                let s = UIApplication.shared.applicationState
-                return s == .active ? "active" : s == .background ? "background" : "inactive"
-            }
-            HealthKitManager.bgLog("📱 HK-OBSERVER: \(feature) (cumulative) fired (appState=\(stateStr))")
-
-            let taskID: UIBackgroundTaskIdentifier = DispatchQueue.main.sync {
-                UIApplication.shared.beginBackgroundTask(withName: "HKStats-\(feature)") {
-                    // expiration handler
-                }
-            }
-            guard taskID != .invalid else {
-                HealthKitManager.bgLog("📱 HK-OBSERVER: \(feature) (cumulative) — beginBackgroundTask returned .invalid, aborting")
-                completion()
-                return
-            }
-
+            // See registerObserver: awaited main-actor hop instead of
+            // DispatchQueue.main.sync (deadlocks when the callback is already on
+            // the main thread), and an expiration handler that actually ends the
+            // background task.
             Task {
+                let stateStr = await BackgroundTaskHandle.appStateDescription()
+                HealthKitManager.bgLog("📱 HK-OBSERVER: \(feature) (cumulative) fired (appState=\(stateStr))")
+
+                guard let handle = await BackgroundTaskHandle.begin(name: "HKStats-\(feature)") else {
+                    HealthKitManager.bgLog("📱 HK-OBSERVER: \(feature) (cumulative) — beginBackgroundTask returned .invalid, aborting")
+                    completion()
+                    return
+                }
                 await self.fetchAndStoreCumulative(
                     feature: feature, quantityType: quantityType, unit: unit, appState: "foreground"
                 )
                 completion()
-                await MainActor.run { UIApplication.shared.endBackgroundTask(taskID) }
+                await handle.end()
             }
         }
         store.execute(observer)
@@ -390,15 +388,17 @@ final class HealthKitManager: ObservableObject {
         let observer = HKObserverQuery(sampleType: workoutType, predicate: nil) { [weak self] _, completion, error in
             guard error == nil, let self else { completion(); return }
 
-            let taskID: UIBackgroundTaskIdentifier = DispatchQueue.main.sync {
-                UIApplication.shared.beginBackgroundTask(withName: "HKFetch-workouts") { }
-            }
-            guard taskID != .invalid else { completion(); return }
-
+            // See registerObserver for why this awaits the main actor rather
+            // than using DispatchQueue.main.sync, and why the expiration
+            // handler must end the task.
             Task {
+                guard let handle = await BackgroundTaskHandle.begin(name: "HKFetch-workouts") else {
+                    completion()
+                    return
+                }
                 await self.fetchWorkouts(appState: "foreground")
                 completion()
-                await MainActor.run { UIApplication.shared.endBackgroundTask(taskID) }
+                await handle.end()
             }
         }
         store.execute(observer)
@@ -479,12 +479,17 @@ final class HealthKitManager: ObservableObject {
         let hwmKey = "stats_hwm_\(feature)"
         let lastSent = UserDefaults.standard.double(forKey: hwmKey)
 
-        // Lookback window: always re-query the last 6 hours of buckets
+        // Lookback window: always re-query the last 48 hours of buckets
         // from the HWM so that cumulative totals (steps, energy, etc.)
         // that HealthKit updated after the initial send are re-sent
         // with the corrected value.  The server uses UPSERT so the
         // latest value wins.
-        let lookbackSeconds: TimeInterval = 6 * 3600
+        //
+        // 48h rather than 6h: the HWM advances to the newest bucket end, so a
+        // window shorter than the gap between syncs leaves permanent holes —
+        // wearing the watch away from the phone for 8 hours dropped the
+        // earliest ~2 hours of buckets outright. Re-sending is free (UPSERT).
+        let lookbackSeconds: TimeInterval = 48 * 3600
 
         let backfillStart = Calendar.current.date(byAdding: .day, value: -14, to: Date())!
         let startDate: Date
@@ -710,12 +715,19 @@ final class HealthKitManager: ObservableObject {
     func forceFetch() {
         HealthKitManager.bgLog("HK: Force sweep started...")
         var bgTaskID: UIBackgroundTaskIdentifier = .invalid
+        var sweep: Task<Void, Never>?
         bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "HKForceFetch") {
-            UIApplication.shared.endBackgroundTask(bgTaskID)
+            // Guard against ending the same identifier twice (expiration racing
+            // the normal completion path) — UIKit treats that as a hard error.
+            sweep?.cancel()
+            if bgTaskID != .invalid {
+                UIApplication.shared.endBackgroundTask(bgTaskID)
+                bgTaskID = .invalid
+            }
         }
         guard bgTaskID != .invalid else { return }
         // FIX: Also fetches categoryMetrics (sleep, mindful, heart events) which was missing before.
-        Task {
+        sweep = Task {
             for (f, id, unit) in self.quantityMetrics {
                 if HealthKitManager.cumulativeFeatures.contains(f) {
                     await self.fetchAndStoreCumulative(
@@ -732,7 +744,10 @@ final class HealthKitManager: ObservableObject {
             }
             await self.fetchWorkouts(appState: "foreground")
             HealthKitManager.bgLog("HK: Force sweep completed.")
-            UIApplication.shared.endBackgroundTask(bgTaskID)
+            if bgTaskID != .invalid {
+                UIApplication.shared.endBackgroundTask(bgTaskID)
+                bgTaskID = .invalid
+            }
         }
     }
 
@@ -835,12 +850,23 @@ final class HealthKitManager: ObservableObject {
         HealthKitManager.bgLog("📱 BG-REFRESH: handleBackgroundRefresh started (pending=\(PendingStore.shared.count))")
         HealthKitManager.scheduleBackgroundRefresh()
 
+        // setTaskCompleted must be called exactly once: the expiration handler
+        // and the normal completion path can otherwise both fire (BGTaskScheduler
+        // treats a double-complete as a fatal misuse). The flag is only touched
+        // from the main actor. The handler also has to CANCEL the work — without
+        // that the fetch loop keeps running after the system revoked our time.
+        let completion = BGCompletionGuard()
+        var work: Task<Void, Never>?
+
         task.expirationHandler = {
-            HealthKitManager.bgLog("📱 BG-REFRESH: task EXPIRED before completion")
-            task.setTaskCompleted(success: false)
+            work?.cancel()
+            Task { @MainActor in
+                HealthKitManager.bgLog("📱 BG-REFRESH: task EXPIRED before completion")
+                completion.finish(task: task, success: false)
+            }
         }
 
-        Task { @MainActor in
+        work = Task { @MainActor in
             let m = HealthKitManager.shared
 
             let priorityFeatures: Set<String> = [
@@ -851,6 +877,7 @@ final class HealthKitManager: ObservableObject {
 
             // Fetch priority metrics first
             for (f, id, unit) in m.quantityMetrics where priorityFeatures.contains(f) {
+                if Task.isCancelled { break }
                 if HealthKitManager.cumulativeFeatures.contains(f) {
                     await m.fetchAndStoreCumulative(
                         feature: f, quantityType: HKQuantityType(id), unit: unit, appState: "background"
@@ -860,16 +887,20 @@ final class HealthKitManager: ObservableObject {
                 }
             }
             for (f, id) in m.categoryMetrics where priorityFeatures.contains(f) {
+                if Task.isCancelled { break }
                 if let type = HKObjectType.categoryType(forIdentifier: id) {
                     await m.fetchAndStore(feature: f, sampleType: type, unit: nil, appState: "background")
                 }
             }
 
             // Fetch workouts (priority — captures structured exercise sessions)
-            await m.fetchWorkouts(appState: "background")
+            if !Task.isCancelled {
+                await m.fetchWorkouts(appState: "background")
+            }
 
             // Then remaining metrics
             for (f, id, unit) in m.quantityMetrics where !priorityFeatures.contains(f) {
+                if Task.isCancelled { break }
                 if HealthKitManager.cumulativeFeatures.contains(f) {
                     await m.fetchAndStoreCumulative(
                         feature: f, quantityType: HKQuantityType(id), unit: unit, appState: "background"
@@ -879,13 +910,70 @@ final class HealthKitManager: ObservableObject {
                 }
             }
             for (f, id) in m.categoryMetrics where !priorityFeatures.contains(f) {
+                if Task.isCancelled { break }
                 if let type = HKObjectType.categoryType(forIdentifier: id) {
                     await m.fetchAndStore(feature: f, sampleType: type, unit: nil, appState: "background")
                 }
             }
 
             HealthKitManager.bgLog("📱 BG-REFRESH: completed (pending=\(PendingStore.shared.count))")
-            task.setTaskCompleted(success: true)
+            completion.finish(task: task, success: !Task.isCancelled)
         }
+    }
+}
+
+/// Owns one `UIApplication` background-task assertion.
+///
+/// The expiration handler MUST call `endBackgroundTask`. An empty handler (the
+/// previous shape of these call sites) means the watchdog force-kills the
+/// process with 0x8badf00d once the work outlives the ~30s budget — which is
+/// exactly what happens when the server is unreachable and the upload hangs.
+/// `end()` is idempotent so the expiration path and the normal completion path
+/// can both call it without double-ending the same identifier.
+@MainActor
+final class BackgroundTaskHandle {
+    private var id: UIBackgroundTaskIdentifier = .invalid
+
+    /// Returns nil when the system refuses to grant background time.
+    static func begin(name: String) -> BackgroundTaskHandle? {
+        let handle = BackgroundTaskHandle()
+        handle.id = UIApplication.shared.beginBackgroundTask(withName: name) { [weak handle] in
+            HealthKitManager.bgLog("📱 BG-TASK: \(name) expired — releasing assertion")
+            handle?.end()
+        }
+        return handle.id == .invalid ? nil : handle
+    }
+
+    func end() {
+        guard id != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(id)
+        id = .invalid
+    }
+
+    /// Main-thread-only UIApplication read, exposed for async callers.
+    static func appStateDescription() -> String {
+        switch UIApplication.shared.applicationState {
+        case .active:     return "active"
+        case .background: return "background"
+        default:          return "inactive"
+        }
+    }
+}
+
+/// Ensures `BGTask.setTaskCompleted` is invoked exactly once, no matter
+/// whether the expiration handler or the normal completion path gets there
+/// first. Confined to the main actor.
+@MainActor
+final class BGCompletionGuard {
+    private var finished = false
+
+    /// Allocating the guard touches no state, so the initialiser stays reachable
+    /// from the nonisolated `BGAppRefreshTask` handler; only `finish` is isolated.
+    nonisolated init() {}
+
+    func finish(task: BGTask, success: Bool) {
+        guard !finished else { return }
+        finished = true
+        task.setTaskCompleted(success: success)
     }
 }

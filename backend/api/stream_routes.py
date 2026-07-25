@@ -4,6 +4,7 @@ Streaming routes for real-time data and agent output via WebSocket.
 import asyncio
 import json
 import logging
+import secrets
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -37,7 +38,10 @@ def _ws_token_ok(websocket: WebSocket) -> bool:
         auth = websocket.headers.get("authorization", "")
         if auth.lower().startswith("bearer "):
             provided = auth.split(" ", 1)[1].strip()
-    return provided == token
+    if not provided:
+        return False
+    # Constant-time compare so the token can't be recovered byte-by-byte.
+    return secrets.compare_digest(provided, token)
 
 
 @router.websocket("/data")
@@ -80,8 +84,8 @@ async def stream_data(websocket: WebSocket):
             logger.debug("Failed to send error to WebSocket: %s", send_err)
     finally:
         data_stream_manager.disconnect(websocket)
-        from .config_routes import save_app_state
-        await asyncio.to_thread(save_app_state)
+        from .config_routes import save_app_state_locked
+        await save_app_state_locked()
 
 
 @router.websocket("/agent/{user_id}")
@@ -157,11 +161,16 @@ async def monitor_autonomous_agent(websocket: WebSocket, user_id: str):
                             break
                     async with _ws_lock:
                         for ev in batch:
+                            # Only serialization failures are skipped — send
+                            # errors must propagate so the disconnect branch
+                            # below actually fires instead of silently
+                            # swallowing every event until the socket is reaped.
                             try:
                                 safe_ev = json.loads(json.dumps(ev, default=str))
-                                await websocket.send_json(safe_ev)
                             except Exception:
+                                logger.warning("Dropping unserialisable event: %r", ev)
                                 continue
+                            await websocket.send_json(safe_ev)
                 except asyncio.TimeoutError:
                     continue
                 except (WebSocketDisconnect, ConnectionError, RuntimeError):
