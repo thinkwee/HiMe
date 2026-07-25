@@ -471,6 +471,73 @@ class TestCreatePageTool:
         )
         assert result["success"] is False
 
+    async def test_create_page_allows_the_injected_db_paths(self, create_tool):
+        """The two framework-injected DB names are the whole allowlist."""
+        for name in ("HEALTH_DB_PATH", "MEMORY_DB_PATH"):
+            result = await create_tool.execute(
+                page_id=f"ok_{name.lower()}",
+                display_name="OK",
+                backend_code=(
+                    f"async def route_handler(r):\n"
+                    f"    con = sqlite3.connect({name})\n"
+                    f"    return {{}}"
+                ),
+                frontend_html="<html></html>",
+            )
+            assert result["success"] is True, result.get("error")
+
+    @pytest.mark.parametrize("case,arg", [
+        # The capture group runs to the first ',' or ')', so the first three
+        # *contain* an allowed name while pointing somewhere else entirely.
+        ("concat", 'HEALTH_DB_PATH + "_evil.db"'),
+        ("wrapped", 'str(HEALTH_DB_PATH) + "/../../evil.db"'),
+        ("fstring", 'f"{MEMORY_DB_PATH}_evil.db"'),
+        ("literal", '"/etc/passwd"'),
+        ("other_name", 'some_other_path'),
+    ])
+    async def test_create_page_rejects_derived_db_paths(self, create_tool, case, arg):
+        """sqlite3.connect() must take a bare allowed name, not an expression.
+
+        A substring check passes the first three of these — the connect target
+        is an arbitrary file while the source text still mentions an allowed
+        name.
+        """
+        result = await create_tool.execute(
+            # Unique per case: _recent_creations is module-level, so a reused
+            # page_id would let one case's success suppress the next via the
+            # 60s dedup window.
+            page_id=f"evil_db_{case}",
+            display_name="Evil DB",
+            backend_code=(
+                f"async def route_handler(r):\n"
+                f"    con = sqlite3.connect({arg})\n"
+                f"    return {{}}"
+            ),
+            frontend_html="<html></html>",
+        )
+        assert result["success"] is False
+        assert "sqlite3.connect" in result["error"]
+
+    @pytest.mark.parametrize("case,snippet", [
+        ("getattr", 'getattr(sqlite3, "conn" + "ect")("/tmp/evil.db")'),
+        ("setattr", 'setattr(sqlite3, "connect", None)'),
+        ("delattr", 'delattr(sqlite3, "connect")'),
+    ])
+    async def test_create_page_blocks_reflection(self, create_tool, case, snippet):
+        """Reflection would route around every name-based check above.
+
+        ``getattr(sqlite3, "conn" + "ect")`` never matches _SQLITE_CONNECT_RE,
+        so the DB allowlist is irrelevant unless reflection itself is blocked.
+        """
+        result = await create_tool.execute(
+            page_id=f"reflect_{case}",
+            display_name="Reflect",
+            backend_code=f"async def route_handler(r):\n    {snippet}\n    return {{}}",
+            frontend_html="<html></html>",
+        )
+        assert result["success"] is False
+        assert "blocked identifier" in result["error"].lower()
+
     async def test_create_page_registered_in_db(self, create_tool, tmp_dirs):
         """The created page should be registered in the personalised_pages table."""
         await create_tool.execute(

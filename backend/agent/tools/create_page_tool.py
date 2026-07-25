@@ -44,6 +44,10 @@ _BLOCKED_TOKENS = frozenset([
     "__class__", "__bases__", "__subclasses__", "__mro__",
     "__globals__", "__getattribute__",
     "globals", "locals", "vars",
+    # Reflection defeats every name-based check below: ``getattr(sqlite3,
+    # "conn" + "ect")(...)`` never matches _SQLITE_CONNECT_RE, and getattr on
+    # builtins reaches open/eval without spelling either one out.
+    "getattr", "setattr", "delattr",
     "open",   # the helpers expose query_health/write_memory; raw open() not needed
     # The generated route.py preamble injects ``pathlib.Path``, so the
     # filesystem-mutating Path methods have to be blocked too — otherwise
@@ -56,6 +60,14 @@ _TOKEN_RE = re.compile(r"\b(" + "|".join(re.escape(t) for t in _BLOCKED_TOKENS) 
 
 # The preamble also injects ``sqlite3``. Only the two DB paths the framework
 # provides may be opened — anything else is an arbitrary-file write.
+#
+# The argument must match one of the injected names EXACTLY. A substring test
+# is not enough: the capture runs to the first ',' or ')', so
+# ``sqlite3.connect(HEALTH_DB_PATH + "_evil.db")`` contains an allowed name
+# while pointing somewhere else entirely. Exact matching also rejects
+# ``str(HEALTH_DB_PATH)`` and ``f"file:{HEALTH_DB_PATH}?mode=ro"``; that is
+# deliberate — pages are told to use the query_health/query_memory helpers
+# rather than open connections themselves, so failing closed costs nothing.
 _SQLITE_CONNECT_RE = re.compile(r"\bsqlite3\s*\.\s*connect\s*\(\s*([^,)]*)")
 _ALLOWED_DB_ARGS = frozenset(["HEALTH_DB_PATH", "MEMORY_DB_PATH"])
 
@@ -173,12 +185,16 @@ class CreatePageTool(BaseTool):
         # 2b-i. Only the framework-provided DB paths may be opened.
         for m in _SQLITE_CONNECT_RE.finditer(backend_code):
             arg = m.group(1).strip()
-            if not any(name in arg for name in _ALLOWED_DB_ARGS):
+            if arg not in _ALLOWED_DB_ARGS:
                 return {
                     "success": False,
                     "error": (
-                        "sqlite3.connect() may only be called with HEALTH_DB_PATH "
-                        "or MEMORY_DB_PATH (the framework-injected database paths)."
+                        "sqlite3.connect() may only be called with the bare name "
+                        "HEALTH_DB_PATH or MEMORY_DB_PATH (the framework-injected "
+                        "database paths). Wrapping or concatenating them — "
+                        'str(HEALTH_DB_PATH), HEALTH_DB_PATH + "...", f-strings — '
+                        "is rejected. Prefer the query_health / query_memory / "
+                        "write_memory helpers over opening a connection yourself."
                     ),
                 }
 
