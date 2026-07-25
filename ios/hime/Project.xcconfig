@@ -1,0 +1,18 @@
+// HIME — shared iOS / watchOS build configuration (committed to git)
+//
+// Machine-independent settings live here. Personal values — your Apple
+// Developer Team ID and bundle identifier prefix — live in `Config.xcconfig`,
+// which is gitignored. The optional include at the bottom picks that file up
+// when it exists, so a fresh clone still opens and configures cleanly:
+//
+//   cp ios/hime/Config.xcconfig.template ios/hime/Config.xcconfig
+//
+// Version numbers are declared once here and inherited by all four targets
+// (app, watch app, and both widget extensions). Bump them in this file only —
+// Apple rejects uploads whose watch app or extensions disagree with the
+// container app's version.
+
+MARKETING_VERSION = 1.2.0
+CURRENT_PROJECT_VERSION = 7
+
+#include? "Config.xcconfig"
