@@ -19,6 +19,12 @@ struct DashboardView: View {
                 Text("Tasks").tag(2)
             }
             .pickerStyle(.segmented)
+            // At accessibility text sizes the segmented control draws taller
+            // than the height SwiftUI reserves for it by default, so its top
+            // overflowed the TabView page bounds — clipped, and colliding with
+            // the page indicator dots above. fixedSize makes SwiftUI reserve the
+            // control's real intrinsic height instead.
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
 

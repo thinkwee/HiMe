@@ -152,6 +152,9 @@ struct ContentView: View {
                     }
                 }
                 .padding(.top, 8)
+                // The TabView below clips its pages, so keep the dots off the
+                // top edge of whatever each page puts there.
+                .padding(.bottom, 4)
                 .animation(.spring(), value: totalTabs)
 
                 TabView(selection: $selectedTab) {

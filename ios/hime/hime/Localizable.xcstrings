@@ -1,257 +1,6 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "%@." : {
-    },
-    "%@. Double-tap to enlarge." : {
-    },
-    "%lld / %lld" : {
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "%1$lld / %2$lld"
-          }
-        }
-      }
-    },
-    "Afternoon slump" : {
-    },
-    "Anything else you'd like HiMe to watch? (optional)" : {
-    },
-    "Ask about your sleep, activity, or how you're recovering." : {
-    },
-    "Breathing & mindfulness" : {
-    },
-    "Build muscle" : {
-    },
-    "Burned out by evening" : {
-    },
-    "Can't unwind at night" : {
-    },
-    "Chart. Double-tap to enlarge." : {
-    },
-    "Chat" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "对话"
-          }
-        }
-      }
-    },
-    "Chat with Hime" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "和 Hime 对话"
-          }
-        }
-      }
-    },
-    "Choose any that apply — or skip." : {
-    },
-    "Clear conversation" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "清空对话"
-          }
-        }
-      }
-    },
-    "Diet & nutrition" : {
-    },
-    "During work / study" : {
-    },
-    "Endurance / VO₂max" : {
-    },
-    "Every day" : {
-    },
-    "Fairly constant" : {
-    },
-    "Family history — monitor" : {
-    },
-    "Get fitter & move more" : {
-    },
-    "HRV & recovery" : {
-    },
-    "Hard to fall asleep" : {
-    },
-    "Have more energy" : {
-    },
-    "Heart & long-term health" : {
-    },
-    "HiMe is redesigning your plan" : {
-    },
-    "Hide evidence" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "收起依据"
-          }
-        }
-      }
-    },
-    "High-intensity / training" : {
-    },
-    "Hime is thinking" : {
-    },
-    "Hime is thinking…" : {
-      "extractionState" : "stale",
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hime 正在思考…"
-          }
-        }
-      }
-    },
-    "How active are you right now?" : {
-    },
-    "How often should HiMe check in with you?" : {
-    },
-    "Hydration" : {
-    },
-    "Improve sleep" : {
-    },
-    "Irregular schedule" : {
-    },
-    "It affects my sleep" : {
-    },
-    "Let HiMe decide" : {
-    },
-    "Looking at your data" : {
-    },
-    "Looking it up" : {
-    },
-    "Lose fat" : {
-    },
-    "Low all day" : {
-    },
-    "Maintain & tone" : {
-    },
-    "Manage stress & mood" : {
-    },
-    "Menstrual health" : {
-    },
-    "Message Hime" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "给 Hime 发消息"
-          }
-        }
-      }
-    },
-    "Mood & wellbeing" : {
-    },
-    "Morning & evening" : {
-    },
-    "Mornings are hard" : {
-    },
-    "Next" : {
-    },
-    "No evidence recorded." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "没有记录依据。"
-          }
-        }
-      }
-    },
-    "Not enough sleep" : {
-    },
-    "Occasionally active" : {
-    },
-    "Photo. Double-tap to enlarge." : {
-    },
-    "Plan & Onboarding" : {
-    },
-    "Putting together a report" : {
-    },
-    "Querying your records" : {
-    },
-    "Rarely active" : {
-    },
-    "Redesign My Plan" : {
-    },
-    "Redesign Plan" : {
-    },
-    "Regular, want to progress" : {
-    },
-    "Resting heart rate" : {
-    },
-    "Retake the goal survey and let HiMe redesign your scheduled check-ins and plan." : {
-    },
-    "Save Image" : {
-    },
-    "Saved to Photos" : {
-    },
-    "Searching memory" : {
-    },
-    "Show evidence" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "查看依据"
-          }
-        }
-      }
-    },
-    "Tidying things up" : {
-    },
-    "Tired during the day" : {
-    },
-    "Too much sitting" : {
-    },
-    "View full report" : {
-    },
-    "Waking up Hime…" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "正在唤醒 Hime…"
-          }
-        }
-      }
-    },
-    "Waking up at night" : {
-    },
-    "Weekly summary" : {
-    },
-    "Weight & body shape" : {
-    },
-    "What would you like to focus on first?" : {
-    },
-    "What's your biggest sleep struggle?" : {
-    },
-    "What's your body goal?" : {
-    },
-    "When do you feel most drained?" : {
-    },
-    "When is stress hardest for you?" : {
-    },
-    "Which signal matters most to you?" : {
-    },
-    "Working on it" : {
-    },
-    "Writing a reply" : {
-    },
-    "Your new check-ins and a fresh plan report will arrive in Chat shortly." : {
-    },
-    "•" : {
-    },
     " " : {
       "shouldTranslate" : false
     },
@@ -299,8 +48,24 @@
       },
       "shouldTranslate" : false
     },
+    "%@." : {
+
+    },
+    "%@. Double-tap to enlarge." : {
+
+    },
     "%lld" : {
       "shouldTranslate" : false
+    },
+    "%lld / %lld" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$lld / %2$lld"
+          }
+        }
+      }
     },
     "%lld readings" : {
       "localizations" : {
@@ -345,6 +110,9 @@
           }
         }
       }
+    },
+    "•" : {
+
     },
     "1 data point recorded" : {
       "extractionState" : "manual",
@@ -541,6 +309,9 @@
         }
       }
     },
+    "Action failed" : {
+
+    },
     "Activity Log" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -557,6 +328,9 @@
           }
         }
       }
+    },
+    "Afternoon slump" : {
+
     },
     "Agent" : {
       "extractionState" : "manual",
@@ -646,6 +420,9 @@
         }
       }
     },
+    "Anything else you'd like HiMe to watch? (optional)" : {
+
+    },
     "Apple Health Access" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -689,6 +466,9 @@
           }
         }
       }
+    },
+    "Ask about your sleep, activity, or how you're recovering." : {
+
     },
     "Ask your agent to create a personalised page\nand it will appear right here." : {
       "extractionState" : "manual",
@@ -744,6 +524,9 @@
         }
       }
     },
+    "Breathing & mindfulness" : {
+
+    },
     "Build" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -760,6 +543,12 @@
           }
         }
       }
+    },
+    "Build muscle" : {
+
+    },
+    "Burned out by evening" : {
+
     },
     "Burst Mode (High Priority)" : {
       "extractionState" : "manual",
@@ -778,6 +567,9 @@
         }
       }
     },
+    "Can't unwind at night" : {
+
+    },
     "Cancel" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -795,6 +587,19 @@
         }
       }
     },
+    "Chart. Double-tap to enlarge." : {
+
+    },
+    "Chat" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "对话"
+          }
+        }
+      }
+    },
     "Chat Not Configured" : {
       "localizations" : {
         "zh-Hans" : {
@@ -804,6 +609,19 @@
           }
         }
       }
+    },
+    "Chat with Hime" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "和 Hime 对话"
+          }
+        }
+      }
+    },
+    "Choose any that apply — or skip." : {
+
     },
     "Clear" : {
       "extractionState" : "manual",
@@ -835,6 +653,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "要清除所有活动日志吗?"
+          }
+        }
+      }
+    },
+    "Clear conversation" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "清空对话"
           }
         }
       }
@@ -1201,6 +1029,9 @@
         }
       }
     },
+    "Diet & nutrition" : {
+
+    },
     "Disconnect" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1244,6 +1075,9 @@
           }
         }
       }
+    },
+    "During work / study" : {
+
     },
     "e.g. 0 8 * * *" : {
       "extractionState" : "manual",
@@ -1296,6 +1130,9 @@
         }
       }
     },
+    "Endurance / VO₂max" : {
+
+    },
     "Enter the WebSocket address of the Hime macOS server running on your Mac." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1340,6 +1177,15 @@
         }
       }
     },
+    "Every day" : {
+
+    },
+    "Fairly constant" : {
+
+    },
+    "Family history — monitor" : {
+
+    },
     "Feature" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1373,6 +1219,9 @@
           }
         }
       }
+    },
+    "Get fitter & move more" : {
+
     },
     "Get Started" : {
       "extractionState" : "manual",
@@ -1420,6 +1269,12 @@
           }
         }
       }
+    },
+    "Hard to fall asleep" : {
+
+    },
+    "Have more energy" : {
+
     },
     "Health data is read from Apple HealthKit using HealthKit observer queries that the user authorises on the \"Apple Health Access\" onboarding page. The app never writes to HealthKit. Conversation text is provided directly by the user when they message the AI agent. Configuration is entered manually by the user." : {
       "extractionState" : "manual",
@@ -1515,6 +1370,22 @@
           }
         }
       }
+    },
+    "Heart & long-term health" : {
+
+    },
+    "Hide evidence" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收起依据"
+          }
+        }
+      }
+    },
+    "High-intensity / training" : {
+
     },
     "Hime" : {
       "extractionState" : "manual",
@@ -1617,12 +1488,29 @@
         }
       }
     },
+    "HiMe is redesigning your plan" : {
+
+    },
     "Hime is self-hosted, but your server forwards your data to a third-party AI service that you choose and configure. Please review the details below before continuing." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "HiMe是您自己搭建的服务，但是您自己搭建的服务器会按照您的选择和配置将数据传送到第三方AI服务。请在继续之前仔细阅读下面的细节。"
+          }
+        }
+      }
+    },
+    "Hime is thinking" : {
+
+    },
+    "Hime is thinking…" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime 正在思考…"
           }
         }
       }
@@ -1733,6 +1621,9 @@
         }
       }
     },
+    "How active are you right now?" : {
+
+    },
     "How Hime shares your data with third-party AI" : {
       "localizations" : {
         "zh-Hans" : {
@@ -1752,6 +1643,15 @@
           }
         }
       }
+    },
+    "How often should HiMe check in with you?" : {
+
+    },
+    "HRV & recovery" : {
+
+    },
+    "Hydration" : {
+
     },
     "I Agree & Continue" : {
       "localizations" : {
@@ -1789,6 +1689,12 @@
           }
         }
       }
+    },
+    "Image unavailable" : {
+
+    },
+    "Improve sleep" : {
+
     },
     "Infinite possibilities, one conversation away." : {
       "extractionState" : "manual",
@@ -1858,6 +1764,12 @@
         }
       }
     },
+    "Irregular schedule" : {
+
+    },
+    "It affects my sleep" : {
+
+    },
     "Last Analysis" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1902,6 +1814,9 @@
         }
       }
     },
+    "Let HiMe decide" : {
+
+    },
     "Let's get started" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1919,6 +1834,18 @@
         }
       }
     },
+    "Looking at your data" : {
+
+    },
+    "Looking it up" : {
+
+    },
+    "Lose fat" : {
+
+    },
+    "Low all day" : {
+
+    },
     "Mac Server" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -1935,6 +1862,12 @@
           }
         }
       }
+    },
+    "Maintain & tone" : {
+
+    },
+    "Manage stress & mood" : {
+
     },
     "Meet HiMeow" : {
       "localizations" : {
@@ -1959,6 +1892,19 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "领养你的HiMeow"
+          }
+        }
+      }
+    },
+    "Menstrual health" : {
+
+    },
+    "Message Hime" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "给 Hime 发消息"
           }
         }
       }
@@ -1997,6 +1943,15 @@
         }
       }
     },
+    "Mood & wellbeing" : {
+
+    },
+    "Morning & evening" : {
+
+    },
+    "Mornings are hard" : {
+
+    },
     "New Scheduled Task" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2030,6 +1985,9 @@
           }
         }
       }
+    },
+    "Next" : {
+
     },
     "No data" : {
       "extractionState" : "manual",
@@ -2078,6 +2036,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "暂无数据"
+          }
+        }
+      }
+    },
+    "No evidence recorded." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有记录依据。"
           }
         }
       }
@@ -2177,6 +2145,9 @@
         }
       }
     },
+    "Not enough sleep" : {
+
+    },
     "Not granted" : {
       "localizations" : {
         "zh-Hans" : {
@@ -2186,6 +2157,9 @@
           }
         }
       }
+    },
+    "Occasionally active" : {
+
     },
     "Off" : {
       "shouldTranslate" : false
@@ -2214,6 +2188,7 @@
       "shouldTranslate" : false
     },
     "Onboarding" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -2301,6 +2276,12 @@
         }
       }
     },
+    "Photo. Double-tap to enlarge." : {
+
+    },
+    "Plan & Onboarding" : {
+
+    },
     "Privacy Policy" : {
       "localizations" : {
         "zh-Hans" : {
@@ -2310,6 +2291,12 @@
           }
         }
       }
+    },
+    "Putting together a report" : {
+
+    },
+    "Querying your records" : {
+
     },
     "Questions about this policy or the project can be raised at https://github.com/thinkwee/Hime/issues." : {
       "extractionState" : "manual",
@@ -2329,6 +2316,9 @@
       }
     },
     "Questions about this policy or the project can be raised at https://github.com/thinkwee/HiMe/issues." : {
+
+    },
+    "Rarely active" : {
 
     },
     "Read the full privacy policy" : {
@@ -2392,6 +2382,15 @@
         }
       }
     },
+    "Redesign My Plan" : {
+
+    },
+    "Redesign Plan" : {
+
+    },
+    "Regular, want to progress" : {
+
+    },
     "Replay Onboarding" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2426,6 +2425,9 @@
         }
       }
     },
+    "Resting heart rate" : {
+
+    },
     "Resume" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2442,6 +2444,9 @@
           }
         }
       }
+    },
+    "Retake the goal survey and let HiMe redesign your scheduled check-ins and plan." : {
+
     },
     "Review Disclosure" : {
       "localizations" : {
@@ -2534,6 +2539,12 @@
         }
       }
     },
+    "Save Image" : {
+
+    },
+    "Saved to Photos" : {
+
+    },
     "Schedule (Cron)" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2577,6 +2588,9 @@
           }
         }
       }
+    },
+    "Searching memory" : {
+
     },
     "Section" : {
       "extractionState" : "manual",
@@ -2699,6 +2713,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Github指引"
+          }
+        }
+      }
+    },
+    "Show evidence" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看依据"
           }
         }
       }
@@ -2923,6 +2947,9 @@
         }
       }
     },
+    "Tidying things up" : {
+
+    },
     "Time" : {
       "localizations" : {
         "zh-Hans" : {
@@ -2950,6 +2977,12 @@
         }
       }
     },
+    "Tired during the day" : {
+
+    },
+    "Too much sitting" : {
+
+    },
     "Version" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2967,6 +3000,9 @@
         }
       }
     },
+    "View full report" : {
+
+    },
     "Waiting for data..." : {
       "extractionState" : "manual",
       "localizations" : {
@@ -2980,6 +3016,19 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "等待数据中…"
+          }
+        }
+      }
+    },
+    "Waking up at night" : {
+
+    },
+    "Waking up Hime…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在唤醒 Hime…"
           }
         }
       }
@@ -3001,6 +3050,12 @@
         }
       }
     },
+    "Weekly summary" : {
+
+    },
+    "Weight & body shape" : {
+
+    },
     "Welcome to Hime" : {
       "localizations" : {
         "zh-Hans" : {
@@ -3020,6 +3075,24 @@
           }
         }
       }
+    },
+    "What would you like to focus on first?" : {
+
+    },
+    "What's your biggest sleep struggle?" : {
+
+    },
+    "What's your body goal?" : {
+
+    },
+    "When do you feel most drained?" : {
+
+    },
+    "When is stress hardest for you?" : {
+
+    },
+    "Which signal matters most to you?" : {
+
     },
     "Who it is sent to" : {
       "localizations" : {
@@ -3064,6 +3137,12 @@
           }
         }
       }
+    },
+    "Working on it" : {
+
+    },
+    "Writing a reply" : {
+
     },
     "You can revoke consent any time in Settings → Data & Privacy. Revoking consent stops the app from sending data and returns you to onboarding." : {
       "localizations" : {
@@ -3162,6 +3241,9 @@
           }
         }
       }
+    },
+    "Your new check-ins and a fresh plan report will arrive in Chat shortly." : {
+
     },
     "Your Next Page Lives Here" : {
       "extractionState" : "manual",
