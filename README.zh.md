@@ -8,6 +8,7 @@
 
 <p align="center">
   <a href="https://apps.apple.com/app/id6762160735"><img alt="Download on the App Store" src="https://img.shields.io/badge/App_Store-Download-0a84ff?logo=apple"></a>
+  <a href="https://arxiv.org/abs/2607.21019"><img alt="arXiv paper" src="https://img.shields.io/badge/arXiv-2607.21019-b31b1b?logo=arxiv&logoColor=white"></a>
   <a href="docs/DEVELOPMENT.md"><img alt="Developer docs" src="https://img.shields.io/badge/docs-development-green"></a>
   <a href="docs/INSTALL.md#im-gateway-setup"><img alt="Telegram Support" src="https://img.shields.io/badge/Telegram-supported-26A5E4?logo=telegram&logoColor=white"></a>
   <a href="docs/INSTALL.md#im-gateway-setup"><img alt="Feishu Support" src="https://img.shields.io/badge/Feishu-supported-00D6B9?logo=lark&logoColor=white"></a>
@@ -28,6 +29,8 @@
 ---
 
 HiMe（Health Intelligence Management Engine）是一款自托管、完全本地化、安全开源的一站式个人健康 AI Agent 平台。它实时理解你的可穿戴设备健康数据，7×24 小时主动为你提供健康洞察——当然，还附带一只可爱的像素风小猫，作为你的个人健康数字分身。
+
+> **最新动态** 📢 我们的论文已在 arXiv 发布：[**HiMe: A Self-Hosted Personal Health AI Agent Platform**](https://arxiv.org/abs/2607.21019)。欢迎阅读，深入了解 HiMe 背后的系统设计与理念。
 
 ## 功能特性
 

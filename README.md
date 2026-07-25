@@ -8,6 +8,7 @@
 
 <p align="center">
   <a href="https://apps.apple.com/app/id6762160735"><img alt="Download on the App Store" src="https://img.shields.io/badge/App_Store-Download-0a84ff?logo=apple"></a>
+  <a href="https://arxiv.org/abs/2607.21019"><img alt="arXiv paper" src="https://img.shields.io/badge/arXiv-2607.21019-b31b1b?logo=arxiv&logoColor=white"></a>
   <a href="docs/DEVELOPMENT.md"><img alt="Developer docs" src="https://img.shields.io/badge/docs-development-green"></a>
   <a href="docs/INSTALL.md#im-gateway-setup"><img alt="Telegram Support" src="https://img.shields.io/badge/Telegram-supported-26A5E4?logo=telegram&logoColor=white"></a>
   <a href="docs/INSTALL.md#im-gateway-setup"><img alt="Feishu Support" src="https://img.shields.io/badge/Feishu-supported-00D6B9?logo=lark&logoColor=white"></a>
@@ -28,6 +29,8 @@
 ---
 
 HiMe (Health Intelligence Management Engine) is a self-hosted, fully local, secure and open-source one-stop personal health AI agent platform. It understand your wearable health data in real-time and provide you with proactive insights 7/24, and of course, a cute pixel-art cat that serves as your personal health digital twin.
+
+> **News** 📢 Our paper is now on arXiv: [**HiMe: A Self-Hosted Personal Health AI Agent Platform**](https://arxiv.org/abs/2607.21019). Give it a read to learn more about the system design and motivation behind HiMe.
 
 ## Features
 
