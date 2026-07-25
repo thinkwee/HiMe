@@ -210,11 +210,18 @@ async def get_agent_activity(pid: str, limit: int = Query(500, ge=1, le=2000)):
         memory = _get_or_create_memory(pid)
         if not memory:
             return {"success": True, "user_id": pid, "events": []}
-        events = memory.get_recent_activity(limit)
+        events = await asyncio.to_thread(memory.get_recent_activity, limit)
         return {"success": True, "user_id": pid, "events": events}
     except Exception as exc:
+        # Report the failure honestly — returning success=True with an empty
+        # list made a broken DB indistinguishable from "no activity yet".
         logger.exception("Error fetching activity for %s: %s", pid, exc)
-        return {"success": True, "user_id": pid, "events": []}
+        return {
+            "success": False,
+            "user_id": pid,
+            "events": [],
+            "error": "Failed to read activity log.",
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -229,9 +236,9 @@ async def query_agent_memory(pid: str, query_type: str = "stats"):
         if not memory:
             return {"success": True, "user_id": pid, "query_type": query_type, "data": [] if query_type == "reports" else {}}
         if query_type == "stats":
-            data = memory.get_stats()
+            data = await asyncio.to_thread(memory.get_stats)
         elif query_type == "reports":
-            data = memory.get_recent_reports(limit=20)
+            data = await asyncio.to_thread(memory.get_recent_reports, 20)
         else:
             raise ValueError(f"Invalid query_type '{query_type}'. Use 'stats' or 'reports'.")
         return {"success": True, "user_id": pid, "query_type": query_type, "data": data}
@@ -312,23 +319,28 @@ async def inspect_memory_table(
         if not memory:
             raise HTTPException(status_code=404, detail=f"No memory found for user {pid}")
 
-        with sqlite3.connect(memory.db_file) as conn:
-            conn.row_factory = sqlite3.Row
-            # Derive the allowlist from the DB itself so it stays in sync with
-            # the table list that /memory/{pid} stats exposes to the frontend.
-            # Exclude sqlite internals (sqlite_*) to prevent metadata leaks.
-            existing = {
-                r[0] for r in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-                ).fetchall()
-            }
-            if table_name not in existing:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Table '{table_name}' not found. Available: {sorted(existing)}",
+        def _read_rows() -> list[dict]:
+            with sqlite3.connect(memory.db_file) as conn:
+                conn.row_factory = sqlite3.Row
+                # Derive the allowlist from the DB itself so it stays in sync with
+                # the table list that /memory/{pid} stats exposes to the frontend.
+                # Exclude sqlite internals (sqlite_*) to prevent metadata leaks.
+                existing = {
+                    r[0] for r in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                    ).fetchall()
+                }
+                if table_name not in existing:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Table '{table_name}' not found. Available: {sorted(existing)}",
+                    )
+                cursor = conn.execute(
+                    f"SELECT * FROM [{table_name}] ORDER BY ROWID DESC LIMIT ?", (limit,)
                 )
-            cursor = conn.execute(f"SELECT * FROM [{table_name}] ORDER BY ROWID DESC LIMIT ?", (limit,))
-            rows = [dict(r) for r in cursor.fetchall()]
+                return [dict(r) for r in cursor.fetchall()]
+
+        rows = await asyncio.to_thread(_read_rows)
 
         return {
             "success": True,
@@ -336,6 +348,11 @@ async def inspect_memory_table(
             "table_name": table_name,
             "rows": rows
         }
+    except HTTPException:
+        # Our own 400/404 must not be re-wrapped as a 500 by the handler below.
+        raise
     except Exception as exc:
         logger.error("Error inspecting memory table %s for %s: %s", table_name, pid, exc)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=500, detail="Failed to inspect memory table."
+        ) from exc

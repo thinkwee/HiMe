@@ -24,7 +24,7 @@ import json
 import re
 import sqlite3
 import statistics
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # --- SQL safety guardrails ----------------------------------------------
 # Personalised pages run agent-generated Python that calls query_memory /
@@ -127,10 +127,15 @@ def query_health(
         feature_types = [feature_types]
 
     placeholders = ",".join("?" * len(feature_types))
+    # Timestamps in ``samples`` are stored as naive UTC strings, so the window
+    # must be computed in UTC too — using local time silently shortens the
+    # window (by 8h in UTC+8) and shifts every day bucket.
     if not start:
-        start = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
+        start = (
+            datetime.now(timezone.utc) - timedelta(days=days)
+        ).strftime("%Y-%m-%dT%H:%M:%S")
     if not end:
-        end = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        end = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
     conn = _get_health_conn()
     try:

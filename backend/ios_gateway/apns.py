@@ -84,7 +84,12 @@ class APNSSender:
         """
         if not self._enabled:
             return 0
-        tokens = await asyncio.to_thread(device_store.list_device_tokens, user_id)
+        # The client is bound to one APNs environment; tokens minted for the
+        # other one can never succeed, so don't even try them.
+        env = str(getattr(self._settings, "APNS_ENV", "production") or "production").lower()
+        tokens = await asyncio.to_thread(
+            device_store.list_device_tokens, user_id, env,
+        )
         if not tokens:
             return 0
         client = await self._get_client()
@@ -123,9 +128,16 @@ class APNSSender:
                 else:
                     desc = str(getattr(resp, "description", ""))
                     status = str(getattr(resp, "status", ""))
-                    if status == "410" or desc == "Unregistered":
+                    # 410/Unregistered = uninstalled. 400/BadDeviceToken = the
+                    # token is malformed or belongs to the other environment;
+                    # it can never succeed either, so retire it rather than
+                    # re-warning on every push.
+                    if status == "410" or desc in ("Unregistered", "BadDeviceToken"):
                         await asyncio.to_thread(device_store.revoke_device_token, device_token)
-                        logger.info("APNs: revoked unregistered token for user=%s", user_id)
+                        logger.info(
+                            "APNs: revoked dead token (%s) for user=%s",
+                            desc or status, user_id,
+                        )
             except Exception as e:
                 logger.warning("APNs send failed for user=%s: %s", user_id, e)
         return sent

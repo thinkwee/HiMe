@@ -649,16 +649,12 @@ export default function StatisticsPanel({ data, historicalData = [], featureMeta
   // rendering, so summing its arrays caps the total at ~features × 2000.)
   useEffect(() => {
     const ctrl = new AbortController()
-    fetch('/api/data/count', { signal: ctrl.signal })
-      .then(r => r.json())
-      .then(resp => {
-        if (resp && resp.success && resp.count != null) {
-          setStorageTotal(resp.count)
-        }
-      })
-      .catch(err => {
-        if (err.name !== 'AbortError') console.error(err)
-      })
+    // Goes through lib/api so the optional auth header is attached.
+    api.getDataCount(ctrl.signal).then(resp => {
+      if (resp && resp.success && resp.count != null) {
+        setStorageTotal(resp.count)
+      }
+    })
     return () => ctrl.abort()
   }, [])
 
@@ -674,24 +670,42 @@ export default function StatisticsPanel({ data, historicalData = [], featureMeta
   }
   const windowSizeMs = windowMsMap[liveHistoryWindow] || windowMsMap['1hour']
 
-  // Find max timestamp in historical data
-  const validTimestamps = safeHistorical
-    .map(r => (r && r.date) ? parseBackendDate(r.date).getTime() : null)
-    .filter(t => t && !isNaN(t))
-  const maxTs = validTimestamps.length > 0 ? Math.max(...validTimestamps) : null
+  // Single pass over the history buffer: every record's timestamp is parsed
+  // once (the buffer can hold tens of thousands of rows, and this runs on
+  // every render), yielding the overall range, the sliding-window slice and
+  // that slice's range.
+  const parsedTs = new Array(safeHistorical.length)
+  let totalMinTs = null
+  let totalMaxTs = null
+  for (let i = 0; i < safeHistorical.length; i++) {
+    const r = safeHistorical[i]
+    const ts = (r && r.date) ? parseBackendDate(r.date).getTime() : NaN
+    const valid = !!ts && !isNaN(ts)
+    parsedTs[i] = valid ? ts : null
+    if (valid) {
+      if (totalMinTs === null || ts < totalMinTs) totalMinTs = ts
+      if (totalMaxTs === null || ts > totalMaxTs) totalMaxTs = ts
+    }
+  }
+  const maxTs = totalMaxTs
 
   // Filter historical data to fit the sliding window
-  const filteredHistorical = (maxTs && windowSizeMs)
-    ? safeHistorical.filter(r => {
-      const ts = (r && r.date) ? parseBackendDate(r.date).getTime() : null
-      return ts && (maxTs - ts <= windowSizeMs)
-    })
-    : safeHistorical
-
-  // Calculate timestamps for both total and filtered (visible) data
-  const visibleTimestamps = filteredHistorical
-    .map(r => (r && r.date) ? parseBackendDate(r.date).getTime() : null)
-    .filter(t => t && !isNaN(t))
+  let filteredHistorical = safeHistorical
+  let visibleMinTs = totalMinTs
+  let visibleMaxTs = totalMaxTs
+  if (maxTs && windowSizeMs) {
+    filteredHistorical = []
+    visibleMinTs = null
+    visibleMaxTs = null
+    for (let i = 0; i < safeHistorical.length; i++) {
+      const ts = parsedTs[i]
+      if (ts && maxTs - ts <= windowSizeMs) {
+        filteredHistorical.push(safeHistorical[i])
+        if (visibleMinTs === null || ts < visibleMinTs) visibleMinTs = ts
+        if (visibleMaxTs === null || ts > visibleMaxTs) visibleMaxTs = ts
+      }
+    }
+  }
 
   const hasData = data && data.data && Array.isArray(data.data) && data.data.length > 0
   const dataToVisualize = hasData
@@ -745,16 +759,19 @@ export default function StatisticsPanel({ data, historicalData = [], featureMeta
         if (!record) return
         const dateKey = record.date || record.index || 'unknown'
         if (!groupedByDate[dateKey]) {
-          groupedByDate[dateKey] = { count: 0, sums: {} }
+          groupedByDate[dateKey] = { sums: {}, counts: {} }
         }
-        groupedByDate[dateKey].count++
         featuresToDisplay.forEach(feature => {
           if (!groupedByDate[dateKey].sums[feature]) {
             groupedByDate[dateKey].sums[feature] = 0
+            groupedByDate[dateKey].counts[feature] = 0
           }
           const value = record[feature]
           if (value !== null && value !== undefined && !isNaN(value) && typeof value === 'number') {
             groupedByDate[dateKey].sums[feature] += value
+            // Count per feature — records missing this feature must not
+            // inflate its denominator.
+            groupedByDate[dateKey].counts[feature]++
           }
         })
       })
@@ -766,11 +783,11 @@ export default function StatisticsPanel({ data, historicalData = [], featureMeta
         return {
           index: idx,
           date: dateKey,
-          timestamp: dateKey ? new Date(dateKey).getTime() : null,
+          timestamp: dateKey ? parseBackendDate(dateKey).getTime() : null,
           ...Object.fromEntries(
             featuresToDisplay.map(feature => [
               feature,
-              data.count > 0 ? data.sums[feature] / data.count : null
+              data.counts[feature] > 0 ? data.sums[feature] / data.counts[feature] : null
             ])
           )
         }
@@ -786,7 +803,7 @@ export default function StatisticsPanel({ data, historicalData = [], featureMeta
           const point = {
             index: idx,
             date: date,
-            timestamp: date ? new Date(date).getTime() : null,
+            timestamp: date ? parseBackendDate(date).getTime() : null,
           }
 
           // Add data for each user
@@ -808,7 +825,7 @@ export default function StatisticsPanel({ data, historicalData = [], featureMeta
             return {
               index: idx,
               date,
-              timestamp: date && typeof date === 'string' ? new Date(date).getTime() : null,
+              timestamp: date && typeof date === 'string' ? parseBackendDate(date).getTime() : null,
               pid: record.pid,
               ...Object.fromEntries(
                 featuresToDisplay.map((col) => [col, record[col]])
@@ -938,13 +955,13 @@ export default function StatisticsPanel({ data, historicalData = [], featureMeta
                 <div className="flex items-center justify-between gap-1">
                   <span className="text-[10px] text-gray-400 font-bold tracking-tighter">{t('statistics.start')}</span>
                   <span className="text-[11px] font-mono font-bold text-gray-700 bg-gray-50 px-1.5 py-0.5 rounded-md border border-gray-100">
-                    {visibleTimestamps.length > 0 ? formatFullDateTime(Math.min(...visibleTimestamps)) : '--'}
+                    {visibleMinTs !== null ? formatFullDateTime(visibleMinTs) : '--'}
                   </span>
                 </div>
                 <div className="flex items-center justify-between gap-1">
                   <span className="text-[10px] text-gray-400 font-bold tracking-tighter">{t('statistics.end')}</span>
                   <span className="text-[11px] font-mono font-bold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded-md border border-blue-100">
-                    {visibleTimestamps.length > 0 ? formatFullDateTime(Math.max(...visibleTimestamps)) : '--'}
+                    {visibleMaxTs !== null ? formatFullDateTime(visibleMaxTs) : '--'}
                   </span>
                 </div>
               </div>
@@ -960,13 +977,13 @@ export default function StatisticsPanel({ data, historicalData = [], featureMeta
                 <div className="flex items-center justify-between gap-1">
                   <span className="text-[10px] text-gray-400 font-bold tracking-tighter">{t('statistics.start')}</span>
                   <span className="text-[11px] font-mono text-gray-500 italic font-medium px-1.5 py-0.5">
-                    {validTimestamps.length > 0 ? formatFullDateTime(Math.min(...validTimestamps)) : '--'}
+                    {totalMinTs !== null ? formatFullDateTime(totalMinTs) : '--'}
                   </span>
                 </div>
                 <div className="flex items-center justify-between gap-1">
                   <span className="text-[10px] text-gray-400 font-bold tracking-tighter">{t('statistics.end')}</span>
                   <span className="text-[11px] font-mono text-gray-500 italic font-medium px-1.5 py-0.5">
-                    {validTimestamps.length > 0 ? formatFullDateTime(Math.max(...validTimestamps)) : '--'}
+                    {totalMaxTs !== null ? formatFullDateTime(totalMaxTs) : '--'}
                   </span>
                 </div>
               </div>

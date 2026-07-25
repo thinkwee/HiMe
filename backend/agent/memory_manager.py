@@ -25,8 +25,33 @@ logger = logging.getLogger(__name__)
 # Schema helpers
 # ---------------------------------------------------------------------------
 
+# DB files whose schema (DDL + PRAGMA migrations) has already been applied in
+# this process. The full executescript + three ``PRAGMA table_info`` migrations
+# used to run on *every* activity write and memory query.
+_schema_applied: set[str] = set()
+
+
+def _db_file_key(conn: sqlite3.Connection) -> str | None:
+    """Resolved main-database path for *conn*, or None when it isn't cacheable."""
+    try:
+        row = conn.execute("PRAGMA database_list").fetchone()
+    except Exception:
+        return None
+    path = row[2] if row and len(row) > 2 else None
+    # In-memory / temporary databases report an empty path and are distinct per
+    # connection — never cache those.
+    return path or None
+
+
 def _ensure_schema(conn: sqlite3.Connection) -> None:
-    """Create the minimal set of tables that the backend API depends on."""
+    """Create the minimal set of tables that the backend API depends on.
+
+    Idempotent and cached per (process, DB file): the DDL is only executed the
+    first time a given database file is seen.
+    """
+    key = _db_file_key(conn)
+    if key is not None and key in _schema_applied:
+        return
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS reports (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -150,6 +175,37 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             conn.commit()
     except Exception:
         pass  # table may not exist yet (handled by CREATE TABLE above)
+
+    if key is not None:
+        _schema_applied.add(key)
+
+
+# ---------------------------------------------------------------------------
+# Chat-history write lock (module level — see MemoryManager._chat_write_lock)
+# ---------------------------------------------------------------------------
+
+# {db_file: (event_loop, lock)} — the lock has to be shared by *every*
+# MemoryManager pointing at the same file. A per-instance lock provided no
+# mutual exclusion at all against short-lived managers (e.g. the one
+# PushReportTool builds per proactive report), which is exactly the concurrent
+# chat_history write the lock exists to prevent.
+_chat_locks: dict[str, tuple[Any, asyncio.Lock]] = {}
+
+
+def _get_chat_lock(db_file: Path) -> asyncio.Lock:
+    key = str(db_file)
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    entry = _chat_locks.get(key)
+    # Re-create when the running loop changed (per-test loops under
+    # pytest-asyncio): an asyncio.Lock is bound to the loop that first awaits it.
+    if entry is None or entry[0] is not loop:
+        lock = asyncio.Lock()
+        _chat_locks[key] = (loop, lock)
+        return lock
+    return entry[1]
 
 
 # ---------------------------------------------------------------------------
@@ -298,17 +354,16 @@ class MemoryManager:
     CHAT_HISTORY_LIMIT = 2000  # rows retained per history_key
 
     def _chat_write_lock(self) -> asyncio.Lock:
-        """Lazily-created, per-instance lock that serializes chat-history
-        writes. Two turns (or the user+assistant rows of one turn) must never
-        hit the SQLite file concurrently: parallel writers race on the
-        autoincrement ``id`` (reordering the conversation) and can collide on
-        the file lock (dropping a row). ``asyncio.Lock`` wakes waiters FIFO, so
-        the first write scheduled is the first committed."""
-        lock = getattr(self, "_chat_lock", None)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._chat_lock = lock
-        return lock
+        """Process-wide, per-DB-file lock that serializes chat-history writes.
+
+        Two turns (or the user+assistant rows of one turn) must never hit the
+        SQLite file concurrently: parallel writers race on the autoincrement
+        ``id`` (reordering the conversation) and can collide on the file lock
+        (dropping a row). ``asyncio.Lock`` wakes waiters FIFO, so the first
+        write scheduled is the first committed. The lock is keyed by DB file
+        rather than held per instance, so a throwaway MemoryManager still
+        excludes against the agent's long-lived one."""
+        return _get_chat_lock(self.db_file)
 
     async def persist_chat_turn(
         self,

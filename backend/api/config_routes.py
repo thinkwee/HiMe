@@ -40,6 +40,16 @@ def save_app_state():
         logger.error(f"Failed to save app state: {e}")
 
 
+async def save_app_state_locked():
+    """Save app_state while holding ``_app_state_lock``.
+
+    Every writer must go through this (or hold the lock itself) — two
+    concurrent ``json.dump`` calls into the same file tear the JSON.
+    """
+    async with _app_state_lock:
+        await asyncio.to_thread(save_app_state)
+
+
 def load_app_state():
     """Load app_state from disk."""
     global app_state

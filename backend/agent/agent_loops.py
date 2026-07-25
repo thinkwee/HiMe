@@ -26,6 +26,31 @@ from .llm import set_llm_log_context
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Fire-and-forget task tracking
+# ---------------------------------------------------------------------------
+
+# The event loop only keeps a *weak* reference to a running task, so a
+# fire-and-forget ``asyncio.create_task(...)`` whose Task object is discarded
+# can be garbage-collected mid-flight (silently losing e.g. chat-history rows).
+# Keeping a strong reference until completion is the documented remedy.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def spawn_background(coro, *, label: str = "background task") -> asyncio.Task:
+    """Schedule *coro* as a tracked fire-and-forget task."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+
+    def _done(t: asyncio.Task) -> None:
+        _background_tasks.discard(t)
+        if not t.cancelled() and t.exception() is not None:
+            logger.error("%s failed: %s", label, t.exception())
+
+    task.add_done_callback(_done)
+    return task
+
+
+# ---------------------------------------------------------------------------
 # Helpers for evidence & meta-marker cleanup
 # ---------------------------------------------------------------------------
 
@@ -97,6 +122,21 @@ def _hash_tool_calls(tool_calls: list[dict]) -> str:
     return hashlib.md5(sig.encode()).hexdigest()
 
 
+def _is_escaped(raw: str, i: int) -> bool:
+    """True when ``raw[i]`` is escaped, i.e. preceded by an odd run of ``\\``.
+
+    Looking only at ``raw[i-1]`` mis-reads ``\\\\"`` (an escaped backslash then a
+    real quote) as an escaped quote, which inverts every subsequent string
+    boundary.
+    """
+    backslashes = 0
+    j = i - 1
+    while j >= 0 and raw[j] == '\\':
+        backslashes += 1
+        j -= 1
+    return backslashes % 2 == 1
+
+
 def _sanitize_json_string(raw: str) -> str:
     """Escape literal newlines/tabs inside JSON string values so json.loads succeeds."""
     out: list[str] = []
@@ -104,7 +144,7 @@ def _sanitize_json_string(raw: str) -> str:
     i = 0
     while i < len(raw):
         ch = raw[i]
-        if ch == '"' and (i == 0 or raw[i - 1] != '\\'):
+        if ch == '"' and not _is_escaped(raw, i):
             in_str = not in_str
             out.append(ch)
         elif in_str and ch == '\n':
@@ -729,8 +769,12 @@ async def _compress_context_if_needed(
     # Extract key findings BEFORE compression (preserves critical numbers)
     key_findings = _extract_key_findings(to_compress)
 
-    # Figure out the turn number for labeling
-    prev_batches = accumulated_summary.count("Steps ")
+    # Figure out the turn number for labeling. Count only real batch labels
+    # (``Steps <a>-<b>:`` at the start of a line) — a plain substring count
+    # miscounts whenever a summary body happens to mention "Steps ".
+    prev_batches = len(
+        re.findall(r"^Steps \d+-\d+:", accumulated_summary, re.MULTILINE)
+    )
     start_turn = prev_batches * batch_size + 1
 
     summary_line = await _summarize_turns_with_llm(
@@ -800,7 +844,6 @@ class AgentLoopsMixin:
         every state mutation user-authorised and auditable.
         """
         self.cycle_count += 1
-        self.last_analysis_complete_time = ts_now()
         self.pushed_report_in_cycle = False
         self._set_state("thinking", loop="analysis")
 
@@ -939,6 +982,10 @@ class AgentLoopsMixin:
             "timestamp": ts_now(),
         })
 
+        # Stamped here, at the *end* of the cycle — it is the "last analysis
+        # complete" time; setting it at cycle start reported a completion that
+        # hadn't happened yet.
+        self.last_analysis_complete_time = ts_now()
         self.cycle_messages = []
         self.pushed_report_in_cycle = False
         self._set_state("idle", loop="analysis")
@@ -959,11 +1006,21 @@ class AgentLoopsMixin:
         """
         if getattr(self, "_plan_running", False):
             return False
-        survey = await asyncio.to_thread(self._chat_memory().get_pending_survey)
-        if not survey:
-            return False
+        # Claim the guard *before* the await — otherwise this check-then-act
+        # races the chat hook across the suspension point and both start a
+        # plan designer.
         self._plan_running = True
-        asyncio.create_task(self._run_plan_designer_guarded(survey))
+        try:
+            survey = await asyncio.to_thread(self._chat_memory().get_pending_survey)
+        except Exception:
+            self._plan_running = False
+            raise
+        if not survey:
+            self._plan_running = False
+            return False
+        spawn_background(
+            self._run_plan_designer_guarded(survey), label="plan designer",
+        )
         logger.info("Plan redesign triggered on demand for %s", self.user_id)
         return True
 
@@ -1048,8 +1105,11 @@ class AgentLoopsMixin:
         self._set_state("quick_analysis", loop="analysis")
         self.pushed_report_in_cycle = False
         await self._emit({"type": "quick_analysis_start", "timestamp": ts_now()})
+        final_state = "neutral"
         try:
-            return await self._run_quick_analysis_inner()
+            result = await self._run_quick_analysis_inner()
+            final_state = (result or {}).get("state") or "neutral"
+            return result
         except asyncio.CancelledError:
             # Never swallow cancellation — re-raise so the caller's wait_for
             # timeout and agent shutdown can tear this task down cleanly.
@@ -1061,7 +1121,7 @@ class AgentLoopsMixin:
             self._set_state("idle", loop="analysis")
             await self._emit({
                 "type": "quick_analysis_complete",
-                "state": "neutral",
+                "state": final_state,
                 "timestamp": ts_now(),
             })
 
@@ -1261,10 +1321,12 @@ class AgentLoopsMixin:
                 "reuse or rephrase data from a previous report to fill gaps. "
                 "Absence of data is itself a valid, reportable finding.]"
             )
+        original_user_content = f"{preamble}\n{goal}"
         messages: list[dict] = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"{preamble}\n{goal}"},
+            {"role": "user", "content": original_user_content},
         ]
+        accumulated_summary = ""
 
         sub_tools = self._get_sub_analysis_tool_definitions(extra_tools=extra_tools)
         if allowed_tools is not None:
@@ -1409,6 +1471,23 @@ class AgentLoopsMixin:
                 messages.append(
                     _build_tool_result_msg(tr["id"], tr["result"], tr["tool"])
                 )
+            # Calls to non-whitelisted tools were skipped above without
+            # producing a result. Their tool_use ids would otherwise go back to
+            # the provider unanswered, which is a hard HTTP 400 on the next turn.
+            _yield_missing_tool_results(messages)
+
+            # Sliding-window compression. Without it this loop can run up to
+            # ``max_turns`` (100) rounds of raw tool output until the provider
+            # errors out and emergency_truncate drops results mid-analysis.
+            # preamble_size=2 → [system, user] are always preserved.
+            try:
+                messages, accumulated_summary = await _compress_context_if_needed(
+                    messages, 2, self.context_window_size,
+                    original_user_content, self.llm, accumulated_summary,
+                )
+            except Exception as exc:
+                logger.warning("Context compression error (sub_analysis): %s", exc)
+
             findings = text  # keep last text as fallback findings
 
         if not findings:
@@ -1539,6 +1618,9 @@ class AgentLoopsMixin:
                 messages.append(
                     _build_tool_result_msg(tr["id"], tr["result"], tr["tool"])
                 )
+            # Same orphan-tool_use guard as the analysis sub-loop: skipped
+            # (non-whitelisted) calls must still get a tool result back.
+            _yield_missing_tool_results(messages)
             result_text = text  # keep last text as fallback
 
         if not result_text:
@@ -2043,7 +2125,10 @@ class AgentLoopsMixin:
                     # future native-rendering client find the chart directly).
                     "image_id": reply_image_id,
                 })
-            asyncio.create_task(mem.persist_chat_turns(history_key, turns))
+            spawn_background(
+                mem.persist_chat_turns(history_key, turns),
+                label="chat_history persist",
+            )
         except Exception as e:
             logger.debug("chat_history persist skipped: %s", e)
 
@@ -2053,12 +2138,20 @@ class AgentLoopsMixin:
         # a slow run can't double-fire on the next turn; stays 'pending' (and
         # retries) only on a hard failure.
         if reply_text and not getattr(self, "_plan_running", False):
+            # Claim the guard before awaiting, so the HTTP-triggered redesign
+            # can't slip in across the suspension point and double-fire.
+            self._plan_running = True
             try:
                 survey = await asyncio.to_thread(self._chat_memory().get_pending_survey)
                 if survey:
-                    self._plan_running = True
-                    asyncio.create_task(self._run_plan_designer_guarded(survey))
+                    spawn_background(
+                        self._run_plan_designer_guarded(survey),
+                        label="plan designer",
+                    )
+                else:
+                    self._plan_running = False
             except Exception as e:
+                self._plan_running = False
                 logger.debug("plan-designer hook skipped: %s", e)
         logger.info("Chat with %s completed (%d turns, history=%d msgs)", sender, turn, len(hist))
 

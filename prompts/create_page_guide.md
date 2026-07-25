@@ -145,6 +145,8 @@ Returning a nested chart response **without** a matching `dataMap` is the single
 
 In the page's `<script>` block, declare a page-id constant whose value matches the `page_id` you pass to `create_page`, then mount components following these rules:
 
+> **Never call `fetch()` (or `XMLHttpRequest`) directly.** All backend access must go through `HimeUI.fetchData(pageId, params?)` and the components that use it. When the page is viewed in the HiMe dashboard it runs inside a `sandbox="allow-scripts"` iframe — an opaque origin — where a direct `fetch()` to `/api/...` is refused by CORS and fails silently. `HimeUI.fetchData` detects that and routes the request through the embedder instead, so it works in the dashboard, in a standalone tab, and in the iOS app alike. A hand-written `fetch()` works in none of them.
+
 - **Read-only components** (`MetricGrid`, `Section`, `DetailList`, `HimeUI.drawChart`, `progressRing`, `table`, `badge`, …) must be mounted **after** `await HimeUI.fetchData(<page_id>)` resolves — they need the backend data to render.
 - **Form components** (`InputForm`, `Tracker`) are mounted **synchronously**, passing `pageId: <page_id>`. They manage their own POST round-trip against the same `route.py` and render their own initial state from its response.
 - **`ChartView`** is mounted **synchronously** with `pageId: <page_id>` and optionally `periods`, `defaultPeriod`, `dataMap`. It manages its own fetch and re-fetch on period change. Do not `await fetchData` first unless another component on the same page also needs that payload.
@@ -153,7 +155,10 @@ In the page's `<script>` block, declare a page-id constant whose value matches t
 
 Before returning from `create_page`, verify:
 
-- Both shared `<head>` resources (CSS and JS) are linked.
+- Both shared `<head>` resources (CSS and JS) are linked. Keep the exact `<link rel="stylesheet" href="/api/personalised-pages/_shared/hime-ui.css">` and `<script src="/api/personalised-pages/_shared/hime-ui.js"></script>` form — the server inlines these two tags so the page works inside the dashboard's sandboxed iframe.
+- No raw `fetch()` / `XMLHttpRequest` anywhere in the page — only `HimeUI.fetchData` and the components that wrap it.
+- No subresources of any kind beyond those two shared files: no `<img src="/...">`, no web fonts, no second stylesheet, no CDN. In the dashboard the page is an opaque-origin document with no URL of its own, so *nothing* referenced by a URL will load — inline the content, or use a `data:` URI, or draw it with `HimeUI`.
+- Nothing that depends on the page's own URL (`location.href`, `location.search`, `document.referrer`). In the dashboard the page's URL is `about:srcdoc`.
 - The root container is `<div class="hime-page">` and contains a `.hime-header` block.
 - The `page_id` referenced in the `<script>` block matches the `page_id` passed to `create_page`.
 - Every component has its container div present in the HTML before its mount call.

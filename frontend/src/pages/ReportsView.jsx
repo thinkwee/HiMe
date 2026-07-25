@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useTranslation } from 'react-i18next'
@@ -6,11 +6,48 @@ import { api } from '../lib/api'
 import { FileText, Calendar, Filter, Activity, ArrowDown, ArrowUp, Search, X, Zap, Clock } from 'lucide-react'
 import { parseBackendDate } from '../lib/utils'
 
+// Helper to get report source from the report object
+const getReportSource = (report) => {
+  // Check top-level source field first, then metadata.source, then default
+  return report.source || report.metadata?.source || 'scheduled_analysis'
+}
+
+// Render a source badge. Declared at module scope so it keeps a stable identity
+// across renders instead of being re-created (and remounted) every time.
+const SourceBadge = ({ report, size = 'sm', t }) => {
+  const source = getReportSource(report)
+  if (source === 'quick_analysis') {
+    return (
+      <span className={`inline-flex items-center gap-1 rounded-full font-semibold tracking-wide border ${
+        size === 'sm'
+          ? 'px-1.5 py-0.5 text-[10px]'
+          : 'px-2.5 py-0.5 text-xs'
+      } bg-amber-50 text-amber-700 border-amber-200`}>
+        <Zap className={size === 'sm' ? 'w-2.5 h-2.5' : 'w-3 h-3'} />
+        {t('reports.badge_quick')}
+      </span>
+    )
+  }
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full font-semibold tracking-wide border ${
+      size === 'sm'
+        ? 'px-1.5 py-0.5 text-[10px]'
+        : 'px-2.5 py-0.5 text-xs'
+    } bg-indigo-50 text-indigo-700 border-indigo-200`}>
+      <Clock className={size === 'sm' ? 'w-2.5 h-2.5' : 'w-3 h-3'} />
+      {t('reports.badge_scheduled')}
+    </span>
+  )
+}
+
 export default function ReportsView() {
   const { t } = useTranslation()
   // State
   const [reports, setReports] = useState([])
-  const [loading, setLoading] = useState(false)
+  // Starts true because the mount effect always fetches: initialising it here
+  // instead of letting the effect flip it avoids a cascading render (and a brief
+  // flash of the "no reports" empty state before the first fetch resolves).
+  const [loading, setLoading] = useState(true)
   const [selectedReport, setSelectedReport] = useState(null)
 
   // Filters
@@ -19,12 +56,7 @@ export default function ReportsView() {
   const [sortOrder, setSortOrder] = useState('desc') // desc, asc
   const [searchQuery, setSearchQuery] = useState('')
 
-  // Load reports on mount
-  useEffect(() => {
-    loadReports()
-  }, [])
-
-  const loadReports = async () => {
+  const loadReports = useCallback(async () => {
     setLoading(true)
     try {
       const result = await api.queryAgentMemory('reports')
@@ -39,7 +71,18 @@ export default function ReportsView() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
+
+  // Load reports on mount. loadReports is memoized with no dependencies, so this
+  // still runs exactly once.
+  //
+  // set-state-in-effect is a false positive here — the only synchronous update is
+  // setLoading(true), and `loading` already starts as true, so React bails out and
+  // nothing cascades. Everything else happens after `await queryAgentMemory()`.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadReports()
+  }, [loadReports])
 
   // Filter and Sort Logic
   const filteredReports = useMemo(() => {
@@ -80,7 +123,9 @@ export default function ReportsView() {
   // Helper to format timestamps
   const formatTime = (ts) => {
     if (!ts) return t('common.na')
-    const d = new Date(ts)
+    // Backend timestamps are UTC without a 'Z' — parse them as such, exactly
+    // like the detail modal does.
+    const d = parseBackendDate(ts)
     if (isNaN(d.getTime())) return t('common.na')
     const year = d.getFullYear()
     const month = String(d.getMonth() + 1).padStart(2, '0')
@@ -89,39 +134,6 @@ export default function ReportsView() {
     const minutes = String(d.getMinutes()).padStart(2, '0')
     const seconds = String(d.getSeconds()).padStart(2, '0')
     return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
-  }
-
-  // Helper to get report source from the report object
-  const getReportSource = (report) => {
-    // Check top-level source field first, then metadata.source, then default
-    return report.source || report.metadata?.source || 'scheduled_analysis'
-  }
-
-  // Render a source badge
-  const SourceBadge = ({ report, size = 'sm' }) => {
-    const source = getReportSource(report)
-    if (source === 'quick_analysis') {
-      return (
-        <span className={`inline-flex items-center gap-1 rounded-full font-semibold tracking-wide border ${
-          size === 'sm'
-            ? 'px-1.5 py-0.5 text-[10px]'
-            : 'px-2.5 py-0.5 text-xs'
-        } bg-amber-50 text-amber-700 border-amber-200`}>
-          <Zap className={size === 'sm' ? 'w-2.5 h-2.5' : 'w-3 h-3'} />
-          {t('reports.badge_quick')}
-        </span>
-      )
-    }
-    return (
-      <span className={`inline-flex items-center gap-1 rounded-full font-semibold tracking-wide border ${
-        size === 'sm'
-          ? 'px-1.5 py-0.5 text-[10px]'
-          : 'px-2.5 py-0.5 text-xs'
-      } bg-indigo-50 text-indigo-700 border-indigo-200`}>
-        <Clock className={size === 'sm' ? 'w-2.5 h-2.5' : 'w-3 h-3'} />
-        {t('reports.badge_scheduled')}
-      </span>
-    )
   }
 
   return (
@@ -252,7 +264,7 @@ export default function ReportsView() {
                     {report.title || t('reports.untitled')}
                   </h3>
                   <div className="flex items-center gap-1 ml-2 shrink-0">
-                    <SourceBadge report={report} size="sm" />
+                    <SourceBadge report={report} size="sm" t={t} />
                     <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide border whitespace-nowrap ${report.alert_level === 'critical' ? 'bg-red-50 text-red-700 border-red-100' :
                         report.alert_level === 'warning' ? 'bg-yellow-50 text-yellow-700 border-yellow-100' :
                           report.alert_level === 'info' ? 'bg-blue-50 text-blue-700 border-blue-100' :
@@ -324,7 +336,7 @@ export default function ReportsView() {
             <div className="flex items-start justify-between p-6 border-b border-gray-100 bg-white sticky top-0 z-10">
               <div>
                 <div className="flex items-center space-x-3 mb-2">
-                  <SourceBadge report={selectedReport} size="md" />
+                  <SourceBadge report={selectedReport} size="md" t={t} />
                   <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wide border ${selectedReport.alert_level === 'critical' ? 'bg-red-50 text-red-700 border-red-100' :
                       selectedReport.alert_level === 'warning' ? 'bg-yellow-50 text-yellow-700 border-yellow-100' :
                         selectedReport.alert_level === 'info' ? 'bg-blue-50 text-blue-700 border-blue-100' :

@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - Reports View
 
 struct ReportsView: View {
-    @StateObject private var viewModel = DashboardViewModel()
+    @StateObject private var viewModel = DashboardViewModel.shared
     @State private var hasStarted = false
 
     var body: some View {
@@ -258,6 +258,10 @@ struct ReportRow: View {
         }
         // Fallback: try common SQLite format "YYYY-MM-DD HH:MM:SS"
         let sqlFormatter = DateFormatter()
+        // en_US_POSIX is mandatory when parsing a fixed machine format: without
+        // it the device's locale/calendar wins, so on a Buddhist-calendar phone
+        // "2026-…" parses as year 1483 and every timestamp reads centuries off.
+        sqlFormatter.locale = Locale(identifier: "en_US_POSIX")
         sqlFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
         sqlFormatter.timeZone = TimeZone(identifier: "UTC")
         if let date = sqlFormatter.date(from: ts) {

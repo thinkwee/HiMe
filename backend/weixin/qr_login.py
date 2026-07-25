@@ -21,6 +21,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import random
 import struct
 import time
@@ -173,10 +174,15 @@ async def run_qr_login(out_path: Path) -> bool:
             "ilink_user_id": result.get("ilink_user_id", ""),
             "baseurl": result.get("baseurl", ""),
         }
-        out_path.write_text(
-            json.dumps(record, ensure_ascii=False, indent=2)
+        # Create the file 0600 up-front. write_text() + chmod() would leave the
+        # long-lived bot token world-readable (default umask) for a short window.
+        fd = os.open(
+            str(out_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600,
         )
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False, indent=2))
         try:
+            # Tighten an already-existing file that predates this code.
             out_path.chmod(0o600)
         except OSError:
             pass

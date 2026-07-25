@@ -165,18 +165,31 @@ struct himeApp: App {
                     let timeStr = bgTimeRemaining > 999999 ? "unlimited" : String(format: "%.1fs", bgTimeRemaining)
                     HealthKitManager.bgLog("📱 LIFECYCLE: → BACKGROUND (pending=\(pending), bgTimeRemaining=\(timeStr), burst=\(HealthKitManager.shared.isBurstModeEnabled))")
 
-                    let taskID = UIApplication.shared.beginBackgroundTask(withName: "HimeBackgroundFlush") {
-                        // expiration handled below via taskID
+                    // An empty expiration handler is fatal: when the server is
+                    // unreachable the flush blocks past the ~30s budget and the
+                    // watchdog kills the process (0x8badf00d), losing state that
+                    // hasn't been persisted. Cancel the flush and end the task.
+                    var taskID: UIBackgroundTaskIdentifier = .invalid
+                    var flushTask: Task<Void, Never>?
+                    taskID = UIApplication.shared.beginBackgroundTask(withName: "HimeBackgroundFlush") {
+                        flushTask?.cancel()
+                        if taskID != .invalid {
+                            UIApplication.shared.endBackgroundTask(taskID)
+                            taskID = .invalid
+                        }
                     }
 
                     if !HealthKitManager.shared.isBurstModeEnabled {
                         WebSocketClient.shared.disconnect(userInitiated: false)
                     }
 
-                    Task {
+                    flushTask = Task {
                         await WebSocketClient.shared.flushPendingAndWait(appState: "background")
                         HealthKitManager.bgLog("📱 LIFECYCLE: background flush done (remaining=\(PendingStore.shared.count))")
-                        UIApplication.shared.endBackgroundTask(taskID)
+                        if taskID != .invalid {
+                            UIApplication.shared.endBackgroundTask(taskID)
+                            taskID = .invalid
+                        }
                     }
 
                     HealthKitManager.scheduleBackgroundRefresh()

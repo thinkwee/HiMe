@@ -6,11 +6,12 @@ struct LogEntry: Identifiable {
     let text: String
 }
 
-@MainActor
-final class LogManager: ObservableObject {
-    static let shared = LogManager()
-
-    @Published var logs: [LogEntry] = []
+/// Owns the on-disk log file. Every method must be called on `queue`, which
+/// serialises handle access and keeps writes in emission order. Nothing here
+/// runs on the main thread: appending fired a synchronous write per log line,
+/// and the 1 MB truncation read and rewrote the whole file inline.
+private final class LogFileWriter: @unchecked Sendable {
+    let queue = DispatchQueue(label: "hime.logmanager", qos: .utility)
 
     /// Maximum log file size in bytes (1 MB).
     private let maxFileSize: UInt64 = 1_024 * 1_024
@@ -19,37 +20,15 @@ final class LogManager: ObservableObject {
     /// File handle kept open for appending (lazily opened).
     private var fileHandle: FileHandle?
 
-    private init() {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        logFileURL = docs.appendingPathComponent("hime_activity.log")
-
-        // Load recent lines from disk into memory for the UI
-        loadFromDisk()
+    init(url: URL) {
+        logFileURL = url
     }
 
     deinit {
         try? fileHandle?.close()
     }
 
-    func log(_ message: String) {
-        let timestamp = Date().formatted(date: .omitted, time: .standard)
-        let logLine = "[\(timestamp)] \(message)"
-        logs.insert(LogEntry(text: logLine), at: 0)
-
-        // Keep only last 100 logs in memory for the UI
-        if logs.count > 500 {
-            logs.removeLast()
-        }
-
-        print(logLine)
-
-        // Persist to disk
-        appendToDisk(logLine)
-    }
-
-    // MARK: - Disk Persistence
-
-    private func appendToDisk(_ line: String) {
+    func append(_ line: String) {
         let data = (line + "\n").data(using: .utf8) ?? Data()
 
         // Create file if it doesn't exist
@@ -73,10 +52,19 @@ final class LogManager: ObservableObject {
         handle.write(data)
 
         // Truncate if over max size
-        let currentSize = handle.offsetInFile
-        if currentSize > maxFileSize {
+        if handle.offsetInFile > maxFileSize {
             truncateLogFile()
         }
+    }
+
+    /// Returns up to `limit` of the most recent lines, oldest-first.
+    func loadRecent(limit: Int) -> [String] {
+        guard let data = try? Data(contentsOf: logFileURL),
+              let content = String(data: data, encoding: .utf8) else { return [] }
+
+        let lines = content.components(separatedBy: "\n")
+            .filter { !$0.isEmpty }
+        return Array(lines.suffix(limit))
     }
 
     /// Truncates the log file by keeping only the most recent half.
@@ -98,16 +86,58 @@ final class LogManager: ObservableObject {
         fileHandle = try? FileHandle(forWritingTo: logFileURL)
         fileHandle?.seekToEndOfFile()
     }
+}
 
-    /// Load the last 100 lines from disk into the in-memory array on startup.
+@MainActor
+final class LogManager: ObservableObject {
+    static let shared = LogManager()
+
+    @Published var logs: [LogEntry] = []
+
+    /// Maximum number of log lines kept in memory for the UI.
+    private let maxMemoryLogs = 500
+
+    private let writer: LogFileWriter
+
+    private init() {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        writer = LogFileWriter(url: docs.appendingPathComponent("hime_activity.log"))
+
+        // Load recent lines from disk into memory for the UI
+        loadFromDisk()
+    }
+
+    func log(_ message: String) {
+        let timestamp = Date().formatted(date: .omitted, time: .standard)
+        let logLine = "[\(timestamp)] \(message)"
+        logs.insert(LogEntry(text: logLine), at: 0)
+
+        if logs.count > maxMemoryLogs {
+            logs.removeLast()
+        }
+
+        print(logLine)
+
+        // Persist to disk off the main thread
+        let writer = self.writer
+        writer.queue.async { writer.append(logLine) }
+    }
+
+    /// Load the most recent lines from disk into the in-memory array on startup.
     private func loadFromDisk() {
-        guard let data = try? Data(contentsOf: logFileURL),
-              let content = String(data: data, encoding: .utf8) else { return }
-
-        let lines = content.components(separatedBy: "\n")
-            .filter { !$0.isEmpty }
-
-        // Lines on disk are oldest-first; UI wants newest-first
-        logs = lines.suffix(500).reversed().map { LogEntry(text: $0) }
+        let writer = self.writer
+        let limit = maxMemoryLogs
+        writer.queue.async {
+            let lines = writer.loadRecent(limit: limit)
+            guard !lines.isEmpty else { return }
+            Task { @MainActor in
+                // Lines on disk are oldest-first; UI wants newest-first. Anything
+                // logged while the read was in flight is newer, so it stays on top.
+                self.logs.append(contentsOf: lines.reversed().map { LogEntry(text: $0) })
+                if self.logs.count > limit {
+                    self.logs.removeLast(self.logs.count - limit)
+                }
+            }
+        }
     }
 }

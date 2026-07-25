@@ -167,8 +167,12 @@ class OpenAIProvider(BaseLLMProvider):
                     if effort.lower() == "minimal":
                         kwargs["parallel_tool_calls"] = False
 
+            # The network request must happen *inside* the retried callable —
+            # awaiting the SDK coroutine here (rather than returning it) is what
+            # puts connection errors / 429 / 529 under retry_async's backoff and
+            # FallbackTriggered handling.
             async def _call():
-                return self._client.chat.completions.create(**kwargs)
+                return await self._client.chat.completions.create(**kwargs)
 
             try:
                 stream_ctx = await retry_async(_call)
@@ -204,7 +208,7 @@ class OpenAIProvider(BaseLLMProvider):
             finish_reason: str | None = None
             cache_read_tokens: int | None = None
 
-            async for chunk in await stream_ctx:
+            async for chunk in stream_ctx:
                 # Usage information (only present in the last chunk when stream_options requested)
                 if chunk.usage:
                     prompt_tokens     = chunk.usage.prompt_tokens
@@ -279,8 +283,12 @@ class OpenAIProvider(BaseLLMProvider):
                 if choice.finish_reason:
                     finish_reason = choice.finish_reason
 
-                # Emit accumulated tool calls when the stream is done
-                if choice.finish_reason in ("tool_calls", "stop"):
+                # Emit accumulated tool calls when the stream is done.
+                # ``length`` (output cap hit mid-arguments) is included on
+                # purpose: the accumulated — possibly truncated — JSON is what
+                # ``agent_tools._salvage_truncated_json`` is written to repair.
+                # Dropping it here would silently lose the whole turn.
+                if choice.finish_reason in ("tool_calls", "stop", "length"):
                     for tc_info in tool_accum.values():
                         try:
                             args = json.loads(tc_info["arguments"]) if tc_info["arguments"] else {}
@@ -303,8 +311,12 @@ class OpenAIProvider(BaseLLMProvider):
                     extra = getattr(choice.delta, "model_extra", {}) or {}
                     _tt = extra.get("thoughts_tokens") or extra.get("reasoning_tokens")
                     if _tt:
+                        # Record only — do NOT yield an interim ``token_usage``
+                        # chunk here. vLLM streams this field on many deltas and
+                        # the agent loop *accumulates* every token_usage chunk,
+                        # which inflated thoughts_tokens several-fold. The single
+                        # authoritative value is emitted with the final usage.
                         thoughts_tokens = _tt
-                        yield {"type": "token_usage", "thoughts_tokens": _tt}
 
             # Fallback: estimate thoughts_tokens from reasoning text when API doesn't provide it
             # (vLLM/GLM may not include completion_tokens_details in usage)

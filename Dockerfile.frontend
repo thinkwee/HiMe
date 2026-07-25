@@ -8,6 +8,10 @@ COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci
 
 COPY frontend/ ./
+# NOTE: deliberately no ARG/ENV for VITE_API_AUTH_TOKEN. Vite inlines VITE_*
+# values into dist/, which nginx serves to every visitor — baking the API token
+# in would publish it. The dashboard asks for the token in the browser on the
+# first 401 and keeps it in session/localStorage instead (frontend/src/lib/api.js).
 RUN npm run build
 
 # ---------- runtime (nginx serves the static SPA) ----------

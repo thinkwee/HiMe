@@ -105,14 +105,32 @@ class AnthropicProvider(BaseLLMProvider):
     ) -> AsyncIterator[dict[str, Any]]:
         _t0 = time.perf_counter()
         try:
-            system_prompt, filtered_messages = self._extract_system(messages)
+            effective_max_tokens = max_tokens if max_tokens is not None else 8192
+            # Anthropic requires ``max_tokens > thinking.budget_tokens``. Small
+            # auxiliary calls (fact verification, context summarisation) pass a
+            # max_tokens at or below the budget, which used to make every such
+            # request fail with HTTP 400 — silently disabling the layers that
+            # swallow the error. Degrade to a plain (non-thinking) call instead.
+            thinking_enabled = (
+                self.thinking_budget is not None
+                and effective_max_tokens > self.thinking_budget
+            )
+            if self.thinking_budget is not None and not thinking_enabled:
+                logger.debug(
+                    "Extended thinking disabled for this call: max_tokens=%s <= budget=%s",
+                    effective_max_tokens, self.thinking_budget,
+                )
+
+            system_prompt, filtered_messages = self._extract_system(
+                messages, include_thinking=thinking_enabled,
+            )
 
             request_kwargs: dict[str, Any] = {
                 "model":      self.model,
                 "messages":   filtered_messages,
                 # Anthropic requires max_tokens; fall back when caller passes None
                 # (AGENT_MAX_TOKENS defaults to 0 -> None at the call site).
-                "max_tokens": max_tokens if max_tokens is not None else 8192,
+                "max_tokens": effective_max_tokens,
             }
             if system_prompt:
                 # Mark the entire system prompt as cacheable so subsequent
@@ -127,11 +145,11 @@ class AnthropicProvider(BaseLLMProvider):
                 ]
 
             # Temperature is only valid outside extended thinking
-            if self.thinking_budget is None:
+            if not thinking_enabled:
                 request_kwargs["temperature"] = temperature
 
             # Extended thinking (claude-4.x+)
-            if self.thinking_budget is not None:
+            if thinking_enabled:
                 request_kwargs["thinking"] = {
                     "type":         "enabled",
                     "budget_tokens": self.thinking_budget,
@@ -141,12 +159,15 @@ class AnthropicProvider(BaseLLMProvider):
             if tools:
                 request_kwargs["tools"] = self._convert_tools(tools)
 
-            # Use the streaming context manager
+            # ``messages.stream()`` only builds a context manager — the HTTP
+            # request is issued by ``__aenter__``. Entering it *inside* the
+            # retried callable is what puts connection failures / 429 / 529
+            # under retry_async's backoff and FallbackTriggered handling.
             async def _stream_call():
-                return self._client.messages.stream(**request_kwargs)
+                mgr = self._client.messages.stream(**request_kwargs)
+                return mgr, await mgr.__aenter__()
 
-            # We use the stream context to correctly handle streaming
-            resp_ctx = await retry_async(_stream_call)
+            resp_ctx, stream = await retry_async(_stream_call)
 
             # --- Accumulation buffers ---
             # Maps block_index -> {"id": str, "name": str, "arguments_buf": str}
@@ -158,8 +179,15 @@ class AnthropicProvider(BaseLLMProvider):
             cache_read_tokens: int | None = None
             cache_creation_tokens: int | None = None
             stop_reason: str | None = None
+            # Extended thinking must be replayed verbatim (text + signature) on
+            # the next request whenever this turn contains tool_use, otherwise
+            # Anthropic rejects it with "Expected `thinking` block".
+            thinking_parts: list[str] = []
+            thinking_signature: str | None = None
 
-            async with resp_ctx as stream:
+            # ``resp_ctx`` was already entered inside the retried callable, so
+            # the ``async with`` is unrolled into an explicit try/finally.
+            try:
                 async for event in stream:
                     etype = event.type
 
@@ -213,7 +241,14 @@ class AnthropicProvider(BaseLLMProvider):
 
                         elif delta.type == "thinking_delta":
                             thinking_text = delta.thinking or ""
+                            thinking_parts.append(thinking_text)
                             yield {"type": "agent_thinking", "content": thinking_text}
+
+                        elif delta.type == "signature_delta":
+                            thinking_signature = (
+                                (thinking_signature or "")
+                                + (getattr(delta, "signature", "") or "")
+                            )
 
                         elif delta.type == "input_json_delta":
                             # Accumulate partial JSON argument string
@@ -241,6 +276,20 @@ class AnthropicProvider(BaseLLMProvider):
                             tc = {"id": tc_info["id"], "name": tc_info["name"], "arguments": args}
                             tool_calls_list.append(tc)
                             yield {"type": "tool_call", **tc}
+            finally:
+                await resp_ctx.__aexit__(None, None, None)
+
+            # Stash the thinking block so the agent loop can attach it to the
+            # assistant message (same channel Gemini uses for its thought
+            # signature) and we can replay it on the next request.
+            if thinking_signature and thinking_parts:
+                yield {
+                    "type": "thought_signature",
+                    "signature": json.dumps({
+                        "thinking": "".join(thinking_parts),
+                        "signature": thinking_signature,
+                    }),
+                }
 
             # Yield token usage with truncation flag
             if prompt_tokens is not None or completion_tokens is not None:
@@ -296,13 +345,42 @@ class AnthropicProvider(BaseLLMProvider):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _extract_system(messages: list[dict]) -> tuple[str | None, list[dict]]:
+    def _decode_thinking_block(signature: Any) -> dict | None:
+        """Rebuild a replayable ``thinking`` content block from a stored blob.
+
+        The blob is the JSON string this provider emits as ``thought_signature``
+        (``{"thinking": ..., "signature": ...}``). Returns ``None`` for anything
+        else — e.g. a Gemini base64 signature left over from another provider —
+        so a foreign value can never produce an invalid thinking block.
+        """
+        if not signature or not isinstance(signature, str):
+            return None
+        try:
+            blob = json.loads(signature)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+        if not isinstance(blob, dict):
+            return None
+        thinking = blob.get("thinking")
+        sig = blob.get("signature")
+        if not thinking or not sig:
+            return None
+        return {"type": "thinking", "thinking": thinking, "signature": sig}
+
+    @staticmethod
+    def _extract_system(
+        messages: list[dict], *, include_thinking: bool = True,
+    ) -> tuple[str | None, list[dict]]:
         """Separate ``role: system`` messages and convert to Anthropic native format.
 
         Handles:
           - ``role: "system"`` → extracted to top-level system parameter
           - ``role: "assistant"`` with ``tool_calls`` → content blocks with tool_use
           - ``role: "tool"`` with ``tool_call_id`` → user message with tool_result blocks
+
+        ``include_thinking`` replays the original extended-thinking block ahead
+        of the tool_use blocks; it must be False when thinking is off for the
+        request, since Anthropic rejects thinking blocks in that mode.
         """
         system_parts: list[str] = []
         filtered: list[dict]    = []
@@ -338,8 +416,15 @@ class AnthropicProvider(BaseLLMProvider):
             _flush_tool_results()
 
             if role == "assistant" and msg.get("tool_calls"):
-                # Convert OpenAI-style tool_calls to Anthropic content blocks
+                # Convert OpenAI-style tool_calls to Anthropic content blocks.
+                # The thinking block (when present) must come first.
                 content_blocks = []
+                if include_thinking:
+                    thinking_block = AnthropicProvider._decode_thinking_block(
+                        msg.get("signature")
+                    )
+                    if thinking_block:
+                        content_blocks.append(thinking_block)
                 text = msg.get("content")
                 if text:
                     content_blocks.append({"type": "text", "text": text})

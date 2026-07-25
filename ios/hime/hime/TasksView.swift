@@ -45,8 +45,30 @@ class TasksViewModel: ObservableObject {
     @Published var isLoadingTasks = false
     @Published var isLoadingRules = false
 
+    /// Set when a write fails. Without it a rejected delete/pause/"Run Now"
+    /// gave no feedback at all — the row just sprang back on the next poll and
+    /// looked like a UI glitch.
+    @Published var errorMessage: String?
+
     private var refreshTimer: Timer?
     private var base: String { ServerConfig.load().apiBaseURL }
+
+    /// Issue a write request, reporting both transport failures and non-2xx
+    /// responses. Returns true only when the server accepted the change.
+    @discardableResult
+    private func performWrite(_ req: URLRequest, action: String) async -> Bool {
+        do {
+            let (_, resp) = try await URLSession.shared.data(for: req)
+            if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                errorMessage = "\(action) failed — server returned \(http.statusCode)."
+                return false
+            }
+            return true
+        } catch {
+            errorMessage = "\(action) failed — \(error.localizedDescription)"
+            return false
+        }
+    }
 
     func startPolling() {
         refreshTimer?.invalidate()
@@ -96,7 +118,7 @@ class TasksViewModel: ObservableObject {
         var req = APIClient.request(url, method: "PUT")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["status": newStatus])
-        let _ = try? await URLSession.shared.data(for: req)
+        await performWrite(req, action: newStatus == "paused" ? "Pause" : "Resume")
         await fetchTasks()
     }
 
@@ -106,7 +128,7 @@ class TasksViewModel: ObservableObject {
         var req = APIClient.request(url, method: "PUT")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["status": newStatus])
-        let _ = try? await URLSession.shared.data(for: req)
+        await performWrite(req, action: newStatus == "paused" ? "Pause" : "Resume")
         await fetchRules()
     }
 
@@ -115,7 +137,7 @@ class TasksViewModel: ObservableObject {
         var req = APIClient.request(url, method: "PUT")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["status": "deleted"])
-        let _ = try? await URLSession.shared.data(for: req)
+        await performWrite(req, action: "Delete")
         await fetchTasks()
     }
 
@@ -124,7 +146,7 @@ class TasksViewModel: ObservableObject {
         var req = APIClient.request(url, method: "PUT")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["status": "deleted"])
-        let _ = try? await URLSession.shared.data(for: req)
+        await performWrite(req, action: "Delete")
         await fetchRules()
     }
 
@@ -177,7 +199,7 @@ class TasksViewModel: ObservableObject {
         var req = APIClient.request(url, method: "POST")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONSerialization.data(withJSONObject: ["goal": goal as Any])
-        let _ = try? await URLSession.shared.data(for: req)
+        guard await performWrite(req, action: "Run Now") else { return }
 
         // Brief delay so user sees the "triggered" state
         try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -288,6 +310,14 @@ struct TasksContentView: View {
         }
         .sheet(isPresented: $showNewTask) { NewTaskSheet(vm: vm, isPresented: $showNewTask) }
         .sheet(isPresented: $showNewRule) { NewRuleSheet(vm: vm, isPresented: $showNewRule) }
+        .alert("Action failed", isPresented: Binding(
+            get: { vm.errorMessage != nil },
+            set: { if !$0 { vm.errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { vm.errorMessage = nil }
+        } message: {
+            Text(vm.errorMessage ?? "")
+        }
     }
 }
 

@@ -194,7 +194,9 @@ class WatchDBReader(BaseDataReader):
         """REQUIRED: Returns the time window available in DB."""
         if not self.db_path.exists():
             logger.warning("watch.db not found at %s, returning defaults", self.db_path)
-            now = pd.Timestamp.now()
+            # UTC-aware to match the success path below (pd.to_datetime(..., utc=True));
+            # mixing naive and aware timestamps raises on any downstream comparison.
+            now = pd.Timestamp.now(tz="UTC")
             return (now - pd.Timedelta(hours=1), now)
         try:
             def _run(con):
@@ -207,7 +209,7 @@ class WatchDBReader(BaseDataReader):
                 return out
         except Exception:
             pass
-        now = pd.Timestamp.now()
+        now = pd.Timestamp.now(tz="UTC")
         return (now - pd.Timedelta(hours=1), now)
 
     def load_feature_data(
@@ -224,7 +226,11 @@ class WatchDBReader(BaseDataReader):
 
         minutes = kwargs.get('minutes', 60)
         since_ts = kwargs.get('since_ts')
-        since = since_ts if since_ts is not None else (pd.Timestamp.now().timestamp() - (minutes * 60))
+        # ``ts`` is a UTC epoch, so the cutoff must be one too. ``pd.Timestamp.now()``
+        # is naive *local* time and its ``.timestamp()`` re-reads that as UTC, which
+        # offsets the cutoff by the machine's UTC offset (east of UTC the window ends
+        # up in the future and nothing is ever returned).
+        since = since_ts if since_ts is not None else (time.time() - (minutes * 60))
 
         try:
             def _run(con):

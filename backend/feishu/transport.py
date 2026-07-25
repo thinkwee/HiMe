@@ -27,13 +27,16 @@ Feishu event payloads.
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import hmac
 import json
 import logging
+import random
+import time
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from .models import MessageChannel, MessageEnvelope
@@ -56,6 +59,83 @@ OnMessage = Callable[[MessageEnvelope], Awaitable[None]]
 # interactive card from a button click — ``im.v1.message.patch`` succeeds at
 # the API level but does not actually re-render card 1.0 messages).
 OnCardAction = Callable[[dict[str, Any]], Awaitable[dict[str, Any] | None]]
+
+# Reject signed webhooks whose ``X-Lark-Request-Timestamp`` is further than this
+# from our clock — without it a captured request replays forever.
+_MAX_TIMESTAMP_SKEW_S = 300
+# WS reconnect backoff bounds (seconds).
+_WS_BACKOFF_MIN = 1.0
+_WS_BACKOFF_MAX = 60.0
+# How often we check that the SDK's websocket is still up, and how long it may
+# stay down before we tear the client down and rebuild it. The grace window
+# matters on SDK builds that ignore ``auto_reconnect=False`` and re-dial behind
+# our back — there we must not fight them by rebuilding on every blip.
+_WS_HEALTH_POLL_S = 5.0
+_WS_DEAD_AFTER_S = 30.0
+
+
+# ---------------------------------------------------------------------------
+# Payload decryption (Encrypt Key configured in the Feishu console)
+# ---------------------------------------------------------------------------
+
+
+def _aes_cbc_decrypt(key: bytes, iv: bytes, body: bytes) -> bytes:
+    """AES-256-CBC decrypt with whichever crypto backend is installed.
+
+    ``cryptography`` is *not* a declared dependency of this project, so we fall
+    back to ``pycryptodome``, which ``lark-oapi`` (required for the Feishu
+    gateway at all) always pulls in. Importing only ``cryptography`` here made
+    every encrypted webhook 500 on a clean deployment.
+    """
+    try:
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    except ImportError:
+        pass
+    else:
+        decryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
+        return decryptor.update(body) + decryptor.finalize()
+
+    try:
+        from Crypto.Cipher import AES  # pycryptodome, via lark-oapi
+    except ImportError as exc:  # pragma: no cover — neither backend installed
+        raise ValueError(
+            "cannot decrypt Feishu payload: neither `cryptography` nor "
+            "`pycryptodome` is installed"
+        ) from exc
+    return AES.new(key, AES.MODE_CBC, iv).decrypt(body)
+
+
+def decrypt_feishu_payload(encrypt_key: str, ciphertext_b64: str) -> dict[str, Any]:
+    """Decrypt a ``{"encrypt": "..."}`` Feishu body into the real event dict.
+
+    Feishu's scheme (identical to ``lark_oapi.core.utils.AESCipher``):
+    base64-decode, AES-256-CBC where the key is ``sha256(encrypt_key)`` and the
+    IV is the first 16 bytes of the decoded blob, then strip PKCS7 padding.
+
+    Raises ``ValueError`` when the payload can't be decrypted.
+    """
+    if not encrypt_key:
+        raise ValueError("encrypted payload received but no encrypt key configured")
+    try:
+        blob = base64.b64decode(ciphertext_b64)
+    except Exception as exc:
+        raise ValueError(f"encrypt field is not valid base64: {exc}") from exc
+    if len(blob) < 32 or (len(blob) - 16) % 16:
+        raise ValueError("encrypted payload has an invalid length")
+
+    key = hashlib.sha256(encrypt_key.encode("utf-8")).digest()
+    iv, body = blob[:16], blob[16:]
+    padded = _aes_cbc_decrypt(key, iv, body)
+
+    pad = padded[-1] if padded else 0
+    if not 1 <= pad <= 16 or padded[-pad:] != bytes([pad]) * pad:
+        raise ValueError("bad PKCS7 padding (wrong encrypt key?)")
+    plain = padded[:-pad]
+
+    parsed = json.loads(plain.decode("utf-8"))
+    if not isinstance(parsed, dict):
+        raise ValueError("decrypted payload is not a JSON object")
+    return parsed
 
 
 # ---------------------------------------------------------------------------
@@ -107,12 +187,25 @@ def _event_to_envelope(event: dict[str, Any]) -> MessageEnvelope | None:
         )
         platform_msg_id = message.get("message_id") or uuid.uuid4().hex
 
+        # Prefer the message's own send time (ms epoch) over local receive time so
+        # a redelivered/delayed event keeps its real timestamp, and so the value is
+        # UTC-aware like every other channel's envelope (Telegram/WeChat).
+        timestamp = datetime.now(timezone.utc)
+        try:
+            create_time = message.get("create_time") or message.get("update_time")
+            if create_time:
+                timestamp = datetime.fromtimestamp(
+                    int(create_time) / 1000.0, tz=timezone.utc,
+                )
+        except (TypeError, ValueError, OSError, OverflowError):
+            pass
+
         return MessageEnvelope(
             message_id=platform_msg_id,
             channel=MessageChannel.FEISHU,
             sender_id=str(sender_id),
             content=str(content),
-            timestamp=datetime.now(),
+            timestamp=timestamp,
             chat_id=str(chat_id) if chat_id else None,
             conversation_id=str(chat_id) if chat_id else None,
             platform_message_id=str(platform_msg_id),
@@ -157,6 +250,14 @@ class FeishuWebhookTransport:
         self._encrypt_key = encrypt_key
         self._allowed_chat_ids = allowed_chat_ids or set()
         self._registered = False
+        # Feishu re-delivers any event we fail to ack within ~3 s. Remember the
+        # ``header.event_id`` of everything we've already handled so a retry never
+        # produces a second reply. Insertion-ordered so the trim evicts the OLDEST.
+        self._seen_event_ids: dict[str, None] = {}
+        self._MAX_SEEN = 500
+        # Strong refs to in-flight background dispatches (asyncio only holds weak
+        # ones, so an un-referenced task can be garbage-collected mid-run).
+        self._bg_tasks: set[asyncio.Task[Any]] = set()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -214,6 +315,20 @@ class FeishuWebhookTransport:
             logger.warning("Feishu webhook signature check failed: %s", exc)
             return False
 
+    def verify_timestamp(self, timestamp: str) -> bool:
+        """Reject signed requests whose timestamp is outside the replay window.
+
+        The signature covers ``timestamp`` but nothing compares it to the clock,
+        so a captured request stays valid forever. Only meaningful when an encrypt
+        key is configured (that is the only case Feishu signs, and therefore the
+        only case where the timestamp is tamper-proof).
+        """
+        try:
+            sent_at = float(timestamp)
+        except (TypeError, ValueError):
+            return False
+        return abs(time.time() - sent_at) <= _MAX_TIMESTAMP_SKEW_S
+
     def verify_body_token(self, body: dict[str, Any]) -> bool:
         """Verify the plain ``token`` field embedded in a Feishu request body.
 
@@ -227,9 +342,14 @@ class FeishuWebhookTransport:
 
         * No verification_token configured locally → accept
         * Token present in the body → require exact match (constant-time)
-        * Token missing entirely → accept (chat-id allowlist still gates
-          access; rejecting here would break card callbacks on bots that
-          don't echo the token)
+        * Token missing from a v2 **event** POST (one carrying
+          ``header.event_type``) → reject. Feishu always echoes the token on
+          those, so a missing one means the POST wasn't produced by Feishu —
+          accepting it let anyone who knew the path and an ``oc_...`` chat id
+          inject forged user messages.
+        * Token missing from anything else → accept (legacy card callbacks
+          genuinely don't always echo it; the chat-id allowlist still gates
+          access)
         """
         if not self._verification_token:
             return True
@@ -239,7 +359,7 @@ class FeishuWebhookTransport:
             or ""
         )
         if not token:
-            return True
+            return not (body.get("header") or {}).get("event_type")
         return hmac.compare_digest(str(token), self._verification_token)
 
     # ------------------------------------------------------------------
@@ -273,6 +393,19 @@ class FeishuWebhookTransport:
                 list(body.keys()), bool(signature),
             )
 
+            # Encrypted delivery — once an Encrypt Key is set in the console
+            # EVERY POST (url_verification included) arrives as the single
+            # field ``{"encrypt": "<base64 AES-256-CBC>"}``. Unwrap it first so
+            # the rest of this handler sees the ordinary event shape.
+            if isinstance(body.get("encrypt"), str):
+                try:
+                    body = transport.decrypt_body(body["encrypt"])
+                except ValueError as exc:
+                    logger.warning("Feishu webhook: cannot decrypt payload: %s", exc)
+                    return JSONResponse(
+                        {"code": 400, "msg": "bad encrypt"}, status_code=400,
+                    )
+
             # URL verification challenge — Feishu sends this when first
             # configuring the webhook endpoint. It carries the plain
             # verification token in the payload; no signature header yet.
@@ -302,6 +435,14 @@ class FeishuWebhookTransport:
                     return JSONResponse(
                         {"code": 401, "msg": "bad signature"}, status_code=401,
                     )
+                if not transport.verify_timestamp(timestamp):
+                    logger.warning(
+                        "Feishu webhook: stale/invalid timestamp %r, rejecting",
+                        timestamp,
+                    )
+                    return JSONResponse(
+                        {"code": 401, "msg": "stale request"}, status_code=401,
+                    )
             if transport._verification_token:
                 if not transport.verify_body_token(body):
                     logger.warning(
@@ -310,6 +451,14 @@ class FeishuWebhookTransport:
                     return JSONResponse(
                         {"code": 401, "msg": "bad token"}, status_code=401,
                     )
+
+            # Message events run a full agent turn, which takes far longer than
+            # Feishu's ~3 s ack deadline — blocking here makes Feishu re-deliver
+            # the same event_id and the user gets answered twice. Ack now and
+            # process in the background (dispatch_event dedups on event_id).
+            if (body.get("header") or {}).get("event_type") == "im.message.receive_v1":
+                transport.dispatch_in_background(body)
+                return {"code": 0, "msg": "ok"}
 
             result = await transport.dispatch_event(body)
             # Card-action handlers return a new card dict. Feishu's "local
@@ -332,6 +481,36 @@ class FeishuWebhookTransport:
     # Event dispatch (called by transport or by tests directly)
     # ------------------------------------------------------------------
 
+    def decrypt_body(self, ciphertext_b64: str) -> dict[str, Any]:
+        """Unwrap an ``{"encrypt": ...}`` body using the configured encrypt key."""
+        return decrypt_feishu_payload(self._encrypt_key, ciphertext_b64)
+
+    def _is_duplicate(self, event_id: str) -> bool:
+        """True when ``event_id`` was already handled (Feishu retry)."""
+        if not event_id:
+            return False
+        if event_id in self._seen_event_ids:
+            return True
+        self._seen_event_ids[event_id] = None
+        if len(self._seen_event_ids) > self._MAX_SEEN:
+            for old in list(self._seen_event_ids)[: self._MAX_SEEN // 2]:
+                del self._seen_event_ids[old]
+        return False
+
+    def dispatch_in_background(self, event: dict[str, Any]) -> None:
+        """Run :meth:`dispatch_event` detached so the HTTP ack isn't blocked."""
+        task = asyncio.create_task(self._dispatch_guarded(event))
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+
+    async def _dispatch_guarded(self, event: dict[str, Any]) -> None:
+        try:
+            await self.dispatch_event(event)
+        except Exception as exc:
+            logger.error(
+                "Feishu webhook: background dispatch failed: %s", exc, exc_info=True,
+            )
+
     async def dispatch_event(self, event: dict[str, Any]) -> dict[str, Any] | None:
         """Route a normalised event payload to the correct callback.
 
@@ -344,6 +523,12 @@ class FeishuWebhookTransport:
         event_type = header.get("event_type", "")
 
         if event_type == "im.message.receive_v1":
+            if self._is_duplicate(str(header.get("event_id") or "")):
+                logger.info(
+                    "Feishu webhook: dropping duplicate event_id=%s",
+                    header.get("event_id"),
+                )
+                return None
             envelope = _event_to_envelope(event)
             if envelope is None:
                 return None
@@ -426,6 +611,9 @@ class FeishuWsTransport:
         self._allowed_chat_ids = allowed_chat_ids or set()
         self._client: Any = None
         self._task: asyncio.Task[None] | None = None
+        # True once the current attempt actually established the socket — lets
+        # _run() reset the reconnect backoff after a healthy connection drops.
+        self._connected = False
 
     async def start(self) -> None:
         """Spawn the background subscription task."""
@@ -444,7 +632,12 @@ class FeishuWsTransport:
         self._client = None
 
     async def _run(self) -> None:
-        """Build the WS client and keep the subscription alive."""
+        """Build the WS client and keep the subscription alive.
+
+        Wrapped in a reconnect loop: a transient network failure at startup, a
+        failed ``_connect`` or a dead receive loop used to leave this coroutine
+        returning for good, silently killing the channel until a full restart.
+        """
         try:
             import lark_oapi as lark  # type: ignore
         except ImportError:
@@ -453,6 +646,32 @@ class FeishuWsTransport:
             )
             return
 
+        backoff = _WS_BACKOFF_MIN
+        while True:
+            self._connected = False
+            try:
+                await self._connect_and_serve(lark)
+                # Returning normally means the link dropped — reconnect.
+                logger.warning("FeishuWsTransport: connection ended, reconnecting")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.error(
+                    "FeishuWsTransport error (reconnect in ~%.0fs): %s",
+                    backoff, exc, exc_info=True,
+                )
+            if self._connected:
+                # We were genuinely up; don't punish a healthy channel that just
+                # lost its socket with the backoff earned by earlier failures.
+                backoff = _WS_BACKOFF_MIN
+            # Full jitter avoids every replica reconnecting in lockstep after a
+            # Feishu-side outage.
+            await asyncio.sleep(backoff * (0.5 + random.random()))
+            backoff = min(backoff * 2, _WS_BACKOFF_MAX)
+
+    async def _connect_and_serve(self, lark: Any) -> None:
+        """One connection attempt; returns when the link is no longer alive."""
+        ping_task: asyncio.Task[Any] | None = None
         try:
             event_handler = (
                 lark.EventDispatcherHandler.builder("", "")
@@ -460,14 +679,25 @@ class FeishuWsTransport:
                 .register_p2_card_action_trigger(self._on_sdk_card_action)
                 .build()
             )
-            self._client = (
-                lark.ws.Client(
-                    self._app_id,
-                    self._app_secret,
-                    event_handler=event_handler,
-                    log_level=lark.LogLevel.WARNING,
+            # ``auto_reconnect=False``: we own reconnection (see _run). Leaving
+            # the SDK's own re-dial enabled would race our rebuild — the old
+            # client's detached ``_reconnect()`` task keeps running after we
+            # drop our reference, so both clients can end up subscribed and
+            # every message is delivered twice.
+            kwargs: dict[str, Any] = {
+                "event_handler": event_handler,
+                "log_level": lark.LogLevel.WARNING,
+                "auto_reconnect": False,
+            }
+            try:
+                self._client = lark.ws.Client(
+                    self._app_id, self._app_secret, **kwargs,
                 )
-            )
+            except TypeError:  # pragma: no cover — older SDK without the kwarg
+                kwargs.pop("auto_reconnect")
+                self._client = lark.ws.Client(
+                    self._app_id, self._app_secret, **kwargs,
+                )
             # NOTE: We deliberately bypass ``Client.start()`` because it is a
             # synchronous wrapper that calls ``loop.run_until_complete()`` on
             # ``lark_oapi.ws.client``'s module-level ``loop`` reference. That
@@ -481,26 +711,52 @@ class FeishuWsTransport:
             # whole sync-wrapper trap and lets the SDK schedule its receive
             # loop on our loop normally.
             await self._client._connect()
+            self._connected = True
             ping_task = asyncio.create_task(
                 self._client._ping_loop(), name="feishu-ws-ping",
             )
-            try:
-                # Block forever; cancellation comes via stop() → task.cancel().
-                await asyncio.Event().wait()
-            finally:
+            # Watch the link instead of parking on ``asyncio.Event().wait()``.
+            # Awaiting ``_ping_loop`` would be just as blind: the SDK's ping
+            # coroutine swallows every exception and re-sleeps in a ``finally``,
+            # so it never returns even when the socket is gone. The SDK *does*
+            # null out ``_conn`` from ``_receive_message_loop`` the moment the
+            # receive side dies, so that handle is the real liveness signal.
+            # Cancellation still arrives via stop() → task.cancel().
+            await self._watch_link()
+        finally:
+            if ping_task is not None:
                 ping_task.cancel()
                 try:
                     await ping_task
                 except (asyncio.CancelledError, Exception):
                     pass
+            if self._client is not None:
                 try:
-                    await self._client._disconnect()
+                    # Bounded: the SDK's _disconnect takes an internal lock that
+                    # its own _connect can leak, and we must not wedge the
+                    # reconnect loop behind it.
+                    await asyncio.wait_for(self._client._disconnect(), timeout=10)
                 except Exception:
                     pass
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.error("FeishuWsTransport crashed: %s", exc, exc_info=True)
+
+    async def _watch_link(self) -> None:
+        """Return once the SDK's websocket has been down for too long."""
+        down_for = 0.0
+        while True:
+            await asyncio.sleep(_WS_HEALTH_POLL_S)
+            client = self._client
+            if client is None:
+                return
+            if getattr(client, "_conn", None) is None:
+                down_for += _WS_HEALTH_POLL_S
+                if down_for >= _WS_DEAD_AFTER_S:
+                    logger.warning(
+                        "FeishuWsTransport: websocket down for %.0fs — rebuilding",
+                        down_for,
+                    )
+                    return
+            else:
+                down_for = 0.0
 
     # --- SDK callback adapters ------------------------------------------
 

@@ -46,8 +46,21 @@ logger = logging.getLogger(__name__)
 ILINK_BASE = "https://ilinkai.weixin.qq.com"
 # iLink rejects very long single items; keep a conservative cap and
 # truncate on the client side instead of waiting for the server to error.
-_MAX_TEXT_LENGTH = 4000
+# The cap is in **UTF-8 bytes** — 4000 Chinese characters is ~12 KB on the
+# wire, so a character-based check let long Chinese reports through and the
+# server dropped them wholesale (ret != 0).
+_MAX_TEXT_BYTES = 4000
 _TRUNCATION_SUFFIX = "\n\n…(truncated)"
+
+
+def _truncate_utf8(text: str, max_bytes: int) -> str:
+    """Truncate ``text`` so its UTF-8 encoding fits in ``max_bytes``."""
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    budget = max_bytes - len(_TRUNCATION_SUFFIX.encode("utf-8"))
+    # ``errors="ignore"`` drops the partial multi-byte char at the boundary.
+    return encoded[:budget].decode("utf-8", errors="ignore") + _TRUNCATION_SUFFIX
 
 
 class WeixinSender:
@@ -144,11 +157,7 @@ class WeixinSender:
             )
             return False
 
-        if len(text) > _MAX_TEXT_LENGTH:
-            text = (
-                text[: _MAX_TEXT_LENGTH - len(_TRUNCATION_SUFFIX)]
-                + _TRUNCATION_SUFFIX
-            )
+        text = _truncate_utf8(text, _MAX_TEXT_BYTES)
 
         # iLink's sendmessage expects a fully-spelled message envelope:
         # ``message_type=2`` / ``message_state=2`` are the values used by the

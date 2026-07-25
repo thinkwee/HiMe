@@ -120,7 +120,12 @@ struct ChatView: View {
                     guard let item else { return }
                     Task {
                         if let data = try? await item.loadTransferable(type: Data.self) {
-                            vm.pendingImage = downscaleJPEG(data)
+                            // Decoding + redrawing + re-encoding a modern 48MP
+                            // capture takes hundreds of ms; keep it off the main
+                            // actor so the picker dismissal doesn't hitch.
+                            vm.pendingImage = await Task.detached(priority: .userInitiated) {
+                                downscaleJPEG(data)
+                            }.value
                         }
                         photoItem = nil
                     }
@@ -339,6 +344,7 @@ private struct ChatBubble: View {
 private struct AuthedAsyncImage: View {
     let path: String
     @State private var image: UIImage?
+    @State private var failed = false
 
     var body: some View {
         Group {
@@ -348,7 +354,19 @@ private struct AuthedAsyncImage: View {
                 RoundedRectangle(cornerRadius: 14)
                     .fill(Color(.systemGray6))
                     .frame(width: 200, height: 150)
-                    .overlay(ProgressView())
+                    .overlay {
+                        if failed {
+                            VStack(spacing: 6) {
+                                Image(systemName: "photo.badge.exclamationmark")
+                                    .font(.system(size: 22))
+                                Text("Image unavailable")
+                                    .font(.caption)
+                            }
+                            .foregroundColor(.secondary)
+                        } else {
+                            ProgressView()
+                        }
+                    }
             }
         }
         .task(id: path) { await load() }
@@ -357,22 +375,38 @@ private struct AuthedAsyncImage: View {
     private func load() async {
         guard image == nil,
               let url = URL(string: "\(ServerConfig.load().apiBaseURL)\(path)") else { return }
-        if let (data, _) = try? await URLSession.shared.data(for: APIClient.request(url)),
-           let ui = UIImage(data: data) {
-            image = ui
+        failed = false
+        // Without the status check an expired image (the server TTLs them out and
+        // answers 404) decodes to nil and the ProgressView spins forever.
+        guard let (data, resp) = try? await URLSession.shared.data(for: APIClient.request(url)),
+              let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              let ui = UIImage(data: data) else {
+            failed = true
+            return
         }
+        image = ui
     }
 }
 
 // MARK: - Helpers
 
 /// Downscale + JPEG-encode so uploads stay well under the server's size cap.
-private func downscaleJPEG(_ data: Data, maxDimension: CGFloat = 1280, quality: CGFloat = 0.7) -> Data {
-    guard let ui = UIImage(data: data) else { return data }
+///
+/// Returns nil when the bytes can't be decoded or re-encoded. Callers must NOT
+/// fall back to the original data: the upload is tagged `image/jpeg`, so handing
+/// back untouched HEIC/PNG bytes would mislabel them.
+///
+/// `nonisolated` so it can run off the main actor — see the PhotosPicker callback.
+private nonisolated func downscaleJPEG(_ data: Data, maxDimension: CGFloat = 1280, quality: CGFloat = 0.7) -> Data? {
+    guard let ui = UIImage(data: data) else { return nil }
     let scale = min(1, maxDimension / max(ui.size.width, ui.size.height))
-    if scale >= 1 { return ui.jpegData(compressionQuality: quality) ?? data }
+    if scale >= 1 { return ui.jpegData(compressionQuality: quality) }
     let newSize = CGSize(width: ui.size.width * scale, height: ui.size.height * scale)
-    let renderer = UIGraphicsImageRenderer(size: newSize)
+    // Explicit scale 1 — the default reads the main screen's scale (a main-actor
+    // lookup) and would also emit a 2-3x larger bitmap than maxDimension asks for.
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 1
+    let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
     let resized = renderer.image { _ in ui.draw(in: CGRect(origin: .zero, size: newSize)) }
-    return resized.jpegData(compressionQuality: quality) ?? data
+    return resized.jpegData(compressionQuality: quality)
 }

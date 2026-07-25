@@ -91,8 +91,20 @@ struct PersonalisedPageWebView: UIViewRepresentable {
 struct PersonalisedPageScreen: View {
     let page: PersonalisedPage
 
+    /// The WebView sets an Authorization header for the HTML load itself, but the
+    /// page's own fetch of /data is issued by its inline JS, which cannot set
+    /// headers. `hime-ui.js` forwards a ?token= from its own location when it is
+    /// not framed, so pass it through here — otherwise every page 401s on its
+    /// data request against an auth-enabled backend.
+    private var frontendURL: String {
+        let base = "\(ServerConfig.load().apiBaseURL)/api/personalised-pages/\(page.page_id)/"
+        let token = ServerConfig.authToken
+        guard !token.isEmpty else { return base }
+        let encoded = token.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? token
+        return "\(base)?token=\(encoded)"
+    }
+
     var body: some View {
-        let frontendURL = "\(ServerConfig.load().apiBaseURL)/api/personalised-pages/\(page.page_id)/"
         PersonalisedPageWebView(urlString: frontendURL)
     }
 }
@@ -114,6 +126,13 @@ struct ContentView: View {
 
     /// 3 built-in + personalised pages + 1 placeholder
     private var totalTabs: Int { 3 + pagesStore.pages.count + 1 }
+
+    /// Keep the selection inside the range of tags the TabView actually renders.
+    private func clampSelectedTab(_ candidate: Int) {
+        let maxTab = totalTabs - 1
+        if candidate > maxTab { selectedTab = maxTab }
+        else if candidate < 0 { selectedTab = 0 }
+    }
 
     var body: some View {
         mainContent
@@ -161,9 +180,14 @@ struct ContentView: View {
                 .tabViewStyle(.page(indexDisplayMode: .never))
                 .ignoresSafeArea(edges: .bottom)
                 .onChange(of: selectedTab) { _, newValue in
-                    let maxTab = totalTabs - 1
-                    if newValue > maxTab { selectedTab = maxTab }
-                    else if newValue < 0 { selectedTab = 0 }
+                    clampSelectedTab(newValue)
+                }
+                // The tab count shrinks whenever the server drops a personalised
+                // page. Clamping only on selectedTab changes left the TabView
+                // parked on a tag that no longer exists — a blank screen the user
+                // can't swipe out of — so watch the count too.
+                .onChange(of: totalTabs) { _, _ in
+                    clampSelectedTab(selectedTab)
                 }
             }
             .background(selectedTab == 2

@@ -201,6 +201,11 @@ class CodeTool(BaseTool):
         existing_df: _pd.DataFrame = self._shell.user_ns.get("df", _pd.DataFrame())
         cutoff = f"strftime('%Y-%m-%dT%H:%M:%S', 'now', '-{days} days')"
 
+        # Watermark for the *next* incremental refresh must be taken BEFORE the
+        # queries run: rows written between the SELECT and the assignment would
+        # otherwise fall in the gap and never be picked up again.
+        refresh_started_at = _pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%dT%H:%M:%S")
+
         try:
             if self._df_max_rowid is not None and not existing_df.empty:
                 cutoff_str = f"strftime('%Y-%m-%dT%H:%M:%S', 'now', '-{days} days')"
@@ -281,9 +286,7 @@ class CodeTool(BaseTool):
 
                 self._shell.user_ns["df"] = combined
                 self._df_high_watermark = str(combined["timestamp"].max())
-                self._df_last_updated_at = _pd.Timestamp.now(tz="UTC").strftime(
-                    "%Y-%m-%dT%H:%M:%S"
-                )
+                self._df_last_updated_at = refresh_started_at
                 logger.info(
                     "code: df incremental refresh — +%d new, %d updated, %d total (last %d days)",
                     len(new_rows), len(updated_rows), len(combined), days,
@@ -308,9 +311,7 @@ class CodeTool(BaseTool):
                     self._df_max_rowid = None
                     self._df_high_watermark = None
 
-                self._df_last_updated_at = _pd.Timestamp.now(tz="UTC").strftime(
-                    "%Y-%m-%dT%H:%M:%S"
-                )
+                self._df_last_updated_at = refresh_started_at
                 self._shell.user_ns["df"] = fresh_df if not fresh_df.empty else fresh_df
                 self._df_retention_days = days
                 logger.info(

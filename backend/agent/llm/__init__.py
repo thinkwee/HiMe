@@ -14,6 +14,7 @@ import csv
 import json
 import logging
 import random
+import re
 import threading
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Callable
@@ -137,8 +138,44 @@ def set_llm_log_context(
 
 
 # ---------------------------------------------------------------------------
-# CSV — LLM API usage log (full content, no truncation)
+# CSV — LLM API usage log
 # ---------------------------------------------------------------------------
+#
+# The log is a debugging aid, not an archive. Fields are capped and inline
+# base64 images are redacted: a single multimodal turn embeds multi-MB data
+# URIs, and unbounded rows grew the file without limit while writing every
+# health datapoint to disk in plaintext.
+
+_MAX_FIELD_CHARS = 20_000            # per free-text CSV field
+_MAX_LOG_BYTES = 64 * 1024 * 1024    # rotate to <name>.1 past this size
+
+_DATA_URI_RE = re.compile(r"data:[\w.+-]+/[\w.+-]+;base64,[A-Za-z0-9+/=\s]{64,}")
+
+
+def _redact_blobs(text: str) -> str:
+    """Replace inline base64 data URIs with a short placeholder."""
+    return _DATA_URI_RE.sub(
+        lambda m: f"<data-uri {len(m.group(0))} bytes redacted>", text,
+    )
+
+
+def _cap(text: str, limit: int = _MAX_FIELD_CHARS) -> str:
+    """Truncate an oversized CSV field, noting the original size."""
+    if text and len(text) > limit:
+        return f"{text[:limit]}… [truncated, {len(text)} chars total]"
+    return text
+
+
+def _rotate_if_needed(path: Path) -> None:
+    """Move the log aside once it exceeds ``_MAX_LOG_BYTES``."""
+    try:
+        if path.exists() and path.stat().st_size > _MAX_LOG_BYTES:
+            backup = path.with_name(path.name + ".1")
+            backup.unlink(missing_ok=True)
+            path.rename(backup)
+    except OSError as exc:
+        logger.warning("Could not rotate LLM usage log: %s", exc)
+
 
 _CSV_COLUMNS = [
     "timestamp", "user_id", "loop", "chat_id",
@@ -198,7 +235,11 @@ def write_usage_log(
     tool_calls_str: str,
     response_text: str = "",
 ) -> None:
-    """Append one row to the LLM API CSV log (thread-safe). No truncation."""
+    """Append one row to the LLM API CSV log (thread-safe).
+
+    Free-text fields are redacted (base64 blobs) and capped; the file is
+    rotated once it grows past ``_MAX_LOG_BYTES``.
+    """
     total = ""
     if prompt_tokens is not None or completion_tokens is not None:
         total = str(
@@ -222,14 +263,15 @@ def write_usage_log(
         str(cache_creation_tokens) if cache_creation_tokens is not None else "",
         total,
         str(duration_ms) if duration_ms is not None else "",
-        tool_definitions_str or "",
-        input_summary or "",
-        tool_calls_str or "",
-        tool_results_str,
-        response_text or "",
+        _cap(tool_definitions_str or ""),
+        _cap(_redact_blobs(input_summary or "")),
+        _cap(tool_calls_str or ""),
+        _cap(_redact_blobs(tool_results_str)),
+        _cap(response_text or ""),
     ]
     path = _get_log_path()
     with _csv_lock:
+        _rotate_if_needed(path)
         file_exists = path.exists() and path.stat().st_size > 0
         with open(path, "a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f, quoting=csv.QUOTE_NONNUMERIC)
@@ -243,23 +285,41 @@ def write_usage_log(
 # ---------------------------------------------------------------------------
 
 def format_input_summary(messages: list[dict]) -> str:
-    """Format messages for CSV log. No truncation."""
+    """Format messages for the CSV log.
+
+    Multimodal (list) content is rendered block-by-block so an inline image
+    data URI becomes a short placeholder instead of megabytes of base64.
+    """
     parts = []
     for i, m in enumerate(messages):
         content = m.get("content") or ""
+        if isinstance(content, list):
+            blocks: list[str] = []
+            for b in content:
+                if not isinstance(b, dict):
+                    blocks.append(str(b))
+                elif b.get("type") == "image_url":
+                    url = (b.get("image_url") or {}).get("url", "")
+                    blocks.append(f"<image {len(url)} bytes omitted>")
+                elif b.get("type") == "image":
+                    data = (b.get("source") or {}).get("data", "")
+                    blocks.append(f"<image {len(data)} bytes omitted>")
+                else:
+                    blocks.append(str(b.get("text", b)))
+            content = "\n".join(blocks)
         parts.append(f"[{i}] {m.get('role', '')}:\n{content}")
     return "\n---\n".join(parts)
 
 
 def format_tool_definitions(tools: list[dict] | None) -> str:
-    """Format tool definitions (what we send to the model) as JSON. No truncation."""
+    """Format tool definitions (what we send to the model) as JSON."""
     if not tools:
         return ""
     return json.dumps(tools, ensure_ascii=False, indent=0)
 
 
 def format_tool_calls(tool_calls: list[dict]) -> str:
-    """Render a list of tool calls as JSON. No truncation."""
+    """Render a list of tool calls as JSON."""
     if not tool_calls:
         return ""
     normalized = []

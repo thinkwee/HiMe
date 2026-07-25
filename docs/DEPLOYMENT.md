@@ -95,7 +95,11 @@ Before you open HiMe to the internet, set a long random bearer token in `.env`:
 API_AUTH_TOKEN=$(openssl rand -hex 32)
 ```
 
-With this set, the `BearerAuthMiddleware` in `backend/main.py` rejects every `/api/*` and `/ws/*` request that does not carry `Authorization: Bearer <token>`. Browser WebSocket clients can pass the token via `?token=...` in the query string. Save the same token in your iOS app settings and in your frontend configuration.
+With this set, the `BearerAuthMiddleware` in `backend/main.py` rejects every `/api/*` and `/ws/*` request that does not carry `Authorization: Bearer <token>`. Browser WebSocket clients can pass the token via `?token=...` in the query string. Save the same token in your iOS app settings (Settings → Auth Token).
+
+The dashboard needs no build-time configuration for this: on the first `401` it prompts for the token in the browser and keeps it in `sessionStorage` — or in `localStorage` if the user ticks **Remember on this device** — then sends it on every request and WebSocket. Do **not** set `VITE_API_AUTH_TOKEN` for a shared deployment: Vite would inline it into `dist/`, which the web server hands to every visitor.
+
+**Personalised pages and the token.** Agent-generated pages are served from `/api/personalised-pages/{id}/`, so they are behind the same token. The dashboard never puts that token in a URL for them: it fetches the page HTML with the `Authorization` header and injects the markup into a `sandbox="allow-scripts"` iframe via `srcdoc`. The page therefore runs in an opaque origin at `about:srcdoc` — no query string, no referrer, no `window.parent`, no storage, no `/api/*` — and gets its data through a validated `postMessage` bridge in the dashboard. **Open in new tab** re-opens the dashboard at `/pages?page=<id>`, not the raw API URL, so the page stays sandboxed there too. Because a `srcdoc` document receives no response headers, `page_routes.py` also emits the page Content-Security-Policy as a `<meta http-equiv>` inside the markup; both the header and the meta tag are kept in sync from `_PAGE_CSP`.
 
 ### 2.3. CORS
 
@@ -256,7 +260,7 @@ Compose services expose the same endpoints described in section 1.5. Point your 
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | iOS app cannot reach backend | Firewall / wrong IP | Verify `curl http://<ip>:8765/ping` from another LAN device |
-| `401 Unauthorized` from frontend | `API_AUTH_TOKEN` set but frontend missing it | Configure the token in the frontend and reload |
+| `401 Unauthorized` from frontend | `API_AUTH_TOKEN` set but the browser has no token stored | Paste the token into the dashboard's token prompt (it opens on any 401); clear site data to reset it |
 | Telegram bot silent | `TELEGRAM_ALLOWED_CHAT_IDS` empty | Add your chat ID to the allow-list |
 | Feishu card actions do nothing | Message Card Request URL not set / not publicly reachable | Configure the card callback URL in the Feishu console |
 | WeChat bot silent after restart | Token file missing or expired | Re-run `python -m backend.weixin.qr_login` and re-scan; check `./data/weixin_bot_token.json` exists |

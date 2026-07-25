@@ -65,7 +65,8 @@ FEATURE_SPEC = {
     "physical_effort": {
         "raw_form": "Metabolic equivalent (kcal/hr·kg)",
         "processing": "Store as-is",
-        "aggregation": AGG_SUM,
+        # A MET is a rate, not an additive quantity — summing samples is meaningless.
+        "aggregation": AGG_MEAN,
         "unit": "kcal/hr·kg",
         "display_unit": "kcal/hr·kg",
         "format": "{:.1f}",
@@ -73,7 +74,9 @@ FEATURE_SPEC = {
     "six_minute_walk": {
         "raw_form": "Distance in 6-min walk test (m)",
         "processing": "Store as-is",
-        "aggregation": AGG_SUM,
+        # A test result, not an accumulating total — averaging the day's tests is
+        # the only sane roll-up.
+        "aggregation": AGG_MEAN,
         "unit": "m",
         "display_unit": "m",
         "format": "{:.0f}",
@@ -238,11 +241,11 @@ FEATURE_SPEC = {
         "display_unit": "mg",
         "format": "{:.0f}",
     },
-    # === Audio exposure (SUM) ===
+    # === Audio exposure (MEAN — decibels are logarithmic, never additive) ===
     "environmental_audio": {
         "raw_form": "Sound level exposure (dBASPL)",
         "processing": "Store as-is",
-        "aggregation": AGG_SUM,
+        "aggregation": AGG_MEAN,
         "unit": "dBASPL",
         "display_unit": "dB",
         "format": "{:.1f}",
@@ -250,7 +253,7 @@ FEATURE_SPEC = {
     "headphone_audio": {
         "raw_form": "Headphone sound exposure (dBASPL)",
         "processing": "Store as-is",
-        "aggregation": AGG_SUM,
+        "aggregation": AGG_MEAN,
         "unit": "dBASPL",
         "display_unit": "dB",
         "format": "{:.1f}",

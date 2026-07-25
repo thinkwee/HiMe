@@ -1,6 +1,6 @@
 import asyncio
 import os
-import signal
+import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -24,7 +24,7 @@ from .api.agent_routes import (
 )
 from .api.config_routes import (
     load_app_state,
-    save_app_state,
+    save_app_state_locked,
 )
 from .api.config_routes import (
     router as config_router,
@@ -98,14 +98,17 @@ def _claim_due_tasks(
     missed, we skip forward to the most recent missed tick and fire exactly
     once — no replay storms.
 
-    Returns: list of (task_id, prompt_goal, fired_tick) for tasks to execute.
-    ``fired_tick`` is tz-aware in ``app_tz``.
+    Returns: list of (task_id, prompt_goal, fired_tick, prev_last_run_at) for
+    tasks to execute. ``fired_tick`` is tz-aware in ``app_tz``;
+    ``prev_last_run_at`` is the pre-claim value so the caller can release the
+    claim (see ``_release_task_claim``) if dispatch fails — otherwise a failed
+    dispatch would silently consume that tick forever.
     """
     import sqlite3 as _sqlite3
 
     import croniter as _croniter
 
-    due: list[tuple[int, str, datetime]] = []
+    due: list[tuple[int, str, datetime, str | None]] = []
     with _sqlite3.connect(db_file, timeout=5, isolation_level=None) as conn:
         conn.row_factory = _sqlite3.Row
         conn.execute("BEGIN IMMEDIATE")
@@ -157,13 +160,30 @@ def _claim_due_tasks(
                     anchor_local.isoformat(),
                     now.isoformat(),
                 )
-                due.append((row["id"], row["prompt_goal"], fired_tick))
+                due.append((row["id"], row["prompt_goal"], fired_tick, row["last_run_at"]))
 
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
     return due
+
+
+def _release_task_claim(db_file: str, task_id: int, prev_last_run_at: str | None) -> None:
+    """Undo a claim made by ``_claim_due_tasks`` after a failed dispatch.
+
+    Without this the tick is consumed even though nothing ran, so e.g. a
+    scheduled analysis that lands while the agent is mid-restart is skipped
+    for that day entirely.
+    """
+    import sqlite3 as _sqlite3
+
+    with _sqlite3.connect(db_file, timeout=5) as conn:
+        conn.execute(
+            "UPDATE scheduled_tasks SET last_run_at = ? WHERE id = ?",
+            (prev_last_run_at, task_id),
+        )
+        conn.commit()
 
 
 async def _run_cron_scheduler():
@@ -201,7 +221,7 @@ async def _run_cron_scheduler():
                     continue
 
                 agent = info["agent"]
-                for task_id, goal, fired_tick in due:
+                for task_id, goal, fired_tick, prev_last_run in due:
                     logger.info(
                         "Scheduler: firing task %d for %s at tick %s (pid=%d, q=%d): %s",
                         task_id, pid, fired_tick.isoformat(),
@@ -212,6 +232,18 @@ async def _run_cron_scheduler():
                         await agent.run_scheduled_analysis(goal)
                     except Exception as e:
                         logger.error("Scheduler: failed to enqueue task %d: %s", task_id, e)
+                        # Give the tick back so the next poll retries it
+                        # instead of losing the run outright.
+                        try:
+                            await asyncio.to_thread(
+                                _release_task_claim,
+                                str(memory.db_file), task_id, prev_last_run,
+                            )
+                        except Exception as rel_exc:
+                            logger.error(
+                                "Scheduler: failed to release claim on task %d: %s",
+                                task_id, rel_exc,
+                            )
         except Exception as e:
             logger.error("Scheduler loop error: %s", e)
 
@@ -461,30 +493,15 @@ async def lifespan(app: FastAPI):
     logger.info("[Startup] All services ready — binding HTTP server on port %s", settings.API_PORT)
     yield
 
-    # --- Graceful Shutdown ---
-    # Register signal handlers for emergency state persistence
-
-    def _emergency_save_handler(signum, frame):
-        """Best-effort state save on SIGTERM/SIGINT before process dies."""
-        logger.warning("Received signal %d — initiating graceful shutdown", signum)
-        agents = get_active_agents_dict()
-        for pid, info in agents.items():
-            agent = info.get("agent")
-            if agent and hasattr(agent, "_save_state"):
-                try:
-                    agent._save_state()
-                    logger.info("Emergency state saved for agent %s", pid)
-                except Exception as e:
-                    logger.error("Emergency state save failed for %s: %s", pid, e)
-
-    # Install signal handlers (non-blocking — actual shutdown is via lifespan)
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        try:
-            signal.signal(sig, _emergency_save_handler)
-        except (OSError, ValueError):
-            pass  # May fail in non-main thread
-
     # --- Shutdown ---
+    # NOTE: no SIGTERM/SIGINT handlers are installed here. Anything after
+    # ``yield`` only runs once uvicorn has *already* received the first signal
+    # and begun shutting down, so a handler registered at this point can never
+    # cover the signal that triggered it — and it would override uvicorn's own
+    # handler, so a second Ctrl-C would run synchronous SQLite writes inside a
+    # signal handler instead of forcing the process to exit. Agent state is
+    # persisted on every state transition and flushed again by
+    # ``shutdown_agents()`` below, which is the correct place for it.
     logger.info("Application shutting down...")
 
     # Cancel the cron scheduler task
@@ -504,8 +521,8 @@ async def lifespan(app: FastAPI):
     # Stop all background ingestions
     await stop_all_ingestions()
 
-    # Save general app state
-    await asyncio.to_thread(save_app_state)
+    # Save general app state (through the lock — see config_routes)
+    await save_app_state_locked()
 
     # 1. Stop Telegram Gateway
     if _telegram_gateway:
@@ -584,6 +601,10 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
       - GET /health        (health check)
       - OPTIONS /*         (CORS preflight)
 
+    The interactive docs (``/docs``, ``/redoc``, ``/openapi.json``) describe
+    the whole authed API surface, so they are guarded too whenever a token is
+    configured.
+
     The token may arrive via the ``Authorization: Bearer`` header or, for
     header-less clients (e.g. an ``<img>`` tag loading an authed ``/api/``
     URL), a ``?token=...`` query string parameter. WebSocket handshakes are
@@ -592,6 +613,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
     """
 
     _PUBLIC_PATHS = {"/", "/health"}
+    _DOCS_PATHS = {"/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"}
 
     async def dispatch(self, request: Request, call_next):
         token = settings.API_AUTH_TOKEN
@@ -608,8 +630,9 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         # whenever API_AUTH_TOKEN is set. Exempt it — the gateway verifies it.
         if path == getattr(settings, "FEISHU_WEBHOOK_PATH", "/api/feishu/webhook"):
             return await call_next(request)
-        # Only guard the API surface; static / docs are left alone.
-        if not path.startswith("/api/"):
+        # Guard the API surface plus the docs that describe it; everything
+        # else (static assets) is left alone.
+        if not path.startswith("/api/") and path not in self._DOCS_PATHS:
             return await call_next(request)
 
         # Accept the token from the Authorization header, or from a ?token=
@@ -622,7 +645,8 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         if provided is None:
             provided = request.query_params.get("token")
 
-        if provided != token:
+        # Constant-time compare so the token can't be recovered byte-by-byte.
+        if not provided or not secrets.compare_digest(provided, token):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Unauthorized"},

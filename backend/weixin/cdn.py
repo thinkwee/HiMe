@@ -25,9 +25,11 @@ publish a formal spec for this endpoint.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import os
+import random
 from dataclasses import dataclass
 
 import httpx
@@ -44,6 +46,21 @@ CDN_BASE_URL = "https://novac2c.cdn.weixin.qq.com/c2c"
 # Three retries matches the wechat-clawbot defaults; the CDN occasionally
 # 5xx's the first attempt under load.
 _UPLOAD_MAX_RETRIES = 3
+# Base delay for the exponential backoff between upload retries. Retrying with
+# no pause just piles more load onto an already-struggling CDN.
+_UPLOAD_RETRY_BASE_DELAY = 0.5
+
+
+class CDNUploadError(RuntimeError):
+    """Base class for iLink CDN upload failures."""
+
+
+class CDNClientError(CDNUploadError):
+    """Non-retryable 4xx — malformed pre-signed URL or expired key."""
+
+
+class CDNServerError(CDNUploadError):
+    """Retryable 5xx / malformed success response."""
 
 
 @dataclass
@@ -119,37 +136,42 @@ async def upload_ciphertext(
             )
             if 400 <= resp.status_code < 500:
                 msg = resp.headers.get("x-error-message", resp.text[:200])
-                raise RuntimeError(
+                raise CDNClientError(
                     f"CDN upload client error {resp.status_code}: {msg}",
                 )
             if resp.status_code != 200:
-                raise RuntimeError(
+                raise CDNServerError(
                     f"CDN upload server error {resp.status_code}: "
                     f"{resp.headers.get('x-error-message', '')[:200]}",
                 )
             ref = resp.headers.get("x-encrypted-param")
             if not ref:
-                raise RuntimeError(
+                raise CDNServerError(
                     "CDN upload succeeded but response is missing the "
                     "x-encrypted-param header — cannot reference the upload.",
                 )
             return ref
+        except CDNClientError:
+            # 4xx is non-retryable — propagate immediately. Detected by type
+            # rather than by substring-matching the message, which misclassified
+            # any unrelated exception whose text happened to say "client error".
+            raise
         except Exception as exc:
             last_err = exc
-            # 4xx is non-retriable — propagate immediately.
-            if "client error" in str(exc):
-                raise
             if attempt < _UPLOAD_MAX_RETRIES:
+                delay = _UPLOAD_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                delay *= 0.5 + random.random()  # jitter
                 logger.warning(
-                    "CDN upload attempt %d/%d failed (will retry): %s",
-                    attempt, _UPLOAD_MAX_RETRIES, exc,
+                    "CDN upload attempt %d/%d failed (retry in %.1fs): %s",
+                    attempt, _UPLOAD_MAX_RETRIES, delay, exc,
                 )
+                await asyncio.sleep(delay)
             else:
                 logger.error(
                     "CDN upload failed after %d attempts: %s",
                     _UPLOAD_MAX_RETRIES, exc,
                 )
-    raise last_err or RuntimeError("CDN upload failed (no error captured)")
+    raise last_err or CDNServerError("CDN upload failed (no error captured)")
 
 
 def new_filekey() -> str:

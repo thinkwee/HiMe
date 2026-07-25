@@ -62,3 +62,37 @@ jobs:
       - name: Run frontend tests
         working-directory: frontend
         run: npm test -- --run
+
+  scripts:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax check
+        run: |
+          bash -n hime.sh
+          bash -n setup.sh
+          sh -n docker/entrypoint-backend.sh
+
+      # -S error keeps the gate on real bugs (unbound vars, bad quoting that
+      # changes behaviour) without failing the build on style nitpicks.
+      - name: ShellCheck
+        run: shellcheck -S error hime.sh setup.sh docker/entrypoint-backend.sh
+
+  docker:
+    name: Docker images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Every service declares `env_file: - .env`, so compose needs the file
+      # to exist before it can resolve the project model.
+      - name: Seed .env
+        run: cp .env.example .env
+
+      - name: Validate compose file
+        run: docker compose config -q
+
+      - name: Build images
+        run: docker compose build

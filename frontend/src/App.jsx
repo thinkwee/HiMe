@@ -5,6 +5,7 @@ import {
 import { useTranslation } from 'react-i18next'
 
 import { AppProvider, useApp } from './context/AppContext'
+import AuthTokenPrompt from './components/AuthTokenPrompt'
 import ErrorBoundary from './components/ErrorBoundary'
 import LanguageSwitcher from './components/LanguageSwitcher'
 import Dashboard from './pages/Dashboard'
@@ -171,6 +172,9 @@ export default function App() {
   return (
     <BrowserRouter>
       <ErrorBoundary>
+        {/* Sits above everything: shows only when the backend rejects a call
+            with 401/403 so the user can supply the API token. */}
+        <AuthTokenPrompt />
         <AppProvider>
           <AppShell />
         </AppProvider>

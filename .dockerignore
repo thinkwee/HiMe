@@ -10,6 +10,10 @@ ios/Server/watch.db*
 # Secrets
 .env
 .env.local
+# `.env.local` alone only matches the repo root; frontend/.env.local would
+# otherwise be copied into the image and its VITE_* values baked into the
+# public JS bundle by Vite.
+**/.env.local
 ios/hime/Config.xcconfig
 
 # VCS / IDE

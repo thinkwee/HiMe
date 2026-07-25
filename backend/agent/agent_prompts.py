@@ -67,7 +67,7 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .prompt_loader import load_prompt
+from .prompt_loader import PROMPTS_DIR, load_prompt
 from .skills.prompt import format_skills_for_prompt
 
 logger = logging.getLogger(__name__)
@@ -183,7 +183,7 @@ class AgentPromptsMixin:
         plan = LAYER_PLAN.get(role, ())
         if not plan:
             return base
-        prompts_dir = Path("prompts")
+        prompts_dir = PROMPTS_DIR
         chunks: list[str] = [base] if base else []
         for filename, label in plan:
             text = _read_prompt_file(prompts_dir / filename, label)
@@ -243,7 +243,7 @@ class AgentPromptsMixin:
         # instruction — lives outside LAYER_PLAN because it must come
         # after the skills block).
         result += _read_prompt_file(
-            Path("prompts/conversation_header.md"), "conversation header"
+            PROMPTS_DIR / "conversation_header.md", "conversation header"
         )
         return result
 
@@ -320,6 +320,6 @@ class AgentPromptsMixin:
         the agent if it does).
         """
         if not hasattr(self, "_soul_text"):
-            self._soul_text = _read_prompt_file(Path("prompts/soul.md"), "soul")
+            self._soul_text = _read_prompt_file(PROMPTS_DIR / "soul.md", "soul")
         return self._soul_text or ""
 

@@ -117,21 +117,29 @@ def get_latest() -> Dict[str, Any]:
 def get_recent(minutes: int = 10) -> List[Dict[str, Any]]:
     """All samples from the last N minutes, oldest-first, pivoted."""
     since = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).timestamp()
-    cur = _con().execute(
-        "SELECT ts, f, v FROM health_samples_eav WHERE ts > ? ORDER BY ts ASC, f ASC",
-        (since,)
-    )
-    return _pivot_rows(cur.fetchall())
+    con = _con()
+    try:
+        rows = con.execute(
+            "SELECT ts, f, v FROM health_samples_eav WHERE ts > ? ORDER BY ts ASC, f ASC",
+            (since,)
+        ).fetchall()
+    finally:
+        con.close()
+    return _pivot_rows(rows)
 
 
 def get_range(start: datetime, end: datetime) -> List[Dict[str, Any]]:
     """All samples between two datetimes, oldest-first, pivoted."""
-    cur = _con().execute(
-        "SELECT ts, f, v FROM health_samples_eav "
-        "WHERE ts BETWEEN ? AND ? ORDER BY ts ASC, f ASC",
-        (start.timestamp(), end.timestamp())
-    )
-    return _pivot_rows(cur.fetchall())
+    con = _con()
+    try:
+        rows = con.execute(
+            "SELECT ts, f, v FROM health_samples_eav "
+            "WHERE ts BETWEEN ? AND ? ORDER BY ts ASC, f ASC",
+            (start.timestamp(), end.timestamp())
+        ).fetchall()
+    finally:
+        con.close()
+    return _pivot_rows(rows)
 
 
 def get_summary(minutes: int = 60) -> Dict[str, Any]:

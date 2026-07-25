@@ -31,23 +31,45 @@ private final class SessionDelegate: NSObject, URLSessionWebSocketDelegate, URLS
         }
     }
 
+    /// `taskIdentifier` is only unique WITHIN one URLSession, and this delegate
+    /// serves both fgSession and bgSession — they share an ID space. Namespace
+    /// the key by session so the two can never collide in `pendingHTTPTasks`.
+    static func taskKey(session: URLSession, task: URLSessionTask) -> String {
+        "\(session.configuration.identifier ?? "fg")#\(task.taskIdentifier)"
+    }
+
     /// WebSocket/HTTP failure
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         let isWS = task is URLSessionWebSocketTask
         let fileURLString = task.taskDescription
-        
+        let key = SessionDelegate.taskKey(session: session, task: task)
+        // A nil transport error does NOT imply HTTP 2xx. Treating 4xx/5xx as
+        // success would pop the batch out of PendingStore and destroy health
+        // data the server never accepted (401 bad token, 403 sync disabled,
+        // 400 malformed body). Route non-2xx through the failure path so the
+        // records are retained and retried with backoff.
+        let statusCode = (task.response as? HTTPURLResponse)?.statusCode
+
         Task { @MainActor in
             if let error = error {
                 if isWS {
                     client?.onWSTaskFailed(task: task, error: error)
                 } else {
-                    client?.onHTTPTaskFailed(task: task, error: error)
+                    client?.onHTTPTaskFailed(key: key, error: error)
                 }
             } else if !isWS {
-                // Background HTTP success
-                client?.onHTTPTaskSucceeded(task: task)
+                if let code = statusCode, (200...299).contains(code) {
+                    client?.onHTTPTaskSucceeded(key: key)
+                } else {
+                    let code = statusCode ?? -1
+                    let httpError = NSError(
+                        domain: "hime.http", code: code,
+                        userInfo: [NSLocalizedDescriptionKey: "HTTP status \(code)"]
+                    )
+                    client?.onHTTPTaskFailed(key: key, error: httpError)
+                }
             }
-            
+
             // Cleanup temp file if this was an upload task
             if let desc = fileURLString, let fileURL = URL(string: desc) {
                 try? FileManager.default.removeItem(at: fileURL)
@@ -122,11 +144,11 @@ final class WebSocketClient: ObservableObject {
     private let queue = DispatchQueue(label: "hime.websocket", qos: .utility)
     private let sessionDelegate = SessionDelegate()
 
-    // Map of HTTP TaskIdentifier -> Number of payloads sent.
+    // Map of "<session-id>#<taskIdentifier>" -> Number of payloads sent.
     // Persisted to UserDefaults so that background URLSession delegate callbacks
     // can correctly pop PendingStore even after app suspension/termination.
     private static let kPendingHTTPKey = "hime.pendingHTTPTasks"
-    private var pendingHTTPTasks: [Int: Int] = [:] {
+    private var pendingHTTPTasks: [String: Int] = [:] {
         didSet { _persistPendingHTTPTasks() }
     }
 
@@ -166,8 +188,7 @@ final class WebSocketClient: ObservableObject {
     }
 
     private func _persistPendingHTTPTasks() {
-        let stringKeyed = Dictionary(uniqueKeysWithValues: pendingHTTPTasks.map { (String($0.key), $0.value) })
-        UserDefaults.standard.set(stringKeyed, forKey: Self.kPendingHTTPKey)
+        UserDefaults.standard.set(pendingHTTPTasks, forKey: Self.kPendingHTTPKey)
     }
 
     // MARK: - Public API
@@ -262,12 +283,28 @@ final class WebSocketClient: ObservableObject {
         // event (observer fire, WS reconnect) happened to call _flush with
         // _isFlushing = false.
         while true {
+            // Callers wrap this in a UIBackgroundTask whose expiration handler
+            // cancels the Task; honour that so we release the background
+            // assertion instead of being watchdog-killed mid-drain.
+            guard !Task.isCancelled else {
+                HealthKitManager.bgLog("📤 FLUSH: cancelled — \(PendingStore.shared.count) records kept")
+                return
+            }
             let storeCount = PendingStore.shared.count
             guard storeCount > 0 else { return }
 
             if appState != "background" {
                 guard isConnected else {
                     HealthKitManager.bgLog("📤 FLUSH: deferred — WS not connected, \(storeCount) queued (will drain on onWSOpened)")
+                    return
+                }
+                // An HTTP upload started while backgrounded can still be in
+                // flight when the user foregrounds the app. Sending the same
+                // top-N over WS would pop it, and the HTTP completion would
+                // then pop a SECOND batch that was never transmitted. Wait for
+                // the outstanding task — its delegate re-kicks _flush.
+                guard pendingHTTPTasks.isEmpty else {
+                    HealthKitManager.bgLog("📤 FLUSH: deferred — \(pendingHTTPTasks.count) HTTP upload(s) still in flight")
                     return
                 }
                 let payloads = PendingStore.shared.peek(limit: chunkSize)
@@ -300,6 +337,11 @@ final class WebSocketClient: ObservableObject {
 
         return await withCheckedContinuation { continuation in
             guard let task = wsTask else {
+                // isConnected can be true while wsTask is nil (e.g. connect()
+                // bailed on an invalid URL). Without clearing it here, _flush's
+                // `while true` loop would spin forever on the MainActor —
+                // nothing is popped and the isConnected guard never trips.
+                isConnected = false
                 continuation.resume()
                 return
             }
@@ -367,9 +409,10 @@ final class WebSocketClient: ObservableObject {
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
         try? data.write(to: tmp)
 
-        let task = (appState == "foreground" ? fgSession : bgSession).uploadTask(with: request, fromFile: tmp)
+        let session = (appState == "foreground" ? fgSession : bgSession)
+        let task = session.uploadTask(with: request, fromFile: tmp)
         task.taskDescription = tmp.absoluteString
-        pendingHTTPTasks[task.taskIdentifier] = payloads.count
+        pendingHTTPTasks[SessionDelegate.taskKey(session: session, task: task)] = payloads.count
         task.resume()
         HealthKitManager.bgLog("HTTP: Resume \(appState) upload (\(payloads.count)) — Backlog: \(PendingStore.shared.count)")
     }
@@ -400,11 +443,11 @@ final class WebSocketClient: ObservableObject {
         await _flush()
     }
 
-    func onHTTPTaskSucceeded(task: URLSessionTask) {
+    func onHTTPTaskSucceeded(key: String) {
         queue.async { [weak self] in
             guard let self else { return }
             Task { @MainActor in
-                guard let count = self.pendingHTTPTasks.removeValue(forKey: task.taskIdentifier) else { return }
+                guard let count = self.pendingHTTPTasks.removeValue(forKey: key) else { return }
                 PendingStore.shared.pop(count: count)
                 HealthKitManager.shared.markOldestAsSynced(count: count)
                 HealthKitManager.bgLog("HTTP: Success (\(count) records)")
@@ -418,13 +461,13 @@ final class WebSocketClient: ObservableObject {
         }
     }
 
-    func onHTTPTaskFailed(task: URLSessionTask, error: Error) {
+    func onHTTPTaskFailed(key: String, error: Error) {
         queue.async { [weak self] in
             guard let self else { return }
             Task { @MainActor in
                 // Remove from pending tracking but do NOT pop from PendingStore.
                 // The data remains in PendingStore so the next flush cycle retries it.
-                if let count = self.pendingHTTPTasks.removeValue(forKey: task.taskIdentifier) {
+                if let count = self.pendingHTTPTasks.removeValue(forKey: key) {
                     HealthKitManager.bgLog("HTTP: Task failed (\(count) records kept for retry) — \(error.localizedDescription)")
                 } else {
                     HealthKitManager.bgLog("HTTP: Task failed — \(error.localizedDescription)")
@@ -453,20 +496,24 @@ final class WebSocketClient: ObservableObject {
         if !path.hasSuffix("/ws") {
             components.path = String(path) + "/ws"
         }
-        // WebSocket clients can't set HTTP headers, so pass the auth
-        // token as a query parameter for BearerAuthMiddleware.
+        guard let url = components.url else { return }
+        // Send the auth token as an Authorization header rather than a `?token=`
+        // query parameter — query strings land in reverse-proxy / tunnel access
+        // logs. `webSocketTask(with: URLRequest)` carries custom headers through
+        // the HTTP upgrade, and the exporter's _check_auth accepts the header form.
+        var wsRequest = URLRequest(url: url)
         let token = ServerConfig.authToken
         if !token.isEmpty {
-            var items = components.queryItems ?? []
-            items.append(URLQueryItem(name: "token", value: token))
-            components.queryItems = items
+            wsRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        guard let url = components.url else { return }
-        
+
         shouldReconnect = true
-        reconnectDelay = 1.0
-        
-        let ws = fgSession.webSocketTask(with: url)
+        // Do NOT reset reconnectDelay here: _scheduleReconnect doubles it and
+        // then calls back into _openWS, so resetting would pin the backoff at
+        // 1s and reconnect once per second forever while the server is down.
+        // onWSOpened resets it on a genuine connection.
+
+        let ws = fgSession.webSocketTask(with: wsRequest)
         wsTask = ws
         ws.resume()
         
@@ -496,25 +543,47 @@ final class WebSocketClient: ObservableObject {
 
     // MARK: - Heartbeat (dead-connection detection)
 
+    /// Tear down `ws` if it is still the live socket and schedule a reconnect.
+    /// Shared by the ping-failure and pong-timeout paths.
+    private func _failHeartbeat(_ ws: URLSessionWebSocketTask, reason: String) {
+        guard self.wsTask === ws else { return }
+        HealthKitManager.bgLog("WS: \(reason)")
+        _stopHeartbeat()
+        wsTask?.cancel(with: .abnormalClosure, reason: nil)
+        wsTask = nil
+        isConnected = false
+        if shouldReconnect { _scheduleReconnect() }
+    }
+
     private func _startHeartbeat(_ ws: URLSessionWebSocketTask) {
         _stopHeartbeat()
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + heartbeatInterval, repeating: heartbeatInterval)
+        // Capture these up front: they're MainActor-isolated state and the
+        // event handler runs on `queue`.
+        let workQueue = queue
+        let pongTimeout = heartbeatTimeout
         timer.setEventHandler { [weak self, weak ws] in
             guard let self, let ws else { return }
+            // Half-open detection: sendPing's completion may never fire when
+            // the link drops silently (e.g. NAT timeout), which would leave
+            // isConnected == true forever. Arm a timeout and disarm it when
+            // the pong (or an error) comes back.
+            let timeoutItem = DispatchWorkItem { [weak self, weak ws] in
+                guard let self, let ws else { return }
+                Task { @MainActor in
+                    self._failHeartbeat(ws, reason: "Heartbeat pong timeout (\(Int(pongTimeout))s)")
+                }
+            }
+            workQueue.asyncAfter(deadline: .now() + pongTimeout, execute: timeoutItem)
             ws.sendPing { [weak self] error in
+                timeoutItem.cancel()
                 guard let self else { return }
                 if let error = error {
                     // Ping failed — connection is dead
-                    self.queue.async {
+                    workQueue.async {
                         Task { @MainActor in
-                            HealthKitManager.bgLog("WS: Heartbeat ping failed — \(error.localizedDescription)")
-                            guard self.wsTask === ws else { return }
-                            self._stopHeartbeat()
-                            self.wsTask?.cancel(with: .abnormalClosure, reason: nil)
-                            self.wsTask = nil
-                            self.isConnected = false
-                            if self.shouldReconnect { self._scheduleReconnect() }
+                            self._failHeartbeat(ws, reason: "Heartbeat ping failed — \(error.localizedDescription)")
                         }
                     }
                 }

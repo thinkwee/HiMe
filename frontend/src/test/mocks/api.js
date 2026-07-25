@@ -217,4 +217,20 @@ export const api = {
   // Personalised Pages
   listPersonalisedPages: vi.fn().mockResolvedValue({ success: true, apps: [] }),
   deletePersonalisedPage: vi.fn().mockResolvedValue({ success: true }),
+  // The page viewer fetches the markup itself (bearer header) and renders it
+  // through srcdoc — see PersonalisedPages.jsx.
+  getPersonalisedPageHtml: vi.fn().mockResolvedValue({ success: true, html: '<html></html>' }),
 }
+
+// ---------------------------------------------------------------------------
+// Runtime auth-token helpers — named exports of lib/api.js, used by
+// <AuthTokenPrompt>. Stubbed so mounting <App> in tests never touches real
+// storage or triggers a page reload.
+// ---------------------------------------------------------------------------
+
+export const getAuthToken = vi.fn(() => '')
+export const setAuthToken = vi.fn()
+export const clearAuthToken = vi.fn()
+export const reloadForAuth = vi.fn()
+/** No-op subscription that returns an unsubscribe function. */
+export const onAuthRequired = vi.fn(() => () => {})

@@ -24,7 +24,8 @@ export default function Skills() {
   const [skills, setSkills] = useState([])
   const [selectedName, setSelectedName] = useState(null)
   const selectedNameRef = useRef(selectedName)
-  selectedNameRef.current = selectedName
+  // Tail of the in-flight enable/disable PUT chain (see persistDisabledSet)
+  const persistQueueRef = useRef(Promise.resolve())
 
   // Editor state
   const [editorName, setEditorName] = useState('')
@@ -40,9 +41,10 @@ export default function Skills() {
   const [saving, setSaving] = useState(false)
   const [status, setStatus] = useState(null) // {type, message}
 
+  // Mirror of selectedName readable from async callbacks without re-creating them
   useEffect(() => {
-    loadSkills()
-  }, [])
+    selectedNameRef.current = selectedName
+  }, [selectedName])
 
   const loadSkills = async () => {
     setLoading(true)
@@ -77,6 +79,18 @@ export default function Skills() {
       setStatus({ type: 'error', message: res.error || t('skills.failed_load_named', { name }) })
     }
   }
+
+  // Load once on mount. Deliberately not memoized into the dependency array:
+  // loadSkills closes over `t` and re-loads the selected skill, so a language
+  // switch would re-run it and overwrite whatever is in the editor.
+  //
+  // set-state-in-effect is a false positive here — the only synchronous update is
+  // setLoading(true), and `loading` already starts as true, so React bails out and
+  // nothing cascades. Everything else happens after `await api.listSkills()`.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadSkills()
+  }, [])
 
   const handleNew = () => {
     setIsNew(true)
@@ -154,19 +168,25 @@ export default function Skills() {
   // Enable/disable handling
   // ------------------------------------------------------------------
 
-  const persistDisabledSet = async (nextSkills) => {
+  const persistDisabledSet = (nextSkills) => {
     const disabled = nextSkills.filter((s) => !s.enabled).map((s) => s.name)
-    try {
-      const res = await api.setSkillState(disabled)
-      if (!res.success) {
-        setStatus({ type: 'error', message: res.error || t('skills.failed_update_visibility') })
-        // Reload to reconcile
+    // Serialise the full-list PUTs: fired in parallel they can land out of
+    // order and leave the backend on a stale set.
+    const run = persistQueueRef.current.then(async () => {
+      try {
+        const res = await api.setSkillState(disabled)
+        if (!res.success) {
+          setStatus({ type: 'error', message: res.error || t('skills.failed_update_visibility') })
+          // Reload to reconcile
+          await loadSkills()
+        }
+      } catch (err) {
+        setStatus({ type: 'error', message: err.message })
         await loadSkills()
       }
-    } catch (err) {
-      setStatus({ type: 'error', message: err.message })
-      await loadSkills()
-    }
+    })
+    persistQueueRef.current = run.catch(() => {})
+    return run
   }
 
   const toggleSkill = async (name) => {
@@ -494,7 +514,7 @@ export default function Skills() {
                   className="w-full flex-1 p-8 bg-white rounded-2xl border-none focus:ring-0 font-mono text-sm leading-relaxed text-gray-800 resize-none shadow-sm placeholder-gray-400"
                   placeholder="# Playbook body&#10;&#10;1. Use the sql tool to query ...&#10;2. Use the code tool to compute ...&#10;3. Decision rule: ..."
                   onKeyDown={(e) => {
-                    if (e.ctrlKey && e.key === 's') {
+                    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
                       e.preventDefault()
                       handleSave()
                     }
