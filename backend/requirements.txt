@@ -17,7 +17,7 @@ numpy==1.26.3
 # Scientific analysis (available in code tool)
 scipy>=1.11,<2
 statsmodels>=0.14,<0.15
-scikit-learn>=1.3,<2
+scikit-learn>=1.9.0,<2
 matplotlib>=3.7,<4
 
 # Persistent IPython shell powering the code tool
