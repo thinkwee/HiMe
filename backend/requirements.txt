@@ -1,7 +1,9 @@
 # FastAPI and web framework
 fastapi==0.136.1
 uvicorn[standard]==0.27.0
-websockets>=17.0.1,<18
+# Capped below 17: websockets 17 requires Python >=3.11, and CI still builds
+# against 3.10. Raise both together when 3.10 support is dropped.
+websockets>=16.1.1,<17
 python-multipart==0.0.32
 
 # Configuration
