@@ -20,7 +20,7 @@ numpy==1.26.3
 scipy>=1.11,<2
 statsmodels>=0.14,<0.15
 scikit-learn>=1.3,<2
-matplotlib>=3.7,<4
+matplotlib>=3.11.1,<4
 
 # Persistent IPython shell powering the code tool
 ipython>=8.0,<9
