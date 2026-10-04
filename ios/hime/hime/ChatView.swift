@@ -34,6 +34,11 @@ struct ChatView: View {
     /// Whether the viewport is at (or near) the newest message — gates whether
     /// incoming messages pull the list down.
     @State private var nearBottom = true
+    /// True while the user's finger is on the list or it is coasting from a
+    /// flick. Programmatic scrolls must never run then: `scrollTo` cancels the
+    /// in-flight drag/deceleration, which is exactly the "snaps back / gets
+    /// stuck when scrolling up" symptom.
+    @State private var userScrolling = false
 
     private static let bottomID = "chat-bottom"
 
@@ -95,17 +100,26 @@ struct ChatView: View {
                                   content: geo.contentSize.height,
                                   container: geo.containerSize.height)
                 } action: { old, new in
-                    // Content grew (image finished loading, tokens streamed) or the
-                    // viewport shrank (keyboard) while the user was at the bottom:
-                    // keep the newest message in view.
+                    // Content grew (image finished loading, tokens streamed, or a tall
+                    // row above was realized and replaced its height estimate) or the
+                    // viewport shrank (keyboard). Keep the newest message in view only
+                    // if the reader was pinned there AND is not touching the list;
+                    // otherwise this would yank the list back mid-drag whenever lazy
+                    // layout resolves a long row while scrolling up.
                     let resized = new.content > old.content + 0.5
                         || abs(new.container - old.container) > 0.5
-                    if resized && old.isNearBottom {
+                    if resized && nearBottom && !userScrolling {
                         scrollToBottom(proxy, animated: false)
-                        if !nearBottom { nearBottom = true }
                     } else if nearBottom != new.isNearBottom {
+                        // User-driven offset change, or content changed under a
+                        // reader who is browsing history: just re-measure.
                         nearBottom = new.isNearBottom
                     }
+                }
+                .onScrollPhaseChange { _, phase in
+                    let touching = phase == .tracking || phase == .interacting
+                        || phase == .decelerating
+                    if userScrolling != touching { userScrolling = touching }
                 }
                 // The composer lives in a bottom safe-area inset so the scroll
                 // content, the keyboard and the input bar are laid out together.
@@ -131,12 +145,12 @@ struct ChatView: View {
                     // cards unless the user scrolled up to read history.
                     var isUserRow = false
                     if case .message(let m) = last.item, m.role == .user { isUserRow = true }
-                    if isUserRow || nearBottom {
+                    if isUserRow || (nearBottom && !userScrolling) {
                         scrollToBottom(proxy, animated: vm.didLoadHistory)
                     }
                 }
                 .onChange(of: vm.isBusy) { _, _ in
-                    if nearBottom { scrollToBottom(proxy, animated: true) }
+                    if nearBottom && !userScrolling { scrollToBottom(proxy, animated: true) }
                 }
                 .onChange(of: inputFocused) { _, focused in
                     guard focused else { return }
@@ -242,7 +256,8 @@ struct ChatView: View {
         Task {
             scrollToBottom(proxy, animated: false)
             try? await Task.sleep(nanoseconds: 250_000_000)
-            scrollToBottom(proxy, animated: false)
+            // The user may have started browsing in the meantime.
+            if !userScrolling { scrollToBottom(proxy, animated: false) }
         }
     }
 }
@@ -254,7 +269,7 @@ private struct ScrollMetrics: Equatable {
     var content: CGFloat
     var container: CGFloat
 
-    var isNearBottom: Bool { content - visibleMaxY < 100 }
+    var isNearBottom: Bool { content - visibleMaxY < 60 }
 }
 
 // MARK: - Composer
