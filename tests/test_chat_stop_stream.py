@@ -293,6 +293,8 @@ def _stop_agent():
     agent._chat_task = None
     agent._chat_stop_requested = False
     agent._chat_run_id = None
+    agent._chat_thread_id = None
+    agent.user_id = "LiveUser"
     agent._event_queue = asyncio.Queue()
     agent.stop_chat = AutonomousHealthAgent.stop_chat.__get__(agent)
     agent._run_chat_envelope = AutonomousHealthAgent._run_chat_envelope.__get__(agent)

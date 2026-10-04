@@ -182,6 +182,24 @@ async function _post(path, body) {
   }
 }
 
+async function _patch(path, body) {
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ..._authHeaders() },
+      body: JSON.stringify(body),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      _noteAuthStatus(res.status)
+      return { success: false, error: data.detail || data.error || `HTTP ${res.status}` }
+    }
+    return data
+  } catch (e) {
+    return { success: false, error: e?.message || 'Network error' }
+  }
+}
+
 async function _delete(path) {
   try {
     const res = await fetch(`${API_BASE}${path}`, { method: 'DELETE', headers: _authHeaders() })
@@ -308,8 +326,21 @@ export const api = {
     _post('/agent/stop', {}),
 
   /** Cancel the in-flight chat reply (not the agent). → { success, stopped } */
-  stopChat: () =>
-    _post('/agent/chat/stop', {}),
+  stopChat: (threadId = null) =>
+    _post('/agent/chat/stop', threadId ? { thread_id: threadId } : {}),
+
+  /** In-app chat threads. → { success, threads: [{ id, title, ..., last_message }] } */
+  getChatThreads: (includeArchived = false) =>
+    _get(`/agent/chat/threads?include_archived=${includeArchived ? 'true' : 'false'}`),
+
+  createChatThread: (title = '') =>
+    _post('/agent/chat/threads', title ? { title } : {}),
+
+  updateChatThread: (threadId, patch) =>
+    _patch(`/agent/chat/threads/${encodeURIComponent(threadId)}`, patch),
+
+  deleteChatThread: (threadId) =>
+    _delete(`/agent/chat/threads/${encodeURIComponent(threadId)}`),
 
   /** Returns full status for all agents or a specific one */
   getAgentLastConfig: () =>

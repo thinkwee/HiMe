@@ -2,7 +2,7 @@
  * Run grouping for the Agent Monitor timeline (pure functions).
  */
 import {
-  buildTimeline, currentStep, findLiveRun, formatDuration, mergeChrono, resultText, stepObject,
+  buildTimeline, currentStep, filterByThread, findLiveRun, formatDuration, mergeChrono, resultText, stepObject,
   toTimelineRecord,
 } from '../pages/runTimeline'
 
@@ -244,5 +244,32 @@ describe('helpers', () => {
     expect(formatDuration(45_000)).toBe('45s')
     expect(formatDuration(125_000)).toBe('2m 5s')
     expect(formatDuration(null)).toBeNull()
+  })
+})
+
+describe('chat threads', () => {
+  const T1 = 'a'.repeat(32)
+  const items = () => buildTimeline(recs(
+    { type: 'user_message', run_id: 'A', content: 'main q' },
+    { type: 'chat_reply', run_id: 'A', content: 'main a', thread_id: 'main' },
+    { type: 'user_message', run_id: 'B', content: 'thread q', thread_id: T1 },
+    { type: 'chat_reply', run_id: 'B', content: 'thread a', thread_id: T1 },
+    { type: 'cycle_start', cycle: 1, goal: 'daily' },
+    { type: 'cycle_end', cycle: 1 },
+  ), { now: NOW, idle: true })
+
+  it('records the thread id on chat runs', () => {
+    const chat = runs(items()).filter((r) => r.runType === 'chat')
+    expect(chat.map((r) => r.threadId)).toEqual(['main', T1])
+  })
+
+  it('filters by thread; background runs belong to main', () => {
+    const all = items()
+    expect(filterByThread(all, 'all')).toBe(all)
+    const t1 = filterByThread(all, T1)
+    expect(runs(t1).map((r) => r.runType)).toEqual(['chat'])
+    const main = runs(filterByThread(all, 'main'))
+    expect(main.some((r) => r.runType !== 'chat')).toBe(true)
+    expect(main.filter((r) => r.runType === 'chat')).toHaveLength(1)
   })
 })

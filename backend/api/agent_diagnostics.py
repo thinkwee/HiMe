@@ -56,17 +56,28 @@ async def get_message_evidence(message_hash: str):
 # ---------------------------------------------------------------------------
 
 @diagnostics_router.get("/chat-history")
-async def get_chat_history(limit: int = Query(200, ge=1, le=2000)):
+async def get_chat_history(
+    limit: int = Query(200, ge=1, le=2000),
+    thread_id: str = Query("main"),
+):
     """Return the in-app chat transcript, oldest-first.
 
     Lets the iOS app reload conversation scrollback after a restart or on a
     new device. Scoped to the ``ios:LiveUser`` history key, so it returns
-    only the in-app chat (not legacy IM transcripts).
+    only the in-app chat (not legacy IM transcripts). ``thread_id`` selects a
+    conversation (default ``main`` = ``ios:LiveUser``).
     """
+    from ..ios_gateway.threads import history_key_for
+    from .agent_threads import check_thread_id
+    tid = check_thread_id(thread_id)
     memory = await aget_or_create_memory(_LIVE_USER)
     if memory is None:
         return {"success": True, "messages": []}
-    messages = await asyncio.to_thread(memory.get_chat_history, f"ios:{_LIVE_USER}", limit)
+    if tid != "main" and await asyncio.to_thread(memory.get_chat_thread, tid) is None:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    messages = await asyncio.to_thread(
+        memory.get_chat_history, history_key_for(_LIVE_USER, tid), limit,
+    )
     return {"success": True, "messages": messages}
 
 

@@ -56,6 +56,8 @@ _EPHEMERAL_EVENT_TYPES = frozenset({
     "chat_reply_delta",  # streamed reply_user text snapshots (chat)
     "token_usage",       # per-turn token stats (cumulative is in status)
     "startup_progress",  # init progress steps (transient UI feedback)
+    "chat_thread_updated",  # thread metadata snapshots (state lives in the DB)
+    "chat_thread_deleted",
 })
 
 
@@ -966,6 +968,21 @@ async def post_chat_message(request: Request, body: ChatMessageRequest):
     if not text and not attachments:
         raise HTTPException(status_code=400, detail="Empty message")
 
+    from ..ios_gateway.threads import MAIN_THREAD_ID, chat_id_for
+    from .agent_threads import check_thread_id, emit_thread_event, get_thread_memory
+    thread_id = check_thread_id(body.thread_id)
+    if thread_id != MAIN_THREAD_ID:
+        memory = await get_thread_memory()
+        thread = await asyncio.to_thread(memory.get_chat_thread, thread_id)
+        if thread is None:
+            raise HTTPException(status_code=404, detail="Thread not found")
+        if thread.get("archived"):
+            # Writing into an archived thread revives it.
+            thread = await asyncio.to_thread(
+                lambda: memory.update_chat_thread(thread_id, archived=False, touch=True)
+            )
+            await emit_thread_event({"type": "chat_thread_updated", "thread": thread})
+
     info = active_agents.get(_LIVE_USER)
     if info is None or info.get("_starting") or not info.get("agent"):
         # Agent not ready — kick a startup and tell the client to retry once
@@ -980,7 +997,7 @@ async def post_chat_message(request: Request, body: ChatMessageRequest):
         channel=MessageChannel.IOS,
         sender_id=_LIVE_USER,
         content=text,
-        chat_id=_LIVE_USER,
+        chat_id=chat_id_for(_LIVE_USER, thread_id),
         attachments=attachments,
     )
     await info["agent"].inbox.push(envelope)
@@ -1001,7 +1018,9 @@ async def post_chat_stop(request: Request, body: ChatStopRequest | None = None):
     agent = info.get("agent") if info else None
     if agent is None:
         return {"success": True, "stopped": False}
-    return {"success": True, "stopped": bool(agent.stop_chat())}
+    from .agent_threads import check_thread_id
+    thread_id = check_thread_id(body.thread_id) if body and body.thread_id else None
+    return {"success": True, "stopped": bool(agent.stop_chat(thread_id))}
 
 
 # ---------------------------------------------------------------------------

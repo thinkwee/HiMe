@@ -21,6 +21,7 @@ from typing import Any
 from ..messaging.base import BaseGateway, MessageChannel
 from .connections import ios_connections
 from .image_store import image_store
+from .threads import thread_id_from_chat_id
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +157,15 @@ class IOSGateway(BaseGateway):
             if self._last_apns_ts == now:
                 self._last_apns_ts = last
 
+    @staticmethod
+    def _push_data(target: str, thread_id: str, msg_hash: str | None) -> dict:
+        """APNs payload data; ``thread_id`` only for non-main threads (main is
+        the default deep-link)."""
+        data: dict = {"chat_id": target, "message_hash": msg_hash}
+        if thread_id != "main":
+            data["thread_id"] = thread_id
+        return data
+
     # ------------------------------------------------------------------
     # Outbound messaging
     # ------------------------------------------------------------------
@@ -169,11 +179,13 @@ class IOSGateway(BaseGateway):
         report_id: int | None = None,
     ) -> bool:
         target = chat_id or self.default_chat_id
+        thread_id = thread_id_from_chat_id(target, self.user_id)
         msg_hash = extract_message_hash(reply_markup)
         delivered = await self._emit_to_stream({
             "type": "chat_reply",
             "content": text,
             "chat_id": target,
+            "thread_id": thread_id,
             "message_hash": msg_hash,
             "reply_markup": reply_markup,
             # When this message is a proactive report push, carry the report's
@@ -185,7 +197,7 @@ class IOSGateway(BaseGateway):
         })
         await self._maybe_push_apns(
             body=(text or "")[:120],
-            data={"chat_id": target, "message_hash": msg_hash},
+            data=self._push_data(target, thread_id, msg_hash),
             # A proactive report push carries its report id; plain replies don't.
             time_sensitive=report_id is not None,
         )
@@ -202,6 +214,7 @@ class IOSGateway(BaseGateway):
         reply_markup: dict[str, Any] | None = None,
     ) -> bool:
         target = chat_id or self.default_chat_id
+        thread_id = thread_id_from_chat_id(target, self.user_id)
         msg_hash = extract_message_hash(reply_markup)
         # Register the server-local file behind an opaque, per-user-authed id
         # so the client fetches it via GET /api/agent/chat-image/<id> with its
@@ -223,12 +236,13 @@ class IOSGateway(BaseGateway):
             "url": f"/api/agent/chat-image/{image_id}" if image_id else None,
             "caption": caption,
             "chat_id": target,
+            "thread_id": thread_id,
             "message_hash": msg_hash,
             "reply_markup": reply_markup,
         })
         await self._maybe_push_apns(
             body=(caption or "📷 Image")[:120],
-            data={"chat_id": target, "message_hash": msg_hash},
+            data=self._push_data(target, thread_id, msg_hash),
         )
         return delivered
 

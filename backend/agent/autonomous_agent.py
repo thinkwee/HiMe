@@ -164,6 +164,8 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
         self._chat_task: asyncio.Task | None = None
         self._chat_stop_requested: bool = False
         self._chat_run_id: str | None = None
+        # Thread of the in-flight in-app chat run (None for IM / idle).
+        self._chat_thread_id: str | None = None
 
         # Set up tool progress callbacks (push events to WebSocket stream)
         self._setup_tool_progress()
@@ -353,14 +355,27 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
     async def _emit(self, event: dict) -> None:
         # Stamp every chat event emitted during a handled message with its run
         # id (additive field; also covers gateway-emitted chat_reply/chat_image).
+        etype = event.get("type", "")
+        is_chat = isinstance(etype, str) and (
+            etype.startswith("chat_") or etype == "user_message"
+        ) and etype not in ("chat_thread_updated", "chat_thread_deleted")
         rid = self._chat_run_id
-        if rid and "run_id" not in event:
-            etype = event.get("type", "")
-            if isinstance(etype, str) and (etype.startswith("chat_") or etype == "user_message"):
-                event["run_id"] = rid
+        if rid and is_chat and "run_id" not in event:
+            event["run_id"] = rid
+        # In-app threads: every chat event names its thread. An explicit
+        # chat_id (``<uid>`` / ``<uid>:<tid>``) wins, e.g. proactive pushes
+        # are main even if a thread's run is in flight.
+        if is_chat and "thread_id" not in event:
+            from ..ios_gateway.threads import thread_id_from_chat_id
+            cid = event.get("chat_id")
+            uid = self.user_id
+            if isinstance(cid, str) and (cid == uid or cid.startswith(f"{uid}:")):
+                event["thread_id"] = thread_id_from_chat_id(cid, uid)
+            elif self._chat_thread_id:
+                event["thread_id"] = self._chat_thread_id
         await self._event_queue.put(event)
 
-    def stop_chat(self) -> bool:
+    def stop_chat(self, thread_id: str | None = None) -> bool:
         """Cancel the in-flight chat run (not the agent, not queued analysis).
 
         Returns True if a run was active and cancellation was requested. The
@@ -370,6 +385,8 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
         task = self._chat_task
         if task is None or task.done():
             return False
+        if thread_id is not None and (self._chat_thread_id or "main") != thread_id:
+            return False  # the active run belongs to another thread
         self._chat_stop_requested = True
         task.cancel()
         return True
@@ -383,7 +400,9 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
         only the child, which simply comes back ``cancelled()``. No reliance on
         ``Task.cancelling()`` so it works on Python 3.10.
         """
+        from .chat_threads import envelope_thread_id
         self._chat_stop_requested = False
+        self._chat_thread_id = envelope_thread_id(env, self.user_id)
         task = asyncio.create_task(self._handle_chat_message(env))
         self._chat_task = task
         try:
@@ -394,6 +413,7 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
         finally:
             self._chat_task = None
             self._chat_run_id = None
+            self._chat_thread_id = None
         if task.cancelled():
             logger.info("Chat run stopped by user")
             return

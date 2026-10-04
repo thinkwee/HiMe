@@ -23,6 +23,22 @@ describe('api', () => {
 
   const urlOf = (i = 0) => fetchMock.mock.calls[i][0]
 
+  it('chat thread helpers hit the thread endpoints', async () => {
+    await api.getChatThreads()
+    expect(urlOf(0)).toBe('/api/agent/chat/threads?include_archived=false')
+    await api.createChatThread('Sleep')
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ title: 'Sleep' })
+    await api.updateChatThread('abc/1', { archived: true })
+    expect(urlOf(2)).toBe('/api/agent/chat/threads/abc%2F1')
+    expect(fetchMock.mock.calls[2][1].method).toBe('PATCH')
+    await api.deleteChatThread('abc')
+    expect(fetchMock.mock.calls[3][1].method).toBe('DELETE')
+    await api.stopChat('t1')
+    expect(JSON.parse(fetchMock.mock.calls[4][1].body)).toEqual({ thread_id: 't1' })
+    await api.stopChat()
+    expect(JSON.parse(fetchMock.mock.calls[5][1].body)).toEqual({})
+  })
+
   it('percent-encodes path segments and query values', async () => {
     await api.updateScheduledTask('1/../2', { status: 'paused' })
     expect(urlOf(0)).toBe('/api/agent/scheduled-tasks/LiveUser/1%2F..%2F2')

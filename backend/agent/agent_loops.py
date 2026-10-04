@@ -2024,6 +2024,11 @@ class AgentLoopsMixin:
         # Platform-prefixed history key so the same numeric chat_id on
         # different gateways (Telegram 12345 vs Feishu 12345) can't collide.
         history_key = f"{channel}:{chat_id}"
+        # In-app threads ride on chat_id (``<uid>`` = main, ``<uid>:<tid>``);
+        # None for IM channels, which stay single-threaded.
+        from .chat_threads import envelope_thread_id
+        thread_id = envelope_thread_id(envelope, getattr(self, "user_id", "LiveUser"))
+        self._chat_thread_id = thread_id
         # One id per handled message; ``_emit`` stamps it on every chat_* event.
         self._chat_run_id = uuid.uuid4().hex
 
@@ -2663,6 +2668,12 @@ class AgentLoopsMixin:
             self._set_state("chat_complete", loop="chat")
             logger.info("Chat with %s stopped by user (history=%d msgs)", sender, len(hist))
             raise asyncio.CancelledError()
+        if reply_text and thread_id and thread_id != "main":
+            from .chat_threads import auto_title_thread
+            spawn_background(
+                auto_title_thread(self, thread_id, envelope.content or "", reply_text),
+                label="thread auto-title",
+            )
         if reply_text and not getattr(self, "_plan_running", False):
             # Claim the guard before awaiting, so the HTTP-triggered redesign
             # can't slip in across the suspension point and double-fire.
