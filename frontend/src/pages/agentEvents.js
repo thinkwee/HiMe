@@ -266,10 +266,15 @@ export function eventKey(type, d) {
   return `${type}|${data.timestamp || ''}|${_hash(body)}`
 }
 
-/** Epoch ms of an activity-log / WS event, or null when it carries no usable time. */
+/**
+ * Epoch ms of an activity-log / WS event, or null when it carries no usable time.
+ * An activity-log row's `created_at` is monotone with its row id, so it is
+ * preferred: the payload `timestamp` is stamped at emit time with a different
+ * clock/precision and ordering by it shuffles events within the same second.
+ */
 export function eventTimeMs(raw, parse) {
   const d = unwrapEvent(raw)
-  const stamp = d?.timestamp || raw?.created_at
+  const stamp = raw?.created_at || d?.timestamp
   if (!stamp) return null
   const ms = parse(stamp).getTime()
   return Number.isNaN(ms) ? null : ms

@@ -22,7 +22,7 @@ const TOOL_EVENT_RE = /^(chat|analysis|quick|plan)_tool_(call|result)$/
 /** Events that belong in the timeline at all (everything else is raw-log only). */
 const TIMELINE_TYPES = new Set([
   'user_message', 'chat_reply', 'chat_image', 'chat_stopped', 'chat_cleared',
-  'thought', 'token_usage',
+  'thought', 'draft_held', 'chat_verification', 'token_usage',
   'cycle_start', 'cycle_end', 'report_pushed',
   'quick_analysis_start', 'quick_analysis_complete',
   'agent_started', 'agent_stopped', 'agent_error', 'startup_error', 'agent_waiting',
@@ -35,6 +35,12 @@ export const HIDDEN_TOOLS = new Set(['reply_user', 'finish_chat'])
 const GAP_CHAT_MS = 10 * 60 * 1000
 const GAP_BG_MS = 5 * 60 * 1000
 const STALE_MS = 15 * 60 * 1000
+/** Stragglers (late tool result, the report text) that still belong to a background run that just ended. */
+const BG_TAIL_MS = 20 * 1000
+/** A held-back draft and the event describing why (verification / stream reset) are the same draft within this window. */
+const DRAFT_MERGE_MS = 20 * 1000
+/** Verification verdicts that mean the reply was NOT delivered as written. */
+const HELD_VERDICTS = new Set(['unverified', 'fabricated', 'rejected', 'blocked'])
 /** status_update arrives every ~3s, so "idle" is only trusted after this grace. */
 const IDLE_GRACE_MS = 8000
 
@@ -171,12 +177,19 @@ export function buildTimeline(records, { now = Date.now(), idle = false } = {}) 
   let openBg = null
   let lastChat = null
   let lastBg = null
-  let seq = 0
+  // Ids must not depend on what precedes a run (a history fetch prepends older
+  // records), or every run would remount and lose its expanded/collapsed state.
+  const idCounts = new Map()
+  const uniqueId = (base) => {
+    const n = idCounts.get(base) || 0
+    idCounts.set(base, n + 1)
+    return n ? `${base}#${n}` : base
+  }
 
   const newRun = (init) => {
     const run = {
       kind: 'run',
-      id: `run:${init.runId || init.runType}:${init.ts}:${seq++}`,
+      id: uniqueId(init.runId ? `run:chat:${init.runId}` : init.cycle != null && init.runType !== 'chat' ? `run:${init.runType}:c${init.cycle}` : `run:${init.runType}:${init.ts}`),
       runType: init.runType,
       runId: init.runId || null,
       threadId: null,
@@ -190,6 +203,8 @@ export function buildTimeline(records, { now = Date.now(), idle = false } = {}) 
       goal: init.goal || '',
       cycle: init.cycle ?? null,
       report: null,
+      reply: null,
+      settled: false,
       quickState: null,
       tokens: null,
       warnings: [],
@@ -205,6 +220,12 @@ export function buildTimeline(records, { now = Date.now(), idle = false } = {}) 
   const touch = (run, ts) => {
     run.n += 1
     if (ts > run.lastTs) run.lastTs = ts
+    // More activity after a delivered reply (acknowledgement, then the real answer).
+    if (run.settled && !run.closed) {
+      run.settled = false
+      run.status = 'running'
+      run.endTs = null
+    }
   }
 
   const close = (run, status, ts) => {
@@ -238,8 +259,16 @@ export function buildTimeline(records, { now = Date.now(), idle = false } = {}) 
     return implicitChat
   }
 
+  // The background run a straggler event belongs to: the open one, or one that ended moments ago.
+  const recentBg = (ts) => {
+    if (openBg && !openBg.closed && ts - openBg.lastTs <= GAP_BG_MS) return openBg
+    if (lastBg && lastBg.closed && lastBg.runType !== 'quick' && ts - (lastBg.endTs ?? lastBg.lastTs) <= BG_TAIL_MS) return lastBg
+    return null
+  }
+
   const bgRunFor = (rec, create = true) => {
-    if (openBg && !openBg.closed && rec.ts - openBg.lastTs <= GAP_BG_MS) return openBg
+    const recent = recentBg(rec.ts)
+    if (recent) return recent
     if (!create) return null
     openBg = newRun({
       runType: backgroundRunType(rec.type, rec.d), ts: rec.ts, goal: rec.d.goal, cycle: rec.d.cycle,
@@ -282,8 +311,24 @@ export function buildTimeline(records, { now = Date.now(), idle = false } = {}) 
     return null
   }
 
+  /** Record (or enrich) a reply the fact check / validator held back. */
+  const addDraft = (run, { text, reason, detail, ts }) => {
+    const seg = stepsSegment(run)
+    for (let i = seg.entries.length - 1; i >= 0; i--) {
+      const e = seg.entries[i]
+      if (e.kind !== 'draft') continue
+      if (ts - e.ts > DRAFT_MERGE_MS) break
+      if (text && text.length > e.text.length) e.text = text
+      if (reason && (!e.reason || e.reason === 'verification')) e.reason = reason
+      if (detail && !e.detail) e.detail = detail
+      return
+    }
+    if (!text && !reason) return
+    seg.entries.push({ kind: 'draft', id: `${run.id}:d${seg.entries.length}`, text: text || '', reason: reason || '', detail: detail || '', ts })
+  }
+
   const addNotice = (rec, tone) => {
-    items.push({ kind: 'notice', id: `notice:${rec.type}:${rec.ts}:${seq++}`, ts: rec.ts, tone, type: rec.type, text: rec.note || rec.type })
+    items.push({ kind: 'notice', id: uniqueId(`notice:${rec.type}:${rec.ts}`), ts: rec.ts, tone, type: rec.type, text: rec.note || rec.type })
   }
 
   for (const rec of records) {
@@ -351,11 +396,40 @@ export function buildTimeline(records, { now = Date.now(), idle = false } = {}) 
       }
       case 'chat_reply': {
         if (!d.content) break
+        // A report delivered by a scheduled / trigger run is announced as a
+        // chat_reply with no run_id: it belongs to that run, not to a chat.
+        const bg = d.run_id ? null : recentBg(ts)
+        if (bg && !bg.reply && !(implicitChat && !implicitChat.closed && implicitChat.startTs >= bg.startTs)) {
+          bg.reply = { content: d.content, hash: d.message_hash || null, reportId: d.report_id || null, ts }
+          touch(bg, ts)
+          break
+        }
         const run = chatRunFor(rec)
         run.segments.push({
           kind: 'reply', id: `${run.id}:r${run.segments.length}`, content: d.content,
           hash: d.message_hash || null, reportId: d.report_id || null, auto: !!d.auto, ts,
         })
+        touch(run, ts)
+        // A delivered final reply settles the run (a later step re-opens it).
+        if (d.final !== false && !run.closed) {
+          run.settled = true
+          run.status = 'done'
+          run.endTs = ts
+        }
+        break
+      }
+      case 'chat_verification': {
+        // Only a verdict on a chat reply that was not delivered as written is shown.
+        if (d.tool && d.tool !== 'reply_user') break
+        if (!HELD_VERDICTS.has(d.status)) break
+        const run = chatRunFor(rec)
+        addDraft(run, { text: d.preview || '', reason: 'verification', detail: d.detail || '', ts })
+        touch(run, ts)
+        break
+      }
+      case 'draft_held': {
+        const run = chatRunFor(rec)
+        addDraft(run, { text: d.content || '', reason: d.reason || '', detail: d.detail || '', ts })
         touch(run, ts)
         break
       }
@@ -426,7 +500,7 @@ export function buildTimeline(records, { now = Date.now(), idle = false } = {}) 
           run.report = { id: d.report_id ?? null, ts }
           touch(run, ts)
         } else {
-          items.push({ kind: 'notice', id: `notice:report:${ts}:${seq++}`, ts, tone: 'ok', type, text: rec.note, reportId: d.report_id ?? null })
+          items.push({ kind: 'notice', id: uniqueId(`notice:report:${ts}`), ts, tone: 'ok', type, text: rec.note, reportId: d.report_id ?? null })
         }
         break
       }
@@ -481,6 +555,13 @@ export function buildTimeline(records, { now = Date.now(), idle = false } = {}) 
       if (s.status === 'error') errors += 1
       if (!HIDDEN_TOOLS.has(s.tool)) visible += 1
     }
+    // A draft that was in the end delivered unchanged is not "held back".
+    const delivered = new Set(it.segments.filter((x) => x.kind === 'reply').map((x) => x.content.replace(/\s+/g, ' ').trim()))
+    for (const seg of it.segments) {
+      if (seg.kind !== 'steps') continue
+      seg.entries = seg.entries.filter((e) => e.kind !== 'draft' || !e.text || !delivered.has(e.text.replace(/\s+/g, ' ').trim()))
+    }
+    it.segments = it.segments.filter((x) => x.kind !== 'steps' || x.entries.length > 0)
     it.stepCount = visible
     it.hiccups = errors + it.warnings.length
     it.sig = `${it.n}:${it.status}:${it.stepIndex.length}:${it.threadId || ''}`

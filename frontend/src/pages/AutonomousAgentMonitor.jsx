@@ -1236,7 +1236,17 @@ export default function AutonomousAgentMonitor({ active = true }) {
         if (data.type === 'chat_reply_delta') {
           // Full reply text so far (not a diff). Streamed straight into the live
           // store; never logged or de-duplicated (every snapshot is distinct).
-          liveStore.setReply(data.run_id || '_', data.reset ? '' : (data.text || ''))
+          const replyKey = data.run_id || '_'
+          if (data.reset && data.reason) {
+            // The streamed draft was thrown away for a stated reason: keep it in
+            // the run as a "held back" draft instead of letting it vanish. (Older
+            // servers send a bare reset; chat_verification covers that case.)
+            const draft = liveStore.get().replies[replyKey] || ''
+            pushRecord(toTimelineRecord('draft_held', {
+              run_id: data.run_id, thread_id: data.thread_id, content: draft, reason: data.reason, detail: data.detail || '',
+            }, { id: genId(), ts: Date.now() }))
+          }
+          liveStore.setReply(replyKey, data.reset ? '' : (data.text || ''))
           return
         }
 
