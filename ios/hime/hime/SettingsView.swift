@@ -39,7 +39,7 @@ struct SettingsView: View {
 
                         Text("Health Intelligence Management Engine")
                             .font(.caption2)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(HimeColor.ink2)
                             .tracking(1)
                     }
                 }
@@ -56,11 +56,11 @@ struct SettingsView: View {
                         Text("Deploy Your Own Server")
                         Spacer()
                         Text("GitHub")
-                            .foregroundColor(.secondary)
+                            .foregroundColor(HimeColor.ink2)
                             .font(.subheadline)
                         Image(systemName: "arrow.up.right.square")
                             .font(.caption)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(HimeColor.ink2)
                     }
                 }
             } footer: {
@@ -77,7 +77,7 @@ struct SettingsView: View {
                         .keyboardType(.URL)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(HimeColor.ink2)
                         .onSubmit {
                             saveTask?.cancel()
                             serverAddress = applyServerAddress()
@@ -99,7 +99,7 @@ struct SettingsView: View {
                         .multilineTextAlignment(.trailing)
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(HimeColor.ink2)
                         .onSubmit {
                             tokenSaveTask?.cancel()
                             Task { await applyAuthToken(authToken) }
@@ -123,11 +123,11 @@ struct SettingsView: View {
                         Text("Status")
                     } icon: {
                         Image(systemName: ws.isConnected ? "checkmark.circle.fill" : "xmark.circle.fill")
-                            .foregroundColor(ws.isConnected ? .green : .red)
+                            .foregroundColor(ws.isConnected ? HimeColor.ok : HimeColor.bad)
                     }
                     Spacer()
                     Text(ws.isConnected ? LocalizedStringKey("Connected") : LocalizedStringKey("Disconnected"))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(HimeColor.ink2)
                 }
 
                 Button {
@@ -135,7 +135,7 @@ struct SettingsView: View {
                 } label: {
                     Label(ws.isSyncActive ? LocalizedStringKey("Disconnect") : LocalizedStringKey("Connect"), systemImage: ws.isSyncActive ? "wifi.slash" : "wifi")
                 }
-                .foregroundColor(ws.isSyncActive ? .red : .accentColor)
+                .foregroundColor(ws.isSyncActive ? HimeColor.bad : HimeColor.accentStrong)
 
                 Button {
                     Task { await testServerConnection() }
@@ -153,7 +153,7 @@ struct SettingsView: View {
                 if let result = connectionTestResult {
                     Text(result)
                         .font(.footnote)
-                        .foregroundColor(connectionTestSuccess ? .green : .red)
+                        .foregroundColor(connectionTestSuccess ? HimeColor.ok : HimeColor.bad)
                 }
 
             } header: {
@@ -169,11 +169,11 @@ struct SettingsView: View {
                         Text("AI Data Sharing Consent")
                     } icon: {
                         Image(systemName: hasConsentedToAI ? "checkmark.shield.fill" : "xmark.shield.fill")
-                            .foregroundColor(hasConsentedToAI ? .green : .red)
+                            .foregroundColor(hasConsentedToAI ? HimeColor.ok : HimeColor.bad)
                     }
                     Spacer()
                     Text(hasConsentedToAI ? LocalizedStringKey("Granted") : LocalizedStringKey("Not granted"))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(HimeColor.ink2)
                         .font(.subheadline)
                 }
 
@@ -182,7 +182,7 @@ struct SettingsView: View {
                 } label: {
                     Label("Review Disclosure", systemImage: "doc.text.magnifyingglass")
                 }
-                .foregroundColor(.accentColor)
+                .foregroundColor(HimeColor.accentStrong)
 
                 if hasConsentedToAI {
                     Button(role: .destructive) {
@@ -223,14 +223,14 @@ struct SettingsView: View {
                 } label: {
                     Label("Redesign My Plan", systemImage: "wand.and.stars")
                 }
-                .foregroundColor(.accentColor)
+                .foregroundColor(HimeColor.accentStrong)
 
                 Button {
                     hasOnboarded = false
                 } label: {
                     Label("Replay Onboarding", systemImage: "arrow.counterclockwise")
                 }
-                .foregroundColor(.accentColor)
+                .foregroundColor(HimeColor.accentStrong)
             } header: {
                 Text("Plan & Onboarding")
             } footer: {
@@ -247,7 +247,7 @@ struct SettingsView: View {
                     // by whether samples have actually arrived — that is the
                     // only observable "it's working" signal.
                     Text(hk.recentSamples.isEmpty ? hk.authStatus : "Receiving data")
-                        .foregroundColor(hk.recentSamples.isEmpty ? .orange : .green)
+                        .foregroundColor(hk.recentSamples.isEmpty ? HimeColor.warn : HimeColor.ok)
                         .font(.subheadline)
                 }
 
@@ -255,12 +255,12 @@ struct SettingsView: View {
                     Label("Last Sync", systemImage: "clock.arrow.circlepath")
                     Spacer()
                     Text(hk.lastSync)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(HimeColor.ink2)
                 }
 
                 Toggle(isOn: $hk.isBurstModeEnabled) {
                     Label("Burst Mode (High Priority)", systemImage: "bolt.fill")
-                        .foregroundColor(hk.isBurstModeEnabled ? .yellow : .secondary)
+                        .foregroundColor(hk.isBurstModeEnabled ? HimeColor.warn : HimeColor.ink2)
                 }
 
                 Button {
@@ -268,7 +268,7 @@ struct SettingsView: View {
                 } label: {
                     Label("Force Fetch All Data Now", systemImage: "arrow.clockwise")
                 }
-                .foregroundColor(.accentColor)
+                .foregroundColor(HimeColor.accentStrong)
 
             } header: {
                 Text("HealthKit")
@@ -280,7 +280,7 @@ struct SettingsView: View {
             Section {
                 if lm.logs.isEmpty {
                     Text("No recent activity.")
-                        .foregroundColor(.secondary)
+                        .foregroundColor(HimeColor.ink2)
                         .font(.subheadline)
                 } else {
                     ScrollViewReader { proxy in
@@ -288,8 +288,8 @@ struct SettingsView: View {
                             LazyVStack(alignment: .leading, spacing: 2) {
                                 ForEach(lm.logs) { entry in
                                     Text(entry.text)
-                                        .font(.system(size: 11, design: .monospaced))
-                                        .foregroundColor(.secondary)
+                                        .font(.system(.caption2, design: .monospaced))
+                                        .foregroundColor(HimeColor.ink2)
                                         .padding(.horizontal, 16)
                                         .padding(.vertical, 1)
                                         .id(entry.id)
@@ -321,7 +321,7 @@ struct SettingsView: View {
                     } label: {
                         Label("Copy Logs", systemImage: "doc.on.doc")
                     }
-                    .foregroundColor(.accentColor)
+                    .foregroundColor(HimeColor.accentStrong)
 
                     Button(role: .destructive) {
                         showClearLogsConfirm = true
@@ -342,13 +342,13 @@ struct SettingsView: View {
                     Text("Version")
                     Spacer()
                     Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—")
-                        .foregroundColor(.secondary)
+                        .foregroundColor(HimeColor.ink2)
                 }
                 HStack {
                     Text("Build")
                     Spacer()
                     Text(Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—")
-                        .foregroundColor(.secondary)
+                        .foregroundColor(HimeColor.ink2)
                 }
             } header: {
                 Text("About")
@@ -450,19 +450,19 @@ struct AIDisclosureSheet: View {
                     HStack(spacing: 12) {
                         Image(systemName: "brain.head.profile")
                             .font(.system(size: 32))
-                            .foregroundColor(.purple)
+                            .foregroundColor(HimeColor.accentStrong)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("AI Data Sharing")
                                 .font(.title2.bold())
                             Text("How Hime shares your data with third-party AI")
                                 .font(.footnote)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(HimeColor.ink2)
                         }
                     }
 
                     Text(AIDisclosureContent.bodyText)
                         .font(.callout)
-                        .foregroundColor(.primary.opacity(0.9))
+                        .foregroundColor(HimeColor.ink)
                         .fixedSize(horizontal: false, vertical: true)
 
                     AIDisclosureDetails()

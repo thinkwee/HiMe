@@ -58,8 +58,8 @@ struct OnboardingView: View {
                     ForEach(0..<totalPages, id: \.self) { idx in
                         Circle()
                             .fill(idx == pageIndex
-                                  ? Color(red: 0.95, green: 0.70, blue: 0.35)
-                                  : Color.gray.opacity(0.3))
+                                  ? HimeColor.accent
+                                  : HimeColor.idle)
                             .frame(width: idx == pageIndex ? 9 : 7,
                                    height: idx == pageIndex ? 9 : 7)
                             .animation(.spring(response: 0.3), value: pageIndex)
@@ -75,7 +75,7 @@ struct OnboardingView: View {
             .padding(.bottom, 30)
             .padding(.top, 12)
         }
-        .background(Color(.systemBackground).ignoresSafeArea())
+        .background(HimeColor.paper.ignoresSafeArea())
     }
 
     // MARK: - Pages
@@ -83,7 +83,7 @@ struct OnboardingView: View {
     private var welcomePage: some View {
         OnboardingPage(
             icon: "sparkles",
-            iconColor: Color(red: 0.95, green: 0.70, blue: 0.35),
+            iconColor: HimeColor.accent,
             title: "Welcome to Hime",
             subtitle: "Health Intelligence Management Engine",
             bodyText: "As your personal AI health assistant, Hime understands your real-time health data, feels your heart beats, your breath, and your body's movements, and provides proactive insights so you never miss what matters. \n\nFully self-hosted, secure, and open-source. Say **Hi** to healthy **Me**!"
@@ -93,7 +93,7 @@ struct OnboardingView: View {
     private var healthKitPage: some View {
         OnboardingPage(
             icon: "heart.text.square.fill",
-            iconColor: .pink,
+            iconColor: HimeColor.rose,
             title: "Apple Health Access",
             subtitle: "Read-only and on-device",
             bodyText: "Hime reads wearable health data from Apple Health so the AI agent can analyse trends. Hime never writes to Health and you have the full control on how and where AI process the data.",
@@ -101,7 +101,7 @@ struct OnboardingView: View {
                 VStack(spacing: 8) {
                     if didRequestHealthKit {
                         Label("Access requested", systemImage: "checkmark.circle.fill")
-                            .foregroundColor(.green)
+                            .foregroundColor(HimeColor.ok)
                             .font(.subheadline)
                     }
                 }
@@ -130,7 +130,7 @@ struct OnboardingView: View {
 
             Image(systemName: "server.rack")
                 .font(.system(size: 64))
-                .foregroundColor(.blue)
+                .foregroundColor(HimeColor.accentStrong)
 
             VStack(spacing: 6) {
                 Text("Connect Your Server")
@@ -138,13 +138,13 @@ struct OnboardingView: View {
                     .multilineTextAlignment(.center)
                 Text("Self-hosted, full control on your data")
                     .font(.subheadline)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(HimeColor.ink2)
             }
             .padding(.horizontal, 32)
 
             Text("Hime runs on your own server. Follow the Hime GitHub Repo to deploy your own server.")
                 .font(.body)
-                .foregroundColor(.primary.opacity(0.85))
+                .foregroundColor(HimeColor.ink)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
                 .fixedSize(horizontal: false, vertical: true)
@@ -160,7 +160,7 @@ struct OnboardingView: View {
         VStack(spacing: 12) {
             HStack {
                 Image(systemName: "network")
-                    .foregroundColor(.secondary)
+                    .foregroundColor(HimeColor.ink2)
                 TextField("192.168.1.100 or example.com", text: $serverAddress)
                     .keyboardType(.URL)
                     .autocorrectionDisabled()
@@ -172,7 +172,7 @@ struct OnboardingView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(Color(.secondarySystemBackground))
+            .background(HimeColor.card)
             .clipShape(RoundedRectangle(cornerRadius: 10))
 
             Button {
@@ -202,12 +202,12 @@ struct OnboardingView: View {
         switch serverTestState {
         case .success(let msg):
             Label(msg, systemImage: "checkmark.circle.fill")
-                .foregroundColor(.green)
+                .foregroundColor(HimeColor.ok)
                 .font(.footnote)
                 .multilineTextAlignment(.center)
         case .failure(let msg):
             Label(msg, systemImage: "xmark.octagon.fill")
-                .foregroundColor(.red)
+                .foregroundColor(HimeColor.bad)
                 .font(.footnote)
                 .multilineTextAlignment(.center)
         default:
@@ -221,12 +221,12 @@ struct OnboardingView: View {
             VStack(spacing: 6) {
                 Image(systemName: "brain.head.profile")
                     .font(.system(size: 40))
-                    .foregroundColor(.purple)
+                    .foregroundColor(HimeColor.accentStrong)
                 Text("AI Data Sharing")
                     .font(.system(size: 22, weight: .bold, design: .rounded))
                 Text("Scroll to read all sections, then agree below")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(HimeColor.ink2)
             }
             .padding(.top, 16)
             .padding(.bottom, 8)
@@ -239,7 +239,7 @@ struct OnboardingView: View {
                 VStack(alignment: .leading, spacing: 14) {
                     Text(AIDisclosureContent.bodyText)
                         .font(.callout)
-                        .foregroundColor(.primary.opacity(0.9))
+                        .foregroundColor(HimeColor.ink)
                         .fixedSize(horizontal: false, vertical: true)
 
                     AIDisclosureDetails()
@@ -249,7 +249,7 @@ struct OnboardingView: View {
                             .font(.footnote)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    .tint(.purple)
+                    .tint(HimeColor.accent)
                     .padding(.top, 4)
                 }
                 .padding(.horizontal, 20)
@@ -263,7 +263,7 @@ struct OnboardingView: View {
     private var catPage: some View {
         OnboardingPage(
             icon: "cat.fill",
-            iconColor: Color(red: 0.95, green: 0.70, blue: 0.35),
+            iconColor: HimeColor.accent,
             title: "Meet HiMeow",
             subtitle: "Your AI digital health avatar",
             bodyText: "HiMeow is a AI digital health avatar that lives on your home screen and reflects your real-time health state. It's happy when you are well-rested, concerned when something looks off. \nLong-press HiMeow anytime for an instant health report and quick AI analysis.",
@@ -303,7 +303,7 @@ struct OnboardingView: View {
                     .fontWeight(.semibold)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
-                    .background(Color.pink)
+                    .background(HimeColor.accent)
                     .foregroundColor(.white)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
             }
@@ -318,7 +318,7 @@ struct OnboardingView: View {
                         .fontWeight(.semibold)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
-                        .background(canAdvanceFromServerPage ? Color.blue : Color.gray.opacity(0.4))
+                        .background(canAdvanceFromServerPage ? HimeColor.accent : HimeColor.idleStrong)
                         .foregroundColor(.white)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
@@ -328,7 +328,7 @@ struct OnboardingView: View {
                     advance()
                 }
                 .font(.footnote)
-                .foregroundColor(.secondary)
+                .foregroundColor(HimeColor.ink2)
             }
         case 3:
             Button {
@@ -341,7 +341,7 @@ struct OnboardingView: View {
                     .fontWeight(.semibold)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
-                    .background(aiConsentChecked ? Color.purple : Color.gray.opacity(0.4))
+                    .background(aiConsentChecked ? HimeColor.accent : HimeColor.idleStrong)
                     .foregroundColor(.white)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
             }
@@ -361,7 +361,7 @@ struct OnboardingView: View {
                         .fontWeight(.semibold)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
-                        .background(survey.canProceed ? Color(red: 0.95, green: 0.70, blue: 0.35) : Color.gray.opacity(0.4))
+                        .background(survey.canProceed ? HimeColor.accent : HimeColor.idleStrong)
                         .foregroundColor(.white)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
@@ -371,7 +371,7 @@ struct OnboardingView: View {
                     advance()
                 }
                 .font(.footnote)
-                .foregroundColor(.secondary)
+                .foregroundColor(HimeColor.ink2)
             }
         case 6:
             Button {
@@ -381,7 +381,7 @@ struct OnboardingView: View {
                     .fontWeight(.semibold)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
-                    .background(Color.green)
+                    .background(HimeColor.leaf)
                     .foregroundColor(.white)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
             }
@@ -398,7 +398,7 @@ struct OnboardingView: View {
                 .fontWeight(.semibold)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
-                .background(Color(red: 0.95, green: 0.70, blue: 0.35))
+                .background(HimeColor.accent)
                 .foregroundColor(.white)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
         }
@@ -522,12 +522,12 @@ private struct OnboardingPage: View {
 
             Text(subtitle)
                 .font(.subheadline)
-                .foregroundColor(.secondary)
+                .foregroundColor(HimeColor.ink2)
                 .padding(.top, 4)
 
             Text(bodyText)
                 .font(.body)
-                .foregroundColor(.primary.opacity(0.85))
+                .foregroundColor(HimeColor.ink)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
                 .padding(.top, 20)
@@ -669,7 +669,7 @@ private struct PolicyMeta: View {
     let text: LocalizedStringKey
     init(_ text: LocalizedStringKey) { self.text = text }
     var body: some View {
-        Text(text).font(.caption).foregroundColor(.secondary)
+        Text(text).font(.caption).foregroundColor(HimeColor.ink2)
     }
 }
 
@@ -685,7 +685,7 @@ private struct PolicySection: View {
             Text(title).font(.headline)
             Text(bodyText)
                 .font(.callout)
-                .foregroundColor(.primary.opacity(0.9))
+                .foregroundColor(HimeColor.ink)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -699,7 +699,7 @@ private struct DisclosureRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: icon)
-                .foregroundColor(.purple)
+                .foregroundColor(HimeColor.accentStrong)
                 .frame(width: 22)
                 .padding(.top, 2)
             VStack(alignment: .leading, spacing: 2) {
@@ -707,7 +707,7 @@ private struct DisclosureRow: View {
                     .font(.footnote.weight(.semibold))
                 Text(text)
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(HimeColor.ink2)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }

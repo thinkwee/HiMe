@@ -146,7 +146,7 @@ struct ContentView: View {
                 HStack(spacing: 6) {
                     ForEach(0..<totalTabs, id: \.self) { idx in
                         Circle()
-                            .fill(selectedTab == idx ? Color(red: 0.95, green: 0.70, blue: 0.35) : Color.gray.opacity(0.3))
+                            .fill(selectedTab == idx ? HimeColor.accent : HimeColor.idle)
                             .frame(width: selectedTab == idx ? 9 : 7, height: selectedTab == idx ? 9 : 7)
                             .animation(.spring(response: 0.3), value: selectedTab)
                     }
@@ -193,9 +193,7 @@ struct ContentView: View {
                     clampSelectedTab(selectedTab)
                 }
             }
-            .background(selectedTab == 2
-                ? Color(red: 0.82, green: 0.78, blue: 0.72)
-                : Color(.systemGroupedBackground))
+            .background(HimeColor.paper.ignoresSafeArea())
             .navigationTitle(navTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.hidden, for: .navigationBar)
@@ -210,7 +208,7 @@ struct ContentView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     NavigationLink(destination: SettingsView()) {
                         Image(systemName: "gearshape")
-                            .foregroundColor(.primary)
+                            .foregroundColor(HimeColor.ink)
                     }
                 }
             }
@@ -300,26 +298,25 @@ struct PagePlaceholderView: View {
                 .font(.system(size: 56))
                 .foregroundStyle(
                     LinearGradient(
-                        colors: [Color(red: 0.95, green: 0.70, blue: 0.35),
-                                 Color(red: 0.85, green: 0.50, blue: 0.80)],
+                        colors: [HimeColor.accent, HimeColor.rose],
                         startPoint: .topLeading, endPoint: .bottomTrailing
                     )
                 )
 
             VStack(spacing: 10) {
                 Text("Your Next Page Lives Here")
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
-                    .foregroundColor(.primary)
+                    .font(.system(.title3, design: .rounded).weight(.bold))
+                    .foregroundColor(HimeColor.ink)
 
                 Text("Infinite possibilities, one conversation away.")
-                    .font(.system(size: 15, weight: .medium, design: .rounded))
-                    .foregroundColor(.secondary)
+                    .font(.system(.subheadline, design: .rounded).weight(.medium))
+                    .foregroundColor(HimeColor.ink2)
                     .multilineTextAlignment(.center)
             }
 
             Text("Ask your agent to create a personalised page\nand it will appear right here.")
-                .font(.system(size: 13))
-                .foregroundColor(.secondary.opacity(0.7))
+                .font(.footnote)
+                .foregroundColor(HimeColor.ink2)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
 
@@ -411,7 +408,7 @@ struct FeatureGroupRow: View {
             Text(group.emoji)
                 .font(.title2)
                 .frame(width: 36, height: 36)
-                .background(Color(.tertiarySystemGroupedBackground))
+                .background(HimeColor.cream)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
             VStack(alignment: .leading, spacing: 2) {
@@ -433,19 +430,19 @@ struct FeatureGroupRow: View {
                 HStack(spacing: 4) {
                     if group.syncPercentage == 100 {
                         Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 10))
-                            .foregroundColor(.green)
+                            .font(.caption2)
+                            .foregroundColor(HimeColor.ok)
                     }
                     Text("\(group.syncPercentage)% synced")
                         .font(.caption2.weight(.bold))
-                        .foregroundColor(group.syncPercentage == 100 ? .green : .orange)
+                        .foregroundColor(group.syncPercentage == 100 ? HimeColor.ok : HimeColor.warn)
                 }
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
-        .background(Color(.secondarySystemGroupedBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(HimeColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: HimeRadius.row, style: .continuous))
     }
 }
 
@@ -472,12 +469,12 @@ struct FeatureDetailView: View {
                                 .foregroundColor(.primary)
                             if sample.isSynced {
                                 Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.green)
+                                    .font(.caption2)
+                                    .foregroundColor(HimeColor.ok)
                             } else {
                                 Image(systemName: "arrow.up.circle")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.orange)
+                                    .font(.caption2)
+                                    .foregroundColor(HimeColor.warn)
                             }
                         }
                     }
@@ -496,13 +493,13 @@ struct EmptyRecentView: View {
         VStack(spacing: 12) {
             Image(systemName: "waveform.path.ecg")
                 .font(.system(size: 40))
-                .foregroundColor(.secondary.opacity(0.4))
+                .foregroundColor(HimeColor.ink2.opacity(0.6))
             Text("No data collected yet")
                 .font(.subheadline)
-                .foregroundColor(.secondary)
+                .foregroundColor(HimeColor.ink2)
             Text("Connect and wear your Apple Watch to start collecting health data.")
                 .font(.caption)
-                .foregroundColor(.secondary.opacity(0.7))
+                .foregroundColor(HimeColor.ink2)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
         }

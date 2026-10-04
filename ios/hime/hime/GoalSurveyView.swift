@@ -13,7 +13,6 @@ import SwiftUI
 import Combine   // ObservableObject / @Published — required explicitly under the
                  // MemberImportVisibility upcoming feature (SwiftUI no longer re-exports it).
 
-private let kAccent = Color(red: 0.95, green: 0.70, blue: 0.35)
 
 // MARK: - Question model
 
@@ -208,7 +207,7 @@ struct GoalSurveyView: View {
                     } label: {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 15, weight: .semibold))
-                            .foregroundColor(kAccent)
+                            .foregroundColor(HimeColor.accent)
                     }
                 } else {
                     Color.clear.frame(width: 16, height: 16)
@@ -216,7 +215,7 @@ struct GoalSurveyView: View {
                 Spacer()
                 Text("\(min(model.step + 1, model.displayTotal)) / \(model.displayTotal)")
                     .font(.caption.weight(.medium))
-                    .foregroundColor(.secondary)
+                    .foregroundColor(HimeColor.ink2)
             }
             .padding(.horizontal, 24)
             .padding(.top, 8)
@@ -224,8 +223,8 @@ struct GoalSurveyView: View {
             // Slim progress bar
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(Color.gray.opacity(0.15))
-                    Capsule().fill(kAccent)
+                    Capsule().fill(HimeColor.idle)
+                    Capsule().fill(HimeColor.accent)
                         .frame(width: geo.size.width * CGFloat(model.step + 1) / CGFloat(model.displayTotal))
                 }
             }
@@ -241,7 +240,7 @@ struct GoalSurveyView: View {
                 if q.multi {
                     Text("Choose any that apply — or skip.")
                         .font(.footnote)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(HimeColor.ink2)
                 }
 
                 ScrollView {
@@ -271,26 +270,26 @@ struct GoalSurveyView: View {
             HStack(spacing: 12) {
                 Image(systemName: opt.icon)
                     .font(.system(size: 16))
-                    .foregroundColor(selected ? .white : kAccent)
+                    .foregroundColor(selected ? .white : HimeColor.accent)
                     .frame(width: 30, height: 30)
-                    .background(Circle().fill(selected ? kAccent : kAccent.opacity(0.12)))
+                    .background(Circle().fill(selected ? HimeColor.accent : HimeColor.accent.opacity(0.12)))
                 Text(opt.label)
                     .font(.subheadline.weight(.medium))
-                    .foregroundColor(.primary)
+                    .foregroundColor(HimeColor.ink)
                     .multilineTextAlignment(.leading)
                 Spacer()
                 Image(systemName: selectionGlyph(q, selected))
                     .font(.system(size: 18))
-                    .foregroundColor(selected ? kAccent : .secondary.opacity(0.4))
+                    .foregroundColor(selected ? HimeColor.accent : HimeColor.idleStrong)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
-            .background(Color(.secondarySystemGroupedBackground))
+            .background(HimeColor.card)
             .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(selected ? kAccent.opacity(0.5) : Color.clear, lineWidth: 1.5)
+                RoundedRectangle(cornerRadius: HimeRadius.row, style: .continuous)
+                    .stroke(selected ? HimeColor.accent.opacity(0.5) : Color.clear, lineWidth: 1.5)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: HimeRadius.row, style: .continuous))
         }
         .buttonStyle(.plain)
     }

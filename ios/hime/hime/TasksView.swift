@@ -260,8 +260,8 @@ struct TasksContentView: View {
                     Spacer()
                     Button { showNewTask = true } label: {
                         Image(systemName: "plus.circle.fill")
-                            .font(.system(size: 20))
-                            .foregroundColor(.accentColor)
+                            .font(.title3)
+                            .foregroundColor(HimeColor.accentStrong)
                     }
                 }
                 .padding(.horizontal)
@@ -269,7 +269,7 @@ struct TasksContentView: View {
                 if vm.tasks.isEmpty {
                     Text("No scheduled tasks")
                         .font(.subheadline)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(HimeColor.ink2)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 20)
                 } else {
@@ -289,8 +289,8 @@ struct TasksContentView: View {
                     Spacer()
                     Button { showNewRule = true } label: {
                         Image(systemName: "plus.circle.fill")
-                            .font(.system(size: 20))
-                            .foregroundColor(.accentColor)
+                            .font(.title3)
+                            .foregroundColor(HimeColor.accentStrong)
                     }
                 }
                 .padding(.horizontal)
@@ -298,7 +298,7 @@ struct TasksContentView: View {
                 if vm.rules.isEmpty {
                     Text("No trigger rules")
                         .font(.subheadline)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(HimeColor.ink2)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 20)
                 } else {
@@ -351,15 +351,15 @@ private struct ScheduledTaskRow: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text(humanizeCron(task.cron_expr))
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundColor(.primary)
+                    .font(.system(.footnote, design: .monospaced).weight(.bold))
+                    .foregroundColor(HimeColor.ink)
                 Spacer()
                 StatusBadge(status: task.status)
             }
 
             Text(task.prompt_goal)
-                .font(.system(size: 13))
-                .foregroundColor(.secondary)
+                .font(.footnote)
+                .foregroundColor(HimeColor.ink2)
                 .lineLimit(2)
 
             HStack(spacing: 16) {
@@ -368,7 +368,7 @@ private struct ScheduledTaskRow: View {
                 } label: {
                     Label(task.status == "active" ? "Pause" : "Resume",
                           systemImage: task.status == "active" ? "pause.circle" : "play.circle")
-                        .font(.system(size: 12))
+                        .font(.caption)
                 }
 
                 Button {
@@ -379,14 +379,14 @@ private struct ScheduledTaskRow: View {
                             ProgressView()
                                 .scaleEffect(0.6)
                             Text("Running")
-                                .font(.system(size: 12))
+                                .font(.caption)
                         }
                     } else {
                         Label("Run Now", systemImage: "play.fill")
-                            .font(.system(size: 12))
+                            .font(.caption)
                     }
                 }
-                .tint(.orange)
+                .tint(HimeColor.accentStrong)
                 .disabled(vm.runningGoals.contains(task.prompt_goal))
 
                 Spacer()
@@ -395,13 +395,13 @@ private struct ScheduledTaskRow: View {
                     Task { await vm.deleteTask(task) }
                 } label: {
                     Image(systemName: "trash")
-                        .font(.system(size: 12))
+                        .font(.caption)
                 }
             }
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .fill(Color(.secondarySystemGroupedBackground)))
+        .background(RoundedRectangle(cornerRadius: HimeRadius.row, style: .continuous)
+            .fill(HimeColor.card))
         .padding(.horizontal)
     }
 }
@@ -416,8 +416,8 @@ private struct TriggerRuleRow: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text(rule.name)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(.primary)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(HimeColor.ink)
                 Spacer()
                 StatusBadge(status: rule.status)
             }
@@ -427,18 +427,18 @@ private struct TriggerRuleRow: View {
                               condition: rule.condition,
                               threshold: rule.threshold)
                 Text("\(rule.window_minutes)m window")
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
+                    .font(.caption2)
+                    .foregroundColor(HimeColor.ink2)
                 if rule.trigger_count > 0 {
                     Text("\(rule.trigger_count)x triggered")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.orange)
+                        .font(.caption2.weight(.medium))
+                        .foregroundColor(HimeColor.warn)
                 }
             }
 
             Text(rule.prompt_goal)
-                .font(.system(size: 12))
-                .foregroundColor(.secondary)
+                .font(.caption)
+                .foregroundColor(HimeColor.ink2)
                 .lineLimit(2)
 
             HStack(spacing: 16) {
@@ -447,7 +447,7 @@ private struct TriggerRuleRow: View {
                 } label: {
                     Label(rule.status == "active" ? "Pause" : "Resume",
                           systemImage: rule.status == "active" ? "pause.circle" : "play.circle")
-                        .font(.system(size: 12))
+                        .font(.caption)
                 }
 
                 Button {
@@ -458,14 +458,14 @@ private struct TriggerRuleRow: View {
                             ProgressView()
                                 .scaleEffect(0.6)
                             Text("Running")
-                                .font(.system(size: 12))
+                                .font(.caption)
                         }
                     } else {
                         Label("Run Now", systemImage: "play.fill")
-                            .font(.system(size: 12))
+                            .font(.caption)
                     }
                 }
-                .tint(.orange)
+                .tint(HimeColor.accentStrong)
                 .disabled(vm.runningGoals.contains(rule.prompt_goal))
 
                 Spacer()
@@ -474,13 +474,13 @@ private struct TriggerRuleRow: View {
                     Task { await vm.deleteRule(rule) }
                 } label: {
                     Image(systemName: "trash")
-                        .font(.system(size: 12))
+                        .font(.caption)
                 }
             }
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .fill(Color(.secondarySystemGroupedBackground)))
+        .background(RoundedRectangle(cornerRadius: HimeRadius.row, style: .continuous)
+            .fill(HimeColor.card))
         .padding(.horizontal)
     }
 }
@@ -492,11 +492,11 @@ private struct StatusBadge: View {
 
     var body: some View {
         Text(status.capitalized)
-            .font(.system(size: 10, weight: .bold))
-            .foregroundColor(status == "active" ? .green : .orange)
+            .font(.caption2.weight(.bold))
+            .foregroundColor(status == "active" ? HimeColor.ok : HimeColor.warn)
             .padding(.horizontal, 8).padding(.vertical, 3)
             .background(Capsule().fill(
-                (status == "active" ? Color.green : Color.orange).opacity(0.12)
+                (status == "active" ? HimeColor.ok : HimeColor.warn).opacity(0.14)
             ))
     }
 }
@@ -515,10 +515,10 @@ private struct ConditionPill: View {
             : String(format: "%.1f", threshold)
 
         Text("\(featureType) \(label) \(threshStr)")
-            .font(.system(size: 11, weight: .medium, design: .monospaced))
-            .foregroundColor(.cyan)
+            .font(.system(.caption2, design: .monospaced).weight(.medium))
+            .foregroundColor(HimeColor.accentStrong)
             .padding(.horizontal, 8).padding(.vertical, 3)
-            .background(Capsule().fill(Color.cyan.opacity(0.1)))
+            .background(Capsule().fill(HimeColor.accent.opacity(0.14)))
     }
 }
 
@@ -539,7 +539,7 @@ private struct NewTaskSheet: View {
                         .font(.system(.body, design: .monospaced))
                     Text(humanizeCron(cronExpr))
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(HimeColor.ink2)
                 }
                 Section("Analysis Goal") {
                     TextEditor(text: $goal)

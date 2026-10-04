@@ -12,11 +12,6 @@
 
 import SwiftUI
 
-extension Color {
-    /// The app's warm accent (matches the send button + user bubble).
-    static let himeAccent = Color(red: 0.95, green: 0.70, blue: 0.35)
-}
-
 struct MarkdownView: View {
     let text: String
     var foreground: Color = .primary
