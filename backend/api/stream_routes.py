@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import secrets
+import time
 import uuid
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -98,6 +99,7 @@ async def stream_data(websocket: WebSocket):
 # old "online while the handler runs" semantics.
 IOS_IDLE_TIMEOUT_S = 60.0
 AGENT_WAIT_POLL_S = 1.0     # how often a waiting iOS socket re-checks for the agent
+LEGACY_KEEPALIVE_S = 15.0   # iOS builds that never send frames: liveness probe
 STATUS_INTERVAL_S = 3.0     # web-monitor status_update cadence
 
 _DISCONNECT_ERRORS = (WebSocketDisconnect, ConnectionError, RuntimeError)
@@ -132,6 +134,10 @@ async def monitor_autonomous_agent(websocket: WebSocket, user_id: str):
 
     _ws_lock = asyncio.Lock()  # serialise concurrent sends on the socket
     _stop = asyncio.Event()
+    # Set once the client sends any frame. Older iOS builds never do, so the
+    # server keeps a periodic keepalive to them: a send error is the only way
+    # to notice their socket went half-open.
+    _client_heard = asyncio.Event()
 
     async def _send(payload: dict) -> None:
         async with _ws_lock:
@@ -157,6 +163,7 @@ async def monitor_autonomous_agent(websocket: WebSocket, user_id: str):
             if msg.get("type") != "websocket.receive":
                 return  # websocket.disconnect
             heard = True
+            _client_heard.set()
             if _is_ios:
                 ios_connections.touch(user_id, _conn_id)
             text = msg.get("text")
@@ -207,12 +214,20 @@ async def monitor_autonomous_agent(websocket: WebSocket, user_id: str):
         only watch for the agent going away (stop/restart). Returns when the
         agent entry is gone/replaced (iOS) or the socket is unusable."""
         interval = AGENT_WAIT_POLL_S if _is_ios else STATUS_INTERVAL_S
+        last_keepalive = time.monotonic()
         while not _stop.is_set():
             await asyncio.sleep(interval)
             current_info = active_agents.get(user_id)
             if _is_ios:
                 if not current_info or current_info.get("event_queue") is not queue_id:
                     return
+                if (not _client_heard.is_set()
+                        and time.monotonic() - last_keepalive >= LEGACY_KEEPALIVE_S):
+                    last_keepalive = time.monotonic()
+                    try:
+                        await _send({"type": "keepalive"})
+                    except _DISCONNECT_ERRORS:
+                        return
                 continue
             try:
                 # During startup, agent may not be ready yet — skip status push
