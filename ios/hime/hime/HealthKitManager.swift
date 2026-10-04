@@ -483,7 +483,7 @@ final class HealthKitManager: ObservableObject {
             return
         }
 
-        let queued = await PendingStore.shared.append(payloads)
+        let queued = PendingStore.shared.append(payloads)
         if queued, let newAnchor {
             HealthKitManager.saveAnchorStatic(newAnchor, key: anchorKey)
         }
@@ -597,7 +597,7 @@ final class HealthKitManager: ObservableObject {
 
         HealthKitManager.bgLog("📱 HK-STATS: \(feature) — \(localPayloads.count) new buckets → PendingStore (appState=\(appState))")
 
-        let queued = await PendingStore.shared.append(localPayloads)
+        let queued = PendingStore.shared.append(localPayloads)
 
         // Advance high-water mark to the latest bucket END time so we don't re-fetch it.
         // Only once the buckets are durably queued.
@@ -692,7 +692,7 @@ final class HealthKitManager: ObservableObject {
 
         HealthKitManager.bgLog("📱 HK-FETCH: \(feature) — \(localPayloads.count) new samples → PendingStore (appState=\(appState))")
 
-        let queued = await PendingStore.shared.append(localPayloads)
+        let queued = PendingStore.shared.append(localPayloads)
         if queued, let newAnchor {
             HealthKitManager.saveAnchorStatic(newAnchor, key: anchorKey)
         }

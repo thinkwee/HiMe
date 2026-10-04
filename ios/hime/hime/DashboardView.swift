@@ -633,7 +633,7 @@ private struct MetricChartCard: View {
 private struct SleepStageTimeline: View {
     let blocks: [SleepBlock]
 
-    private static func stageColor(_ stage: SleepStage) -> Color {
+    nonisolated private static func stageColor(_ stage: SleepStage) -> Color {
         switch stage {
         case .deep:  return Color(red: 0.25, green: 0.15, blue: 0.65)  // deep purple
         case .core:  return Color(red: 0.40, green: 0.55, blue: 0.95)  // soft blue

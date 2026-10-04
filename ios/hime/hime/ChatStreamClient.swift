@@ -278,7 +278,7 @@ final class ChatStreamClient: NSObject {
         monitor.pathUpdateHandler = { [weak self] path in
             let satisfied = path.status == .satisfied
             let key = "\(satisfied)-" + path.availableInterfaces.map { "\($0.type)" }.joined(separator: ",")
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self else { return }
                 let changed = self.lastPathKey != nil && self.lastPathKey != key
                 self.lastPathKey = key

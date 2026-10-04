@@ -1,3 +1,4 @@
+@preconcurrency import Dispatch
 import Foundation
 import Combine
 import UIKit
