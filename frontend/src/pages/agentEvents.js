@@ -13,7 +13,7 @@ const TOOL_EVENT_RE = /^(chat|analysis|quick|plan)_tool_(call|result)$/
 const VERIFICATION_EVENT_RE = /^(chat|analysis|quick|plan)_verification$/
 
 /** Event types that are handled elsewhere — never logged as "unknown". */
-const SILENT_TYPES = new Set(['status_update', 'token_usage', 'pong', 'agent_waiting'])
+const SILENT_TYPES = new Set(['status_update', 'token_usage', 'pong', 'agent_waiting', 'chat_reply_delta'])
 
 const _warnedTypes = new Set()
 
@@ -45,7 +45,7 @@ export function unwrapEvent(ev) {
 export function eventToMessage(ev) {
   const d = unwrapEvent(ev)
   const t = ev.type || d.type || ''
-  if (t === 'status_update' || t === 'token_usage' || t === 'pong' || t === 'agent_waiting') return null
+  if (SILENT_TYPES.has(t)) return null
 
   // Determine task type for badge
   const isQuick = d.task === 'quick_analysis' || d.source === 'quick' || t.startsWith('quick_')
@@ -124,6 +124,9 @@ export function eventToMessage(ev) {
           type: 'image',
           imageUrl: chatImageUrl(d),
         }
+        break
+      case 'chat_stopped':
+        msg = { text: `⏹ ${tr('agent.evt_chat_stopped')}`, type: 'system' }
         break
       case 'chat_cleared':
         msg = { text: `🧹 ${tr('agent.evt_chat_cleared')}`, type: 'system' }
@@ -263,10 +266,15 @@ export function eventKey(type, d) {
   return `${type}|${data.timestamp || ''}|${_hash(body)}`
 }
 
-/** Epoch ms of an activity-log / WS event, or null when it carries no usable time. */
+/**
+ * Epoch ms of an activity-log / WS event, or null when it carries no usable time.
+ * An activity-log row's `created_at` is monotone with its row id, so it is
+ * preferred: the payload `timestamp` is stamped at emit time with a different
+ * clock/precision and ordering by it shuffles events within the same second.
+ */
 export function eventTimeMs(raw, parse) {
   const d = unwrapEvent(raw)
-  const stamp = d?.timestamp || raw?.created_at
+  const stamp = raw?.created_at || d?.timestamp
   if (!stamp) return null
   const ms = parse(stamp).getTime()
   return Number.isNaN(ms) ? null : ms

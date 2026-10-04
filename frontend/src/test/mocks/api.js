@@ -189,6 +189,8 @@ export const api = {
   // Agent V2
   startAutonomousAgent: vi.fn().mockResolvedValue({ success: true }),
   stopAutonomousAgent: vi.fn().mockResolvedValue({ success: true }),
+  stopChat: vi.fn().mockResolvedValue({ success: true, stopped: true }),
+  getChatThreads: vi.fn().mockResolvedValue({ success: true, threads: [] }),
   getAgentLastConfig: vi.fn().mockResolvedValue({ success: true, config: { llm_provider: 'gemini', model: 'gemini-2.5-flash' } }),
   getAgentStatus: vi.fn().mockResolvedValue(mockAgentStatusEmpty),
   getAgentActivity: vi.fn().mockResolvedValue({ success: true, events: [] }),

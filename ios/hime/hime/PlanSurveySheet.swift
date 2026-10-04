@@ -12,7 +12,6 @@
 import SwiftUI
 import Combine
 
-private let kAccent = Color(red: 0.95, green: 0.70, blue: 0.35)
 
 struct PlanSurveySheet: View {
     @Environment(\.dismiss) private var dismiss
@@ -33,6 +32,7 @@ struct PlanSurveySheet: View {
                     }
                 }
             }
+            .background(HimeColor.paper.ignoresSafeArea())
             .navigationTitle("Redesign Plan")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -48,7 +48,7 @@ struct PlanSurveySheet: View {
             if let errorMessage {
                 Text(errorMessage)
                     .font(.footnote)
-                    .foregroundColor(.red)
+                    .foregroundColor(HimeColor.bad)
                     .multilineTextAlignment(.center)
             }
             Button {
@@ -68,9 +68,9 @@ struct PlanSurveySheet: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
-                .background(survey.canProceed ? kAccent : Color.gray.opacity(0.3))
+                .background(survey.canProceed ? HimeColor.accent : HimeColor.idle)
                 .foregroundColor(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: HimeRadius.card, style: .continuous))
             }
             .disabled(!survey.canProceed || submitting)
         }
@@ -82,13 +82,13 @@ struct PlanSurveySheet: View {
         VStack(spacing: 16) {
             Image(systemName: "checkmark.seal.fill")
                 .font(.system(size: 52))
-                .foregroundColor(kAccent)
+                .foregroundColor(HimeColor.accent)
             Text("HiMe is redesigning your plan")
                 .font(.title3.weight(.bold))
                 .multilineTextAlignment(.center)
             Text("Your new check-ins and a fresh plan report will arrive in Chat shortly.")
                 .font(.subheadline)
-                .foregroundColor(.secondary)
+                .foregroundColor(HimeColor.ink2)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 32)
             Button("Done") { dismiss() }

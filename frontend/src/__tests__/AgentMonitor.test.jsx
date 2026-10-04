@@ -87,7 +87,9 @@ describe('AutonomousAgentMonitor', () => {
       socket.emit({ type: 'plan_tool_call', tool: 'sql', arguments: { query: 'SELECT plan_marker FROM t' } })
       socket.emit({ type: 'chat_cleared', chat_id: 'ios:LiveUser' })
     })
-    expect(await screen.findByText(/SELECT plan_marker FROM t/)).toBeInTheDocument()
+    // the plan run shows up as a card with its step (also echoed by the status hero)
+    expect((await screen.findAllByText(/SELECT plan_marker FROM t/)).length).toBeGreaterThan(0)
+    expect(screen.getByText('Plan')).toBeInTheDocument()
     expect(screen.getByText(/Chat history cleared/)).toBeInTheDocument()
   })
 
@@ -152,10 +154,10 @@ describe('AutonomousAgentMonitor', () => {
     act(() => socket.emit({ type: 'chat_reply', content: 'Live while fetching' }))
     expect(await screen.findByText(/Live while fetching/)).toBeInTheDocument()
     await act(async () => {
-      resolveFetch({ success: true, events: [{ created_at: '2026-03-20 10:00:00', type: 'cycle_end', data: { type: 'cycle_end', cycle: 1 } }] })
+      resolveFetch({ success: true, events: [{ created_at: '2026-03-20 10:00:00', type: 'agent_error', data: { type: 'agent_error', error: 'boom-from-history' } }] })
     })
     expect(screen.getByText(/Live while fetching/)).toBeInTheDocument()
-    expect(await screen.findByText(/Task #1 completed/)).toBeInTheDocument()
+    expect(await screen.findByText(/boom-from-history/)).toBeInTheDocument()
   })
 
   it('shows an inline error and a retry when the activity log cannot be loaded', async () => {
@@ -165,9 +167,11 @@ describe('AutonomousAgentMonitor', () => {
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
   })
 
-  it('shows thinking below (older than) the reply it belongs to when streamed chunks flush', async () => {
+  it('raw log: shows thinking below (older than) the reply it belongs to when streamed chunks flush', async () => {
+    const user = userEvent.setup()
     renderMonitor()
     await connect()
+    await user.click(screen.getByRole('button', { name: 'Raw log' }))
     act(() => {
       socket.emit({ type: 'chat_thinking', content: 'THINK-PART', chat_id: 'c' })
       socket.emit({ type: 'chat_content', content: 'REPLY-PART', chat_id: 'c' })
@@ -253,5 +257,128 @@ describe('AutonomousAgentMonitor', () => {
     await user.click(await screen.findByRole('button', { name: 'Run now' }))
     expect(await screen.findByText('queue full')).toBeInTheDocument()
     expect(globalThis.alert).not.toHaveBeenCalled()
+  })
+  // ── Run timeline ────────────────────────────────────────────────────────
+  describe('run timeline', () => {
+    const run = (extra) => ({ run_id: 'r1', chat_id: 'ios:LiveUser', ...extra })
+
+    it('shows a friendly empty state when there is no activity', async () => {
+      api.getAgentStatus.mockResolvedValue({ success: true, running: false })
+      renderMonitor()
+      expect(await screen.findByText('Hime is idle')).toBeInTheDocument()
+      expect(screen.getByText(/send a message from the app/i)).toBeInTheDocument()
+      expect(screen.getByTestId('status-hero')).toHaveTextContent('Stopped')
+    })
+
+    it('renders a live chat run: user bubble, step, status hero, live bubble and Stop reply', async () => {
+      const user = userEvent.setup()
+      renderMonitor()
+      await connect()
+      act(() => {
+        socket.emit(run({ type: 'user_message', content: 'How did I sleep?', sender: 'Me' }))
+        socket.emit(run({ type: 'chat_tool_call', tool: 'analyze', call_id: 'a', arguments: { goal: 'sleep last night' } }))
+        socket.emit(run({ type: 'chat_tool_call', tool: 'sql', call_id: 's', parent: 'analyze', arguments: { query: 'SELECT hr FROM samples' } }))
+      })
+      expect(await screen.findByText('How did I sleep?')).toBeInTheDocument()
+      expect(screen.getByTestId('status-hero')).toHaveTextContent('Working on: Looking through your data')
+      expect(screen.getByTestId('live-bubble')).toBeInTheDocument()
+      // the nested sql step is indented under analyze, both visible while the run is live
+      expect(screen.getByText('Analysing your data')).toBeInTheDocument()
+      // Stop reply calls the chat-stop endpoint
+      await user.click(screen.getByRole('button', { name: 'Stop reply' }))
+      expect(api.stopChat).toHaveBeenCalledTimes(1)
+    })
+
+    it('chat_stopped quietly ends the live bubble and marks the steps stopped', async () => {
+      renderMonitor()
+      await connect()
+      act(() => {
+        socket.emit(run({ type: 'user_message', content: 'long question' }))
+        socket.emit(run({ type: 'chat_tool_call', tool: 'sql', call_id: 's', arguments: { query: 'SELECT 1' } }))
+      })
+      expect(await screen.findByRole('button', { name: 'Stop reply' })).toBeInTheDocument()
+      act(() => socket.emit(run({ type: 'chat_stopped' })))
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Stop reply' })).not.toBeInTheDocument())
+      expect(screen.queryByTestId('live-bubble')).not.toBeInTheDocument()
+      expect(screen.getByText('Reply stopped.')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /Stopped · 1 step/ })).toBeInTheDocument()
+    })
+
+    it('streams chat_reply_delta into a bubble with a caret and replaces it with chat_reply', async () => {
+      renderMonitor()
+      await connect()
+      act(() => {
+        socket.emit(run({ type: 'user_message', content: 'hi' }))
+        socket.emit(run({ type: 'chat_reply_delta', text: 'You slep' }))
+      })
+      expect(await screen.findByTestId('streaming-reply')).toHaveTextContent('You slep')
+      act(() => socket.emit(run({ type: 'chat_reply_delta', text: 'You slept 7h' })))
+      expect(screen.getByTestId('streaming-reply')).toHaveTextContent('You slept 7h')
+      // reset clears a draft that was never delivered
+      act(() => socket.emit(run({ type: 'chat_reply_delta', text: '', reset: true })))
+      expect(screen.queryByTestId('streaming-reply')).not.toBeInTheDocument()
+      act(() => socket.emit(run({ type: 'chat_reply_delta', text: 'You slept 7h 20m' })))
+      expect(screen.getByTestId('streaming-reply')).toBeInTheDocument()
+      act(() => socket.emit(run({ type: 'chat_reply', content: 'You slept 7h 20m.', message_hash: 'h' })))
+      expect(screen.queryByTestId('streaming-reply')).not.toBeInTheDocument()
+      expect(screen.getAllByText(/You slept 7h 20m\./)).toHaveLength(1)
+    })
+
+    it('groups persisted history into runs by run_id, with expandable step results', async () => {
+      const user = userEvent.setup()
+      const ev = (type, data, at) => ({ created_at: at, type, data: { type, ...data } })
+      api.getAgentStatus.mockResolvedValue({ success: true, running: false })
+      api.getAgentActivity.mockResolvedValue({
+        success: true,
+        events: [
+          ev('user_message', { run_id: 'h1', content: 'First question' }, '2026-03-20 10:00:00'),
+          ev('chat_tool_call', { run_id: 'h1', tool: 'sql', call_id: 'c', arguments: { query: 'SELECT night FROM sleep' } }, '2026-03-20 10:00:01'),
+          ev('chat_tool_result', { run_id: 'h1', tool: 'sql', call_id: 'c', success: true, status: 'ok', result: { columns: ['night', 'hours'], rows: [['mon', 7.5]] } }, '2026-03-20 10:00:02'),
+          ev('chat_reply', { run_id: 'h1', content: 'Answer **one**' }, '2026-03-20 10:00:03'),
+          ev('user_message', { run_id: 'h2', content: 'Second question' }, '2026-03-20 10:05:00'),
+          ev('chat_reply', { run_id: 'h2', content: 'Answer two' }, '2026-03-20 10:05:01'),
+        ],
+      })
+      renderMonitor()
+      const first = await screen.findByText('First question')
+      const second = screen.getByText('Second question')
+      // oldest first: the second question comes after the first run
+      expect(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      expect(screen.getByText('one').tagName).toBe('STRONG') // markdown rendered
+      // finished run: collapsed card with a plain-language summary
+      const header = screen.getByRole('button', { name: /Finished · 1 step/ })
+      expect(header).toHaveAttribute('aria-expanded', 'false')
+      await user.click(header)
+      await user.click(screen.getByRole('button', { name: /Looking through your data/ }))
+      expect(screen.getByRole('columnheader', { name: 'hours' })).toBeInTheDocument()
+      expect(screen.getByText('7.5')).toBeInTheDocument()
+    })
+
+    it('renders a background run with its badge, steps and a Report pushed link', async () => {
+      renderMonitor()
+      await connect()
+      act(() => {
+        socket.emit({ type: 'cycle_start', cycle: 3, goal: 'Daily sleep analysis' })
+        socket.emit({ type: 'analysis_tool_call', tool: 'sql', arguments: { query: 'SELECT 1' }, cycle: 3 })
+        socket.emit({ type: 'analysis_tool_result', tool: 'sql', success: true, result: { columns: ['a'], rows: [[1]] }, cycle: 3 })
+        socket.emit({ type: 'report_pushed', report_id: 12, cycle: 3 })
+        socket.emit({ type: 'cycle_end', cycle: 3 })
+      })
+      expect(await screen.findByText('Scheduled')).toBeInTheDocument()
+      expect(screen.getByText('Daily sleep analysis')).toBeInTheDocument()
+      expect(screen.getByText('Report pushed')).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: 'View reports' })).toHaveAttribute('href', '/reports')
+    })
+
+    it('keeps the raw log available as a separate view', async () => {
+      const user = userEvent.setup()
+      renderMonitor()
+      await connect()
+      act(() => socket.emit({ type: 'chat_reply', content: 'visible in both views' }))
+      expect(await screen.findByText(/visible in both views/)).toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: 'Raw log' }))
+      expect(screen.getByRole('button', { name: 'Raw log' })).toHaveAttribute('aria-pressed', 'true')
+      expect(screen.getByText(/🤖 visible in both views/)).toBeInTheDocument()
+    })
   })
 })

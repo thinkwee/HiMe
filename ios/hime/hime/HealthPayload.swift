@@ -5,7 +5,7 @@ import Foundation
 // "v":  The numeric value
 // "f":  The feature name (e.g., "steps", "heart_rate")
 // Wire example: {"ts":1709500042.3, "v":72.0, "f":"heart_rate"}
-struct HealthPayload: Codable {
+nonisolated struct HealthPayload: Codable {
     let ts: Double
     let v:  Double
     let f:  String

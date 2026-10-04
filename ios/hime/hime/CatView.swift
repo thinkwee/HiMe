@@ -6,6 +6,7 @@ import UIKit
 struct CatMainView: View {
     @StateObject private var vm = CatViewModel()
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let _ = vm.animFrame
@@ -48,6 +49,8 @@ struct CatMainView: View {
                             catPose: vm.catPose
                         )
                         .frame(width: geo.size.width, height: geo.size.height)
+                        // The room is art and stays as-is; just take the glare off in dark mode.
+                        .brightness(colorScheme == .dark ? -0.12 : 0)
 
                         if vm.showNya {
                             PixelChatBubble(text: "NYA~!").offset(x: 90, y: -100)
@@ -89,10 +92,11 @@ struct CatMainView: View {
                             // Message
                             VStack(spacing: 4) {
                                 Text(vm.catMessage)
-                                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                                    .font(.system(.caption, design: .monospaced).weight(.medium))
                                     .multilineTextAlignment(.center)
-                                    .foregroundColor(Color(red: 0.35, green: 0.30, blue: 0.25).opacity(0.8))
+                                    .foregroundColor(HimeColor.ink)
                                     .lineLimit(4)
+                                    .minimumScaleFactor(0.85)
                                     .padding(.horizontal, 20)
                                     .animation(.easeInOut(duration: 0.5), value: vm.catMessage)
 
@@ -107,15 +111,15 @@ struct CatMainView: View {
                             NavigationLink(value: AppRoute.chat) {
                                 HStack(spacing: 6) {
                                     Image(systemName: "bubble.left.and.bubble.right.fill")
-                                        .font(.system(size: 13))
+                                        .font(.footnote)
                                     Text("Chat with Hime")
-                                        .font(.system(size: 13, weight: .semibold))
+                                        .font(.footnote.weight(.semibold))
                                 }
-                                .foregroundColor(.blue)
+                                .foregroundColor(HimeColor.accentStrong)
                                 .padding(.horizontal, 22).padding(.vertical, 10)
                                 .background(Capsule().fill(.ultraThinMaterial))
-                                .overlay(Capsule().stroke(Color.blue.opacity(0.2), lineWidth: 1))
-                                .shadow(color: .blue.opacity(0.08), radius: 4, y: 2)
+                                .overlay(Capsule().stroke(HimeColor.accent.opacity(0.45), lineWidth: 1))
+                                .shadow(color: HimeColor.accent.opacity(0.15), radius: 4, y: 2)
                             }
 
                             // Row 2: Sync + Agent sliding toggles
@@ -124,7 +128,7 @@ struct CatMainView: View {
                                     isOn: vm.isConnected,
                                     onLabel: "Sync",
                                     offLabel: "Sync",
-                                    onColor: .green,
+                                    onColor: HimeColor.leaf,
                                     isLoading: false
                                 ) { vm.toggleConnect() }
 
@@ -154,7 +158,7 @@ struct CatMainView: View {
             }
         }
         .ignoresSafeArea()
-        .background(Color(red: 0.82, green: 0.78, blue: 0.72).ignoresSafeArea())
+        .background(HimeColor.paper.ignoresSafeArea())
         // Pause the 60 Hz animation timer when this screen is off-screen or
         // the app is not active.
         .onAppear { vm.setAnimationActive(scenePhase == .active) }
@@ -184,15 +188,15 @@ struct SlidingToggle: View {
             ZStack {
                 // Track
                 Capsule()
-                    .fill(isOn ? onColor.opacity(0.2) : Color(white: 0.88))
-                    .overlay(Capsule().stroke(isOn ? onColor.opacity(0.3) : Color(white: 0.78), lineWidth: 1))
+                    .fill(isOn ? onColor.opacity(0.2) : HimeColor.idle)
+                    .overlay(Capsule().stroke(isOn ? onColor.opacity(0.3) : HimeColor.line, lineWidth: 1))
 
                 // Sliding knob
                 HStack {
                     if isOn { Spacer() }
                     ZStack {
                         Capsule()
-                            .fill(isOn ? onColor : Color(white: 0.55))
+                            .fill(isOn ? onColor : HimeColor.idleStrong)
                             .shadow(color: (isOn ? onColor : .black).opacity(0.2), radius: 3, y: 1)
                         if isLoading {
                             ProgressView().scaleEffect(0.5).tint(.white)
@@ -211,8 +215,8 @@ struct SlidingToggle: View {
                 HStack {
                     if !isOn { Spacer() }
                     Text(isOn ? "On" : "Off")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(isOn ? onColor.opacity(0.6) : Color(white: 0.45))
+                        .font(.caption2.weight(.medium))
+                        .foregroundColor(isOn ? onColor.opacity(0.8) : HimeColor.ink2)
                         .padding(.horizontal, 12)
                     if isOn { Spacer() }
                 }

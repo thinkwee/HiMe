@@ -88,7 +88,9 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         // Every proactive notification we send is a chat reply / report, so a
         // tap deep-links into the Chat screen. ContentView observes the router
         // and pushes Chat (reconcile() then pulls in the just-arrived message).
-        Task { @MainActor in AppRouter.shared.requestChat() }
+        // Replies in a non-main thread carry its id; proactive pushes have none (→ main).
+        let threadId = response.notification.request.content.userInfo["thread_id"] as? String
+        Task { @MainActor in AppRouter.shared.requestChat(threadId: threadId) }
         completionHandler()
     }
 }

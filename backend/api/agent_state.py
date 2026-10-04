@@ -158,6 +158,15 @@ class ChatMessageRequest(BaseModel):
     # Optional inbound image (only honoured when IOS_VISION_ENABLED).
     image_base64: str | None = None
     image_mime: str | None = None
+    # In-app conversation ("main" or a 32-hex thread id); default = main.
+    thread_id: str | None = None
+
+
+class ChatStopRequest(BaseModel):
+    """Request body for POST /api/agent/chat/stop (all fields optional)."""
+    user_id: str | None = None
+    # Stop only if the active chat run belongs to this thread (omit = any run).
+    thread_id: str | None = None
 
 
 # ---------------------------------------------------------------------------

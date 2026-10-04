@@ -33,7 +33,9 @@ final class ChatStreamClient: NSObject {
     /// True between `connect()` and `disconnect()` — i.e. the view wants a live socket.
     private var wantsConnection = false
     /// True once the current socket has delivered a real (non-error) message.
-    private var isOpen = false
+    private var isOpen = false {
+        didSet { if isOpen != oldValue { onLiveChange?(isOpen) } }
+    }
     /// Bumped whenever a socket is created or dropped, so callbacks from a
     /// stale socket (late receive failure, old ping completion) are ignored.
     private var generation = 0
@@ -51,6 +53,11 @@ final class ChatStreamClient: NSObject {
     var onEvent: (([String: Any]) -> Void)?
     /// Called on the main actor each time a (re)connection is confirmed live.
     var onConnected: (() -> Void)?
+    /// Called on the main actor whenever the socket flips between live and down
+    /// (drives the "Reconnecting…" indicator).
+    var onLiveChange: ((Bool) -> Void)?
+    /// True once the current socket has delivered a real message.
+    var isLive: Bool { isOpen }
 
     /// Map the API base URL (http→ws, https→wss) and append the stream path.
     private func streamURL() -> URL? {
@@ -271,7 +278,7 @@ final class ChatStreamClient: NSObject {
         monitor.pathUpdateHandler = { [weak self] path in
             let satisfied = path.status == .satisfied
             let key = "\(satisfied)-" + path.availableInterfaces.map { "\($0.type)" }.joined(separator: ",")
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self else { return }
                 let changed = self.lastPathKey != nil && self.lastPathKey != key
                 self.lastPathKey = key

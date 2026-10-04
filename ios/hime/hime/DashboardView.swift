@@ -61,7 +61,7 @@ struct DashboardView: View {
                 }
             }
         }
-        .background(Color(.systemGroupedBackground))
+        .background(HimeColor.paper)
         .onAppear {
             if !hasStarted {
                 hasStarted = true
@@ -102,11 +102,25 @@ private struct AgentStatusCard: View {
 
     private var stateColor: Color {
         let s = viewModel.analysisState.lowercased()
-        if s.contains("think") { return .purple }
-        if s.contains("execut") { return .orange }
-        if s.contains("sleep") { return .indigo }
-        if s.contains("quick") { return .pink }
-        return .secondary
+        if s.contains("think") { return HimeColor.accentStrong }
+        if s.contains("execut") { return HimeColor.warn }
+        if s.contains("sleep") { return HimeColor.sky }
+        if s.contains("quick") { return HimeColor.rose }
+        if s.hasPrefix("chat") { return HimeColor.ok }
+        return HimeColor.ink2
+    }
+
+    /// Friendly, localized label for the backend's raw analysis-state string.
+    private var stateLabel: String {
+        let s = viewModel.analysisState.lowercased()
+        if s == "idle" || s.isEmpty { return String(localized: "Idle") }
+        if s == "initialized" { return String(localized: "Starting up") }
+        if s.contains("quick") { return String(localized: "Quick check") }
+        if s.hasPrefix("chat") { return String(localized: "Chatting") }
+        if s.contains("think") { return String(localized: "Thinking") }
+        if s.contains("execut") || s.contains("analy") { return String(localized: "Working") }
+        if s.contains("sleep") { return String(localized: "Sleeping") }
+        return viewModel.analysisState.replacingOccurrences(of: "_", with: " ").capitalized
     }
 
     /// Record counts: raw below 1,000, then "1.2K" / "3.4M".
@@ -127,20 +141,20 @@ private struct AgentStatusCard: View {
             HStack {
                 Image(systemName: viewModel.isAgentRunning ? "brain.fill" : "brain")
                     .font(.title2)
-                    .foregroundColor(viewModel.isAgentRunning ? .green : .secondary)
+                    .foregroundColor(viewModel.isAgentRunning ? HimeColor.ok : HimeColor.ink2)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Agent")
                         .font(.headline)
                     Text(viewModel.agentModel ?? String(localized: "Not configured"))
                         .font(.caption)
-                        .foregroundColor(.secondary)
+                        .foregroundColor(HimeColor.ink2)
                 }
                 Spacer()
                 // State badge
                 HStack(spacing: 4) {
                     Image(systemName: stateIcon)
-                        .font(.system(size: 10))
-                    Text(viewModel.analysisState.replacingOccurrences(of: "_", with: " ").capitalized)
+                        .font(.caption2)
+                    Text(stateLabel)
                         .font(.caption2.weight(.medium))
                 }
                 .foregroundColor(stateColor)
@@ -164,18 +178,18 @@ private struct AgentStatusCard: View {
             // Token usage row
             if viewModel.promptTokens + viewModel.completionTokens > 0 {
                 HStack(spacing: 0) {
-                    TokenCell(label: "Input", value: formatTokens(viewModel.promptTokens), color: .blue)
-                    TokenCell(label: "Thinking", value: formatTokens(viewModel.thoughtsTokens), color: .purple)
-                    TokenCell(label: "Output", value: formatTokens(viewModel.completionTokens), color: .green)
+                    TokenCell(label: "Input", value: formatTokens(viewModel.promptTokens), color: HimeColor.accentStrong)
+                    TokenCell(label: "Thinking", value: formatTokens(viewModel.thoughtsTokens), color: HimeColor.rose)
+                    TokenCell(label: "Output", value: formatTokens(viewModel.completionTokens), color: HimeColor.ok)
                 }
                 .padding(.vertical, 4)
-                .background(Color(.tertiarySystemGroupedBackground))
+                .background(HimeColor.paper)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
             }
         }
         .padding(12)
-        .background(Color(.secondarySystemGroupedBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(HimeColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: HimeRadius.card, style: .continuous))
     }
 
     private func formatRelativeTime(_ iso: String) -> String {
@@ -213,13 +227,13 @@ private struct StatCell: View {
     var body: some View {
         VStack(spacing: 2) {
             Text(value)
-                .font(.system(size: 15, weight: .semibold, design: .rounded).monospacedDigit())
-                .foregroundColor(.primary)
+                .font(.system(.subheadline, design: .rounded).weight(.semibold).monospacedDigit())
+                .foregroundColor(HimeColor.ink)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
             Text(label)
                 .font(.caption2)
-                .foregroundColor(.secondary)
+                .foregroundColor(HimeColor.ink2)
         }
         .frame(maxWidth: .infinity)
     }
@@ -232,11 +246,13 @@ private struct TokenCell: View {
     var body: some View {
         VStack(spacing: 2) {
             Text(value)
-                .font(.system(size: 13, weight: .semibold, design: .rounded).monospacedDigit())
+                .font(.system(.footnote, design: .rounded).weight(.semibold).monospacedDigit())
                 .foregroundColor(color)
             Text(label)
-                .font(.system(size: 9))
-                .foregroundColor(.secondary)
+                .font(.caption2)
+                .foregroundColor(HimeColor.ink2)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
         .frame(maxWidth: .infinity)
     }
@@ -252,7 +268,7 @@ private struct HealthChartSection: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Health Summary")
                 .font(.headline)
-                .foregroundColor(.primary)
+                .foregroundColor(HimeColor.ink)
 
             let hasAnyData = viewModel.metricCategories.contains { !$0.series.isEmpty }
 
@@ -275,13 +291,13 @@ private struct EmptyMetricsView: View {
         VStack(spacing: 10) {
             Image(systemName: "heart.text.square")
                 .font(.system(size: 32))
-                .foregroundColor(.secondary.opacity(0.4))
+                .foregroundColor(HimeColor.ink2.opacity(0.5))
             Text("Waiting for data...")
                 .font(.subheadline)
-                .foregroundColor(.secondary)
+                .foregroundColor(HimeColor.ink2)
             Text("Wear your Apple Watch and sync data to see metrics here.")
                 .font(.caption)
-                .foregroundColor(.secondary.opacity(0.7))
+                .foregroundColor(HimeColor.ink2)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
@@ -297,7 +313,7 @@ private struct MetricCategorySection: View {
 
     private var categoryColor: Color {
         switch categoryData.category.color {
-        case "amber":  return .orange
+        case "amber":  return HimeColor.accent
         case "orange": return .orange
         case "red":    return .red
         case "indigo": return .indigo
@@ -320,14 +336,14 @@ private struct MetricCategorySection: View {
 
                 Text(categoryData.category.rawValue)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.primary)
+                    .foregroundColor(HimeColor.ink)
 
                 Spacer()
 
                 if categoryData.series.isEmpty {
                     Text("No data")
                         .font(.caption2)
-                        .foregroundColor(.secondary.opacity(0.6))
+                        .foregroundColor(HimeColor.ink2)
                 }
             }
 
@@ -337,10 +353,10 @@ private struct MetricCategorySection: View {
                     VStack(spacing: 4) {
                         Image(systemName: "chart.line.downtrend.xyaxis")
                             .font(.system(size: 20))
-                            .foregroundColor(.secondary.opacity(0.3))
+                            .foregroundColor(HimeColor.ink2.opacity(0.5))
                         Text("No data yet")
                             .font(.caption2)
-                            .foregroundColor(.secondary.opacity(0.5))
+                            .foregroundColor(HimeColor.ink2.opacity(0.5))
                     }
                     .padding(.vertical, 12)
                     Spacer()
@@ -379,8 +395,8 @@ private struct MetricCategorySection: View {
             }
         }
         .padding(12)
-        .background(Color(.secondarySystemGroupedBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(HimeColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: HimeRadius.card, style: .continuous))
     }
 }
 
@@ -394,48 +410,50 @@ private struct SmallMetricCard: View {
 
     private var trendColor: Color {
         switch series.trend.color {
-        case "green": return .green
-        case "red":   return .red
-        case "blue":  return .blue
-        default:      return .secondary
+        case "green": return HimeColor.ok
+        case "red":   return HimeColor.bad
+        case "blue":  return HimeColor.sky
+        default:      return HimeColor.ink2
         }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(series.displayName)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundColor(.secondary)
+                .font(.caption2.weight(.medium))
+                .foregroundColor(HimeColor.ink2)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
 
             if let latestRaw = series.latestValue {
                 HStack(spacing: 2) {
                     Text(category.formatValue(latestRaw, key: series.feature))
-                        .font(.system(size: 16, weight: .bold, design: .rounded).monospacedDigit())
-                        .foregroundColor(.primary)
+                        .font(.system(.callout, design: .rounded).weight(.bold).monospacedDigit())
+                        .foregroundColor(HimeColor.ink)
                         .lineLimit(1)
                         .minimumScaleFactor(0.6)
 
                     if !series.unit.isEmpty {
                         Text(series.unit)
-                            .font(.system(size: 8))
-                            .foregroundColor(.secondary)
+                            .font(.caption2)
+                            .foregroundColor(HimeColor.ink2)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
                     }
                 }
 
                 Image(systemName: series.trend.icon)
-                    .font(.system(size: 8, weight: .bold))
+                    .font(.caption2.weight(.bold))
                     .foregroundColor(trendColor)
             } else {
                 Text("--")
-                    .font(.system(size: 16, weight: .bold, design: .rounded))
-                    .foregroundColor(.secondary)
+                    .font(.system(.callout, design: .rounded).weight(.bold))
+                    .foregroundColor(HimeColor.ink2)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(8)
-        .background(isExpanded ? accentColor.opacity(0.1) : Color(.tertiarySystemGroupedBackground))
+        .background(isExpanded ? accentColor.opacity(0.1) : HimeColor.paper)
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -453,10 +471,10 @@ private struct MetricChartCard: View {
 
     private var trendColor: Color {
         switch series.trend.color {
-        case "green": return .green
-        case "red":   return .red
-        case "blue":  return .blue
-        default:      return .secondary
+        case "green": return HimeColor.ok
+        case "red":   return HimeColor.bad
+        case "blue":  return HimeColor.sky
+        default:      return HimeColor.ink2
         }
     }
 
@@ -503,23 +521,23 @@ private struct MetricChartCard: View {
             HStack(spacing: 6) {
                 Text(series.displayName)
                     .font(.caption.weight(.medium))
-                    .foregroundColor(.primary)
+                    .foregroundColor(HimeColor.ink)
 
                 Spacer()
 
                 if let latestRaw = series.latestValue {
                     Text(category.formatValue(latestRaw, key: series.feature))
-                        .font(.system(size: 15, weight: .semibold, design: .rounded).monospacedDigit())
-                        .foregroundColor(.primary)
+                        .font(.system(.subheadline, design: .rounded).weight(.semibold).monospacedDigit())
+                        .foregroundColor(HimeColor.ink)
 
                     if !series.unit.isEmpty {
                         Text(series.unit)
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
+                            .font(.caption2)
+                            .foregroundColor(HimeColor.ink2)
                     }
 
                     Image(systemName: series.trend.icon)
-                        .font(.system(size: 10, weight: .bold))
+                        .font(.caption2.weight(.bold))
                         .foregroundColor(trendColor)
                 }
             }
@@ -537,14 +555,14 @@ private struct MetricChartCard: View {
                     Spacer()
                     Text("1 data point recorded")
                         .font(.caption2)
-                        .foregroundColor(.secondary.opacity(0.6))
+                        .foregroundColor(HimeColor.ink2)
                     Spacer()
                 }
                 .frame(height: 30)
             }
         }
         .padding(10)
-        .background(Color(.tertiarySystemGroupedBackground))
+        .background(HimeColor.paper)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
@@ -591,19 +609,19 @@ private struct MetricChartCard: View {
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: xTickCount)) { _ in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.3))
-                    .foregroundStyle(Color.secondary.opacity(0.3))
+                    .foregroundStyle(HimeColor.line)
                 AxisValueLabel(format: xAxisFormat)
-                    .font(.system(size: 7))
-                    .foregroundStyle(Color.secondary)
+                    .font(.caption2)
+                    .foregroundStyle(HimeColor.ink2)
             }
         }
         .chartYAxis {
             AxisMarks(values: .automatic(desiredCount: 4)) { _ in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.3))
-                    .foregroundStyle(Color.secondary.opacity(0.3))
+                    .foregroundStyle(HimeColor.line)
                 AxisValueLabel()
-                    .font(.system(size: 8))
-                    .foregroundStyle(Color.secondary)
+                    .font(.caption2)
+                    .foregroundStyle(HimeColor.ink2)
             }
         }
         .chartYScale(domain: yDomain)
@@ -615,7 +633,7 @@ private struct MetricChartCard: View {
 private struct SleepStageTimeline: View {
     let blocks: [SleepBlock]
 
-    private static func stageColor(_ stage: SleepStage) -> Color {
+    nonisolated private static func stageColor(_ stage: SleepStage) -> Color {
         switch stage {
         case .deep:  return Color(red: 0.25, green: 0.15, blue: 0.65)  // deep purple
         case .core:  return Color(red: 0.40, green: 0.55, blue: 0.95)  // soft blue
@@ -659,8 +677,8 @@ private struct SleepStageTimeline: View {
                             .fill(Self.stageColor(stage))
                             .frame(width: 12, height: 12)
                         Text(stage.rawValue)
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
+                            .font(.caption2)
+                            .foregroundColor(HimeColor.ink2)
                     }
                 }
             }
@@ -736,19 +754,19 @@ private struct NightBarView: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline) {
                 Text(nightLabel)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.primary)
+                    .font(.caption.weight(.medium))
+                    .foregroundColor(HimeColor.ink)
                 Spacer()
                 let h = totalSleepMinutes / 60
                 let m = totalSleepMinutes % 60
                 Text("\(h)h \(m)m")
-                    .font(.system(size: 12, weight: .bold, design: .rounded))
-                    .foregroundColor(.primary)
+                    .font(.system(.caption, design: .rounded).weight(.bold).monospacedDigit())
+                    .foregroundColor(HimeColor.ink)
             }
 
             Text(timeRangeLabel)
-                .font(.system(size: 9))
-                .foregroundColor(.secondary)
+                .font(.caption2)
+                .foregroundColor(HimeColor.ink2)
 
             // Proportion-based bar: each block's width = duration / total_duration.
             // Sessions are separated by a thin gap.
@@ -785,8 +803,10 @@ private struct NightBarView: View {
                             .fill(stageColor(stage))
                             .frame(width: 6, height: 6)
                         Text("\(stage.rawValue) \(mins)m")
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
+                            .font(.caption2.monospacedDigit())
+                            .foregroundColor(HimeColor.ink2)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                     }
                 }
             }

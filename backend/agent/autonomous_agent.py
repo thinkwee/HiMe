@@ -22,6 +22,7 @@ import time
 from collections.abc import AsyncIterator
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from ..config import settings
 from ..messaging.inbox import InboxQueue
@@ -30,6 +31,7 @@ from .agent_loops import AgentLoopsMixin, spawn_background
 from .agent_prompts import AgentPromptsMixin
 from .agent_tools import AgentToolsMixin
 from .cancellation import CancellationToken
+from .chat_stream import json_safe
 from .llm_providers import BaseLLMProvider
 from .persistence import AgentStateRepository
 from .skills.registry import SkillRegistry
@@ -156,6 +158,15 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
 
         # Cancellation token — cascade cancel to all child operations on stop
         self._cancellation = CancellationToken()
+        # Per-run chat cancellation (POST /api/agent/chat/stop). The task is the
+        # in-flight ``_handle_chat_message``; the flag lets run_forever tell a
+        # user stop apart from agent shutdown. ``_chat_run_id`` tags chat_*
+        # events (see ``_emit``) so clients can group them per user message.
+        self._chat_task: asyncio.Task | None = None
+        self._chat_stop_requested: bool = False
+        self._chat_run_id: str | None = None
+        # Thread of the in-flight in-app chat run (None for IM / idle).
+        self._chat_thread_id: str | None = None
 
         # Set up tool progress callbacks (push events to WebSocket stream)
         self._setup_tool_progress()
@@ -343,7 +354,77 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
     # ==================================================================
 
     async def _emit(self, event: dict) -> None:
-        await self._event_queue.put(event)
+        # Stamp every chat event emitted during a handled message with its run
+        # id (additive field; also covers gateway-emitted chat_reply/chat_image).
+        etype = event.get("type", "")
+        is_chat = isinstance(etype, str) and (
+            etype.startswith("chat_") or etype == "user_message"
+        ) and etype not in ("chat_thread_updated", "chat_thread_deleted")
+        rid = self._chat_run_id
+        if rid and is_chat and "run_id" not in event:
+            event["run_id"] = rid
+        # In-app threads: every chat event names its thread. An explicit
+        # chat_id (``<uid>`` / ``<uid>:<tid>``) wins, e.g. proactive pushes
+        # are main even if a thread's run is in flight.
+        if is_chat and "thread_id" not in event:
+            from ..ios_gateway.threads import thread_id_from_chat_id
+            cid = event.get("chat_id")
+            uid = self.user_id
+            if isinstance(cid, str) and (cid == uid or cid.startswith(f"{uid}:")):
+                event["thread_id"] = thread_id_from_chat_id(cid, uid)
+            elif self._chat_thread_id:
+                event["thread_id"] = self._chat_thread_id
+        # One choke point for every consumer (WS fan-out, activity_log, gateways).
+        await self._event_queue.put(json_safe(event))
+
+    def stop_chat(self, thread_id: str | None = None) -> bool:
+        """Cancel the in-flight chat run (not the agent, not queued analysis).
+
+        Returns True if a run was active and cancellation was requested. The
+        run_forever chat worker sees the cancelled task, treats it as a user
+        stop (not shutdown) and carries on with the next queued message.
+        """
+        task = self._chat_task
+        if task is None or task.done():
+            return False
+        if thread_id is not None and (self._chat_thread_id or "main") != thread_id:
+            return False  # the active run belongs to another thread
+        self._chat_stop_requested = True
+        task.cancel()
+        return True
+
+    async def _run_chat_envelope(self, env: Any) -> None:
+        """Run ``_handle_chat_message`` as a stoppable child task.
+
+        ``asyncio.wait`` (instead of ``await task``) keeps the two sources of
+        cancellation apart: shutdown cancels *this* coroutine (CancelledError
+        raised here, child cancelled and re-raised), while a user stop cancels
+        only the child, which simply comes back ``cancelled()``. No reliance on
+        ``Task.cancelling()`` so it works on Python 3.10.
+        """
+        from .chat_threads import envelope_thread_id
+        self._chat_stop_requested = False
+        self._chat_thread_id = envelope_thread_id(env, self.user_id)
+        task = asyncio.create_task(self._handle_chat_message(env))
+        self._chat_task = task
+        try:
+            await asyncio.wait({task})
+            # Explicit end-of-run marker (additive): lets clients settle the
+            # turn block as soon as the run is over, however it ended.
+            await self._emit({"type": "chat_run_done"})
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
+        finally:
+            self._chat_task = None
+            self._chat_run_id = None
+            self._chat_thread_id = None
+        if task.cancelled():
+            logger.info("Chat run stopped by user")
+            return
+        exc = task.exception()
+        if exc is not None:
+            raise exc
 
     def _chat_memory(self):
         """Lazily-constructed MemoryManager for chat-history persistence.
@@ -444,7 +525,7 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
                                 # One bad envelope must not drop the rest of
                                 # the batch (they were already popped).
                                 try:
-                                    await self._handle_chat_message(env)
+                                    await self._run_chat_envelope(env)
                                 except asyncio.CancelledError:
                                     raise
                                 except Exception as exc:
@@ -542,12 +623,12 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
 
         def on_progress(tool_name: str, data) -> None:
             try:
-                self._event_queue.put_nowait({
+                self._event_queue.put_nowait(json_safe({
                     "type": "tool_progress",
                     "tool": tool_name,
                     "data": data,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
-                })
+                }))
             except asyncio.QueueFull:
                 pass  # Drop progress events if queue is full
 

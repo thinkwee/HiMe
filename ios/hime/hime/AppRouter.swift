@@ -13,6 +13,8 @@ import SwiftUI
 /// Routes the app can deep-link to.
 enum AppRoute: Hashable {
     case chat
+    /// Open a specific chat thread (notification tap for a non-main reply).
+    case thread(id: String)
     /// Open the Reports tab and expand a specific report (from a chat bubble's
     /// "view full report" button).
     case report(id: Int)
@@ -34,7 +36,14 @@ final class AppRouter: ObservableObject {
 
     private init() {}
 
-    func requestChat() { pendingRoute = .chat }
+    /// Open Chat: the main thread, or `threadId` when the notification names one.
+    func requestChat(threadId: String? = nil) {
+        if let threadId, !threadId.isEmpty, threadId != chatMainThreadId {
+            pendingRoute = .thread(id: threadId)
+        } else {
+            pendingRoute = .chat
+        }
+    }
 
     func requestReport(_ id: Int) {
         pendingReportId = id

@@ -129,6 +129,19 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             image_id      TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS chat_threads (
+            id          TEXT PRIMARY KEY,
+            title       TEXT NOT NULL,
+            created_at  TEXT,
+            updated_at  TEXT,
+            pinned      INTEGER DEFAULT 0,
+            archived    INTEGER DEFAULT 0
+        );
+
+        INSERT OR IGNORE INTO chat_threads (id, title, created_at, updated_at, pinned, archived)
+            VALUES ('main', 'Hime', strftime('%Y-%m-%dT%H:%M:%S', 'now'),
+                    strftime('%Y-%m-%dT%H:%M:%S', 'now'), 1, 0);
+
         CREATE TABLE IF NOT EXISTS onboarding_survey (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             created_at   TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
@@ -301,7 +314,11 @@ class MemoryManager:
         events = []
         for row in rows:  # already in chronological order
             try:
-                data = json.loads(row["event_data"]) if row["event_data"] else {}
+                # Rows written before events were sanitised may hold NaN: read as null.
+                data = (
+                    json.loads(row["event_data"], parse_constant=lambda _c: None)
+                    if row["event_data"] else {}
+                )
             except json.JSONDecodeError:
                 data = {"raw": row["event_data"]}
             events.append(
@@ -420,6 +437,15 @@ class MemoryManager:
                         for t in turns
                     ],
                 )
+                # Bump the owning thread's updated_at (iOS keys only).
+                from ..ios_gateway.threads import thread_id_from_history_key
+                tid = thread_id_from_history_key(history_key)
+                if tid is not None:
+                    conn.execute(
+                        "UPDATE chat_threads SET updated_at = "
+                        "strftime('%Y-%m-%dT%H:%M:%S', 'now') WHERE id = ?",
+                        (tid,),
+                    )
                 # Bound table size per conversation.
                 count = conn.execute(
                     "SELECT COUNT(*) FROM chat_history WHERE history_key = ?",
@@ -451,6 +477,109 @@ class MemoryManager:
                 (history_key, limit),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Chat threads (in-app conversations; main thread is permanent)
+    # ------------------------------------------------------------------
+
+    def _thread_history_key(self, thread_id: str) -> str:
+        from ..ios_gateway.threads import history_key_for
+        return history_key_for(self.user_id, thread_id)
+
+    def _thread_row(self, conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
+        d = dict(row)
+        d["pinned"] = bool(d.get("pinned"))
+        d["archived"] = bool(d.get("archived"))
+        last = conn.execute(
+            "SELECT role, content, created_at FROM chat_history "
+            "WHERE history_key = ? ORDER BY id DESC LIMIT 1",
+            (self._thread_history_key(d["id"]),),
+        ).fetchone()
+        d["last_message"] = (
+            {"role": last[0], "content": (last[1] or "")[:120], "created_at": last[2]}
+            if last else None
+        )
+        return d
+
+    def list_chat_threads(self, include_archived: bool = False) -> list[dict[str, Any]]:
+        """Threads: main first, then pinned, then by updated_at desc."""
+        with sqlite3.connect(self.db_file, timeout=30) as conn:
+            conn.row_factory = sqlite3.Row
+            _ensure_schema(conn)
+            rows = conn.execute(
+                "SELECT * FROM chat_threads "
+                + ("" if include_archived else "WHERE archived = 0 OR id = 'main' ")
+                + "ORDER BY (id = 'main') DESC, pinned DESC, updated_at DESC, created_at DESC"
+            ).fetchall()
+            return [self._thread_row(conn, r) for r in rows]
+
+    def get_chat_thread(self, thread_id: str) -> dict[str, Any] | None:
+        with sqlite3.connect(self.db_file, timeout=30) as conn:
+            conn.row_factory = sqlite3.Row
+            _ensure_schema(conn)
+            row = conn.execute(
+                "SELECT * FROM chat_threads WHERE id = ?", (thread_id,)
+            ).fetchone()
+            return self._thread_row(conn, row) if row else None
+
+    def create_chat_thread(self, title: str = "") -> dict[str, Any]:
+        import uuid
+        tid = uuid.uuid4().hex
+        with sqlite3.connect(self.db_file, timeout=30) as conn:
+            _ensure_schema(conn)
+            conn.execute(
+                "INSERT INTO chat_threads (id, title, created_at, updated_at, pinned, archived) "
+                "VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%S', 'now'), "
+                "strftime('%Y-%m-%dT%H:%M:%S', 'now'), 0, 0)",
+                (tid, (title or "").strip()[:80]),
+            )
+            conn.commit()
+        return self.get_chat_thread(tid) or {"id": tid}
+
+    def update_chat_thread(
+        self,
+        thread_id: str,
+        title: str | None = None,
+        pinned: bool | None = None,
+        archived: bool | None = None,
+        touch: bool = False,
+    ) -> dict[str, Any] | None:
+        sets: list[str] = []
+        args: list[Any] = []
+        if title is not None:
+            sets.append("title = ?")
+            args.append(title.strip()[:80])
+        if pinned is not None:
+            sets.append("pinned = ?")
+            args.append(1 if pinned else 0)
+        if archived is not None:
+            sets.append("archived = ?")
+            args.append(1 if archived else 0)
+        if touch:
+            sets.append("updated_at = strftime('%Y-%m-%dT%H:%M:%S', 'now')")
+        if sets:
+            with sqlite3.connect(self.db_file, timeout=30) as conn:
+                _ensure_schema(conn)
+                conn.execute(
+                    f"UPDATE chat_threads SET {', '.join(sets)} WHERE id = ?",
+                    (*args, thread_id),
+                )
+                conn.commit()
+        return self.get_chat_thread(thread_id)
+
+    def delete_chat_thread(self, thread_id: str) -> bool:
+        """Delete a non-main thread and its transcript rows."""
+        if thread_id == "main":
+            return False
+        with sqlite3.connect(self.db_file, timeout=30) as conn:
+            _ensure_schema(conn)
+            conn.execute(
+                "DELETE FROM chat_history WHERE history_key = ?",
+                (self._thread_history_key(thread_id),),
+            )
+            cur = conn.execute("DELETE FROM chat_threads WHERE id = ?", (thread_id,))
+            conn.commit()
+            return cur.rowcount > 0
 
     def recent_user_text(self, limit: int = 12) -> str:
         """Concatenated text of the most recent *user* chat turns across ALL

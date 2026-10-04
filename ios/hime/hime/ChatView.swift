@@ -15,12 +15,30 @@
 import SwiftUI
 import PhotosUI
 
+/// One conversation. Thread-scoped: the view model is supplied (and cached) by
+/// `ChatHub`, which also owns the shared event stream, so this view only
+/// renders and reports when it is on screen.
 struct ChatView: View {
-    @StateObject private var vm = ChatViewModel()
+    @ObservedObject var vm: ChatViewModel
+    /// Reconnect marker; a separate observable so thread-list churn in
+    /// `ChatHub` never re-renders the message list.
+    @ObservedObject var connection: ChatConnectionState
+    let title: String
+    /// Open the thread list / start a new thread. nil on old servers without
+    /// thread support (the buttons are then hidden).
+    var onShowThreads: (() -> Void)?
+    var onNewThread: (() -> Void)?
+    /// Show a dot on the list button when another thread has unread messages.
+    var hasUnreadElsewhere = false
     @FocusState private var inputFocused: Bool
     /// Whether the viewport is at (or near) the newest message — gates whether
     /// incoming messages pull the list down.
     @State private var nearBottom = true
+    /// True while the user's finger is on the list or it is coasting from a
+    /// flick. Programmatic scrolls must never run then: `scrollTo` cancels the
+    /// in-flight drag/deceleration, which is exactly the "snaps back / gets
+    /// stuck when scrolling up" symptom.
+    @State private var userScrolling = false
 
     private static let bottomID = "chat-bottom"
 
@@ -45,24 +63,26 @@ struct ChatView: View {
                 ScrollView {
                     LazyVStack(spacing: 14) {
                         ForEach(vm.rows) { row in
-                            ChatBubble(
-                                message: row.message,
-                                showAvatar: row.showAvatar,
-                                loadEvidence: { msg in await vm.evidence(for: msg) },
-                                onRetry: { id in vm.retry(messageId: id) }
-                            )
-                            .equatable()
-                        }
-                        if vm.isBusy {
-                            AgentActivityView(activity: vm.activity)
-                                .padding(.leading, 36)  // align under the avatar gutter
-                                .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .leading)))
+                            switch row.item {
+                            case .message(let message):
+                                ChatBubble(
+                                    message: message,
+                                    showAvatar: row.showAvatar,
+                                    loadEvidence: { msg in await vm.evidence(for: msg) },
+                                    onRetry: { id in vm.retry(messageId: id) }
+                                )
+                                .equatable()
+                            case .turn(let turn):
+                                // One stable block per agent run; observes only its own
+                                // `TurnState`, so streamed tokens re-render just this row.
+                                TurnView(turn: turn,
+                                         loadEvidence: { msg in await vm.evidence(for: msg) })
+                            }
                         }
                         Color.clear.frame(height: 1).id(Self.bottomID)
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 14)
-                    .animation(.spring(response: 0.35, dampingFraction: 0.8), value: vm.isBusy)
                 }
                 // Open (and stay) pinned to the newest message.
                 .defaultScrollAnchor(.bottom)
@@ -75,43 +95,57 @@ struct ChatView: View {
                                   content: geo.contentSize.height,
                                   container: geo.containerSize.height)
                 } action: { old, new in
-                    // Content grew (image finished loading, tokens streamed) or the
-                    // viewport shrank (keyboard) while the user was at the bottom:
-                    // keep the newest message in view.
+                    // Content grew (image finished loading, tokens streamed, or a tall
+                    // row above was realized and replaced its height estimate) or the
+                    // viewport shrank (keyboard). Keep the newest message in view only
+                    // if the reader was pinned there AND is not touching the list;
+                    // otherwise this would yank the list back mid-drag whenever lazy
+                    // layout resolves a long row while scrolling up.
                     let resized = new.content > old.content + 0.5
                         || abs(new.container - old.container) > 0.5
-                    if resized && old.isNearBottom {
+                    if resized && nearBottom && !userScrolling {
                         scrollToBottom(proxy, animated: false)
-                        if !nearBottom { nearBottom = true }
                     } else if nearBottom != new.isNearBottom {
+                        // User-driven offset change, or content changed under a
+                        // reader who is browsing history: just re-measure.
                         nearBottom = new.isNearBottom
                     }
+                }
+                .onScrollPhaseChange { _, phase in
+                    let touching = phase == .tracking || phase == .interacting
+                        || phase == .decelerating
+                    if userScrolling != touching { userScrolling = touching }
                 }
                 // The composer lives in a bottom safe-area inset so the scroll
                 // content, the keyboard and the input bar are laid out together.
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    ChatComposer(focus: $inputFocused) { text, image in
+                    ChatComposer(focus: $inputFocused,
+                                 isBusy: vm.isBusy,
+                                 showStop: vm.isBusy && vm.stopAvailable,
+                                 onStop: { vm.stop() }) { text, image in
                         vm.send(text: text, image: image)
                         scrollToBottom(proxy, animated: true)
                     }
                 }
-                // A grouped backdrop so the (white) assistant cards have contrast
-                // and read as distinct messages rather than blending into the page.
-                .background(Color(.systemGroupedBackground))
+                // Same page background as every other screen; the white assistant
+                // cards still read as distinct messages against it.
+                .background(HimeColor.paper)
                 .onChange(of: vm.didLoadHistory) { _, loaded in
                     guard loaded else { return }
                     jumpToBottom(proxy)
                 }
                 .onChange(of: vm.rows.last?.id) { _, _ in
-                    guard let last = vm.rows.last?.message else { return }
-                    // Always follow your own sends; follow replies unless the
-                    // user scrolled up to read history.
-                    if last.role == .user || nearBottom {
+                    guard let last = vm.rows.last else { return }
+                    // Always follow your own sends; follow replies and step
+                    // cards unless the user scrolled up to read history.
+                    var isUserRow = false
+                    if case .message(let m) = last.item, m.role == .user { isUserRow = true }
+                    if isUserRow || (nearBottom && !userScrolling) {
                         scrollToBottom(proxy, animated: vm.didLoadHistory)
                     }
                 }
                 .onChange(of: vm.isBusy) { _, _ in
-                    if nearBottom { scrollToBottom(proxy, animated: true) }
+                    if nearBottom && !userScrolling { scrollToBottom(proxy, animated: true) }
                 }
                 .onChange(of: inputFocused) { _, focused in
                     guard focused else { return }
@@ -127,14 +161,64 @@ struct ChatView: View {
                 }
                 .onAppear { if vm.didLoadHistory { jumpToBottom(proxy) } }
                 .overlay {
-                    if vm.rows.isEmpty && !vm.isBusy { ChatEmptyState() }
+                    if vm.rows.isEmpty && !vm.isBusy {
+                        ChatEmptyState { text in
+                            vm.send(text: text, image: nil)
+                            scrollToBottom(proxy, animated: true)
+                        }
+                    }
                 }
             }
         }
         .animation(.easeInOut(duration: 0.2), value: vm.errorBanner)
-        .navigationTitle("Chat")
+        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 8) {
+                    // Live avatar: follows the agent (thinking / working / replying…).
+                    ChatNavAvatar(live: vm.live,
+                                  agentStarting: vm.agentStarting,
+                                  reconnecting: connection.showReconnecting,
+                                  hasError: vm.errorBanner != nil)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(title).font(.headline).lineLimit(1)
+                        if connection.showReconnecting {
+                            HStack(spacing: 4) {
+                                PulsingDot()
+                                Text("Reconnecting…")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            .transition(.opacity)
+                        }
+                    }
+                    .animation(.easeInOut(duration: 0.2), value: connection.showReconnecting)
+                }
+            }
+            if let onShowThreads {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: onShowThreads) {
+                        Image(systemName: "list.bullet")
+                            .overlay(alignment: .topTrailing) {
+                                if hasUnreadElsewhere {
+                                    Circle().fill(HimeColor.accent)
+                                        .frame(width: 8, height: 8)
+                                        .offset(x: 4, y: -3)
+                                }
+                            }
+                    }
+                    .accessibilityLabel(Text("Chats"))
+                }
+            }
+            if let onNewThread {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: onNewThread) {
+                        Image(systemName: "square.and.pencil")
+                    }
+                    .accessibilityLabel(Text("New chat"))
+                }
+            }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
                     Button(role: .destructive) { vm.clearConversation() } label: {
@@ -145,17 +229,16 @@ struct ChatView: View {
                 }
             }
         }
-        .onAppear { vm.onAppear() }
-        .onDisappear { vm.disconnectStream() }
-        .onReceive(NotificationCenter.default.publisher(
-            for: UIApplication.didBecomeActiveNotification)) { _ in
-            // The live socket won't replay anything that arrived while we were
-            // backgrounded (e.g. a proactive report pushed via APNs): reconnect
-            // and pull history to append the missed tail.
-            vm.foregrounded()
+        .onAppear {
+            ChatHub.shared.screenAppeared()
+            ChatHub.shared.threadOpened(vm.threadId)
+            vm.onAppear()
         }
-        .onReceive(NotificationCenter.default.publisher(
-            for: UIApplication.didEnterBackgroundNotification)) { _ in vm.disconnectStream() }
+        .onDisappear {
+            vm.onDisappear()
+            ChatHub.shared.threadClosed(vm.threadId)
+            ChatHub.shared.screenDisappeared()
+        }
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool) {
@@ -175,7 +258,8 @@ struct ChatView: View {
         Task {
             scrollToBottom(proxy, animated: false)
             try? await Task.sleep(nanoseconds: 250_000_000)
-            scrollToBottom(proxy, animated: false)
+            // The user may have started browsing in the meantime.
+            if !userScrolling { scrollToBottom(proxy, animated: false) }
         }
     }
 }
@@ -187,7 +271,7 @@ private struct ScrollMetrics: Equatable {
     var content: CGFloat
     var container: CGFloat
 
-    var isNearBottom: Bool { content - visibleMaxY < 100 }
+    var isNearBottom: Bool { content - visibleMaxY < 60 }
 }
 
 // MARK: - Composer
@@ -196,6 +280,11 @@ private struct ScrollMetrics: Equatable {
 /// typing never invalidates the (potentially very long) message list.
 private struct ChatComposer: View {
     var focus: FocusState<Bool>.Binding
+    /// The agent is working: the placeholder changes (sending stays enabled).
+    let isBusy: Bool
+    /// Show the square Stop button next to Send.
+    let showStop: Bool
+    let onStop: () -> Void
     let onSend: (String, Data?) -> Void
 
     @State private var text = ""
@@ -244,19 +333,34 @@ private struct ChatComposer: View {
                     }
                 }
 
-                TextField("Message Hime", text: $text, axis: .vertical)
+                TextField(isBusy ? String(localized: "Working on it… you can add something anytime")
+                                 : String(localized: "Message Hime"),
+                          text: $text, axis: .vertical)
                     .textFieldStyle(.plain)
                     .focused(focus)
                     .lineLimit(1...5)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(Color(.systemGray6))
-                    .clipShape(RoundedRectangle(cornerRadius: 18))
+                    .clipShape(RoundedRectangle(cornerRadius: HimeRadius.pill))
+
+                if showStop {
+                    Button(action: onStop) {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(.white)
+                            .frame(width: 28, height: 28)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(HimeColor.ink2))
+                    }
+                    .accessibilityLabel(Text("Stop"))
+                }
 
                 Button(action: send) {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 28))
-                        .foregroundColor(canSend ? Color.himeAccent : .gray)
+                        .foregroundColor(canSend ? HimeColor.accent : .gray)
                 }
                 .disabled(!canSend)
             }
@@ -287,39 +391,66 @@ private struct ChatComposer: View {
 
 // MARK: - Empty state
 
-/// Shown before the first message — a calm, single-accent invitation.
+/// Shown before the first message: a calm invitation with tappable starters.
 private struct ChatEmptyState: View {
+    let onPick: (String) -> Void
+
+    private var starters: [String] {
+        [String(localized: "How did I sleep last night?"),
+         String(localized: "Any unusual heart rate this week?"),
+         String(localized: "Make me a weekly summary")]
+    }
+
     var body: some View {
         VStack(spacing: 10) {
-            Image(systemName: "bubble.left.and.bubble.right")
-                .font(.system(size: 34, weight: .light))
-                .foregroundStyle(Color.himeAccent.opacity(0.75))
-            Text("Chat with Hime")
-                .font(.callout.weight(.medium))
-                .foregroundColor(.primary)
-            Text("Ask about your sleep, activity, or how you're recovering.")
+            HimeAvatar(size: 104, activity: .idle)
+            Text("Hi, I'm Hime")
+                .font(.title3.weight(.semibold))
+                .foregroundColor(HimeColor.ink)
+            Text("Ask me anything about your sleep, heart, activity, or recovery.")
                 .font(.footnote)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
+            VStack(spacing: 8) {
+                ForEach(starters, id: \.self) { prompt in
+                    Button { onPick(prompt) } label: {
+                        Text(prompt)
+                            .font(.subheadline)
+                            .foregroundColor(HimeColor.ink)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
+                            .frame(maxWidth: .infinity)
+                            .background(
+                                RoundedRectangle(cornerRadius: HimeRadius.row, style: .continuous)
+                                    .fill(HimeColor.card)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: HimeRadius.row, style: .continuous)
+                                    .stroke(HimeColor.line, lineWidth: 0.5)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 8)
         }
         .padding(.bottom, 40)
-        .allowsHitTesting(false)
     }
 }
 
-// MARK: - Hime avatar
+/// Small amber dot that pulses, the "reconnecting" marker in the nav bar.
+private struct PulsingDot: View {
+    @State private var on = false
 
-/// A small, quiet identity mark beside Hime's messages. Monochrome on a soft
-/// accent disc — detail without a second colour.
-private struct HimeAvatar: View {
     var body: some View {
-        Image(systemName: "pawprint.fill")
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundColor(Color.himeAccent)
-            .frame(width: 28, height: 28)
-            .background(Circle().fill(Color.himeAccent.opacity(0.12)))
-            .overlay(Circle().stroke(Color.himeAccent.opacity(0.18), lineWidth: 0.5))
+        Circle()
+            .fill(HimeColor.warn)
+            .frame(width: 6, height: 6)
+            .opacity(on ? 1 : 0.3)
+            .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: on)
+            .onAppear { on = true }
     }
 }
 
@@ -333,6 +464,8 @@ private struct ChatBubble: View, Equatable {
     /// Only the first Hime message in a consecutive run shows the avatar; the
     /// rest reserve the same gutter so their bubbles stay left-aligned under it.
     let showAvatar: Bool
+    /// Rendered inside a `TurnView`, which owns the avatar: no gutter, tighter trailing space.
+    var embedded = false
     let loadEvidence: (ChatMessage) async -> String?
     let onRetry: (String) -> Void
 
@@ -348,25 +481,18 @@ private struct ChatBubble: View, Equatable {
 
     /// Subtly asymmetric corners — a small "tail" on the sender's bottom edge.
     /// A quiet detail that reads as a chat bubble without any ornament.
-    private var bubbleShape: UnevenRoundedRectangle {
-        let r: CGFloat = 17
-        let tail: CGFloat = 5
-        return UnevenRoundedRectangle(
-            topLeadingRadius: r,
-            bottomLeadingRadius: isUser ? r : tail,
-            bottomTrailingRadius: isUser ? tail : r,
-            topTrailingRadius: r,
-            style: .continuous)
-    }
+    private var bubbleShape: UnevenRoundedRectangle { chatBubbleShape(isUser: isUser) }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             if isUser {
                 Spacer(minLength: 44)
+            } else if embedded {
+                EmptyView()
             } else if showAvatar {
-                HimeAvatar()
+                HimeAvatar(size: 36)
             } else {
-                Color.clear.frame(width: 28, height: 1)
+                Color.clear.frame(width: 36, height: 1)
             }
             VStack(alignment: isUser ? .trailing : .leading, spacing: 6) {
                 if let data = message.localImage {
@@ -384,7 +510,7 @@ private struct ChatBubble: View, Equatable {
                             // lifted off the grouped backdrop. User: flat accent.
                             // The shadow sits on the shape only, so text stays crisp.
                             bubbleShape
-                                .fill(isUser ? Color.himeAccent : Color(.secondarySystemGroupedBackground))
+                                .fill(isUser ? HimeColor.userBubble : HimeColor.assistantBubble)
                                 .shadow(color: .black.opacity(isUser ? 0.08 : 0.05),
                                         radius: 2, x: 0, y: 1)
                         )
@@ -413,7 +539,7 @@ private struct ChatBubble: View, Equatable {
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
             }
-            if !isUser { Spacer(minLength: 40) }
+            if !isUser { Spacer(minLength: embedded ? 0 : 40) }
         }
     }
 
@@ -424,7 +550,12 @@ private struct ChatBubble: View, Equatable {
         if isUser {
             Text(message.text)
                 .font(.body)
-                .foregroundColor(.white)
+                .foregroundColor(HimeColor.userBubbleText)
+        } else if message.isStreaming {
+            VStack(alignment: .leading, spacing: 4) {
+                MarkdownView(text: message.text, foreground: .primary)
+                PulsingCaret()
+            }
         } else {
             MarkdownView(text: message.text, foreground: .primary)
         }
@@ -460,7 +591,7 @@ private struct ChatBubble: View, Equatable {
                     .font(.system(size: 9, weight: .semibold))
             }
             .font(.caption.weight(.medium))
-            .foregroundColor(Color.himeAccent)
+            .foregroundColor(HimeColor.accent)
         }
         .buttonStyle(.plain)
     }
@@ -491,6 +622,57 @@ private struct ChatBubble: View, Equatable {
     }
 }
 
+// MARK: - Turn
+
+/// One assistant turn as a single stable block: avatar at the top-left
+/// (animated while the run is live, still afterwards), the collapsible
+/// activity section, then the reply bubble(s). Streamed text, a draft being
+/// held back and the final delivered reply all update this one view in place,
+/// so nothing is swapped out when the run completes.
+private struct TurnView: View {
+    @ObservedObject var turn: TurnState
+    let loadEvidence: (ChatMessage) async -> String?
+
+    /// Delivered replies followed by the streaming draft (if any). Rendered by
+    /// position, so the draft becomes its delivered reply without a view swap.
+    private var bodies: [ChatMessage] {
+        var items = turn.replies
+        if !turn.streamText.isEmpty {
+            items.append(ChatMessage(id: "stream-" + turn.id, role: .assistant,
+                                     text: turn.streamText, isStreaming: true))
+        }
+        return items
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            if turn.phase == .live {
+                HimeAvatar(size: 36, activity: turn.avatarActivity)
+            } else {
+                HimeAvatar(size: 36, state: turn.phase == .stopped ? "tired" : "relaxed")
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                TurnActivityCard(turn: turn)
+                ForEach(Array(bodies.enumerated()), id: \.offset) { _, message in
+                    ChatBubble(message: message,
+                               showAvatar: false,
+                               embedded: true,
+                               loadEvidence: loadEvidence,
+                               onRetry: { _ in })
+                        .equatable()
+                        .transition(.opacity)
+                }
+                if let error = turn.errorText {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundColor(HimeColor.bad)
+                }
+            }
+            Spacer(minLength: 40)
+        }
+    }
+}
+
 // MARK: - Image loaders
 
 /// The user's own attached photo. Decoded once off the main actor and cached,
@@ -511,7 +693,7 @@ private struct LocalChatImage: View {
             if let image {
                 ChatImageThumbnail(image: image, maxWidth: 220, maxHeight: 220)
             } else {
-                RoundedRectangle(cornerRadius: 14)
+                RoundedRectangle(cornerRadius: HimeRadius.card)
                     .fill(Color(.systemGray6))
                     .frame(width: 120, height: 120)
             }
@@ -543,7 +725,7 @@ private struct AuthedAsyncImage: View {
             if let image {
                 ChatImageThumbnail(image: image, maxWidth: 240, maxHeight: 240)
             } else {
-                RoundedRectangle(cornerRadius: 14)
+                RoundedRectangle(cornerRadius: HimeRadius.card)
                     .fill(Color(.systemGray6))
                     .frame(width: 200, height: 150)
                     .overlay {

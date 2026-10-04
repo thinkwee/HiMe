@@ -12,11 +12,6 @@
 
 import SwiftUI
 
-extension Color {
-    /// The app's warm accent (matches the send button + user bubble).
-    static let himeAccent = Color(red: 0.95, green: 0.70, blue: 0.35)
-}
-
 struct MarkdownView: View {
     let text: String
     var foreground: Color = .primary
@@ -106,7 +101,7 @@ enum MarkdownBlock {
         case let .quote(lines):
             HStack(spacing: 8) {
                 RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.himeAccent.opacity(0.6))
+                    .fill(HimeColor.accent.opacity(0.6))
                     .frame(width: 3)
                 inlineMarkdown(lines.joined(separator: "\n"))
                     .font(.body)
@@ -435,38 +430,67 @@ private struct MarkdownImageView: View {
         src.hasPrefix("data:") ? "md-data:\(src.count):\(src.hashValue)" : "md:\(src)"
     }
 
+    /// Width / height of the final image when it can be read from the source
+    /// without decoding it (PNG header of a `data:` URI), else a typical chart
+    /// ratio. The placeholder reserves exactly the loaded height so the row does
+    /// not change size when the image arrives: a height change in a row above
+    /// the viewport shifts the content under the user's finger mid-scroll.
+    private var placeholderRatio: CGFloat {
+        src.hasPrefix("data:") ? (Self.pngAspect(dataURI: src) ?? 1.6) : 1.6
+    }
+
+    /// Aspect ratio from the IHDR chunk (bytes 16-23) of a base64 PNG data URI.
+    private static func pngAspect(dataURI: String) -> CGFloat? {
+        guard let comma = dataURI.firstIndex(of: ",") else { return nil }
+        let head = dataURI[dataURI.index(after: comma)...].prefix(44)  // 33 bytes
+        guard let data = Data(base64Encoded: String(head)), data.count >= 24,
+              data[0] == 0x89, data[1] == 0x50, data[2] == 0x4E, data[3] == 0x47 else { return nil }
+        func be32(_ i: Int) -> CGFloat {
+            let v = (UInt32(data[i]) << 24) | (UInt32(data[i + 1]) << 16)
+                | (UInt32(data[i + 2]) << 8) | UInt32(data[i + 3])
+            return CGFloat(v)
+        }
+        let w = be32(16), h = be32(20)
+        return w > 0 && h > 0 ? w / h : nil
+    }
+
     var body: some View {
         Group {
-            if let image {
+            if failed {
+                EmptyView()
+            } else {
                 VStack(alignment: .leading, spacing: 4) {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        // Charts embedded in reports/chat are often dense — let
-                        // the user tap to open a full-screen, pinch-zoomable view.
-                        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .onTapGesture { showFullScreen = true }
-                        .fullScreenCover(isPresented: $showFullScreen) {
-                            FullScreenImageViewer(image: image)
-                        }
-                        .accessibilityAddTraits(.isButton)
-                        .accessibilityLabel(alt.isEmpty ? "Chart. Double-tap to enlarge."
-                                                         : "\(alt). Double-tap to enlarge.")
+                    if let image {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            // Charts embedded in reports/chat are often dense — let
+                            // the user tap to open a full-screen, pinch-zoomable view.
+                            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .onTapGesture { showFullScreen = true }
+                            .fullScreenCover(isPresented: $showFullScreen) {
+                                FullScreenImageViewer(image: image)
+                            }
+                            .accessibilityAddTraits(.isButton)
+                            .accessibilityLabel(alt.isEmpty ? "Chart. Double-tap to enlarge."
+                                                             : "\(alt). Double-tap to enlarge.")
+                    } else {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.primary.opacity(0.05))
+                            .aspectRatio(placeholderRatio, contentMode: .fit)
+                            .frame(maxWidth: .infinity)
+                            .overlay(ProgressView())
+                    }
+                    // The caption is part of the layout in both states so the
+                    // row height is the same before and after the image loads.
                     if !alt.isEmpty {
                         Text(alt)
                             .font(.caption2)
                             .foregroundColor(.secondary)
                     }
                 }
-            } else if failed {
-                EmptyView()
-            } else {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.primary.opacity(0.05))
-                    .frame(height: 160)
-                    .overlay(ProgressView())
             }
         }
         .task(id: src) { await load() }

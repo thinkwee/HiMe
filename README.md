@@ -54,6 +54,10 @@ Download the app at https://apps.apple.com/app/himeapp/id6762160735
 - Real-time wearable data ingestion from Apple Watch + iPhone, including heart rate, HRV, SpO2, sleep stages, workouts, mobility, and 50+ metrics more.
 - iOS and watchOS companion apps for easy syncing of health data and controlling the agent.
 - Native in-app chat — talk to the agent directly inside the iOS app: streaming replies, image sharing, evidence-backed answers, and proactive push (APNs) when the app is closed. No bot binding required.
+  - Multiple conversations: start, rename, archive or delete threads; the pinned **Hime** thread receives every scheduled report and reminder.
+  - See the agent work: each reply is one stable block with a collapsible step list (thinking, data analysis, tool calls) above the streamed answer, a Stop button, and an animated pixel-cat avatar that reflects what the agent is doing.
+  - A self-healing connection with heartbeat and auto-reconnect, so replies show up live instead of only as a notification.
+- Web dashboard with light / dark / system themes and an Agent Monitor that groups every chat and background run into a readable timeline, with full history.
 - Personalised health plan — a quick onboarding goal survey, then the agent designs and schedules your recurring check-ins automatically (redesign anytime from Settings).
 - Autonomous AI analysis with scheduled checks and event triggers, delivered as chart-rich reports.
 - Optional IM gateways — chat over Telegram, Feishu, or WeChat (via the official ClawBot plugin) instead of, or alongside, the in-app chat.

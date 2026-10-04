@@ -14,7 +14,7 @@ struct ReportsView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
-        .background(Color(.systemGroupedBackground))
+        .background(HimeColor.paper)
         .onAppear {
             if !hasStarted {
                 hasStarted = true
@@ -43,15 +43,15 @@ struct ReportsListSection: View {
             HStack {
                 Text("Agent Reports")
                     .font(.headline)
-                    .foregroundColor(.primary)
+                    .foregroundColor(HimeColor.ink)
                 Spacer()
                 if !viewModel.reports.isEmpty {
                     Text("\(viewModel.reports.count)")
                         .font(.caption2.weight(.bold))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(HimeColor.ink2)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 2)
-                        .background(Color(.tertiarySystemGroupedBackground))
+                        .background(HimeColor.paper)
                         .clipShape(Capsule())
                 }
             }
@@ -59,15 +59,15 @@ struct ReportsListSection: View {
             if viewModel.isAgentRunning {
                 HStack(spacing: 6) {
                     Circle()
-                        .fill(Color.green)
+                        .fill(HimeColor.ok)
                         .frame(width: 6, height: 6)
                     Text("Agent running")
                         .font(.caption2)
-                        .foregroundColor(.green)
+                        .foregroundColor(HimeColor.ok)
                     if let model = viewModel.agentModel {
                         Text("(\(model))")
                             .font(.caption2)
-                            .foregroundColor(.secondary)
+                            .foregroundColor(HimeColor.ink2)
                     }
                 }
             }
@@ -105,13 +105,13 @@ struct ReportsEmptyView: View {
         VStack(spacing: 10) {
             Image(systemName: "doc.text.magnifyingglass")
                 .font(.system(size: 32))
-                .foregroundColor(.secondary.opacity(0.4))
+                .foregroundColor(HimeColor.ink2.opacity(0.5))
             Text("No reports yet")
                 .font(.subheadline)
-                .foregroundColor(.secondary)
+                .foregroundColor(HimeColor.ink2)
             Text("Start the agent to generate health insights and reports.")
                 .font(.caption)
-                .foregroundColor(.secondary.opacity(0.7))
+                .foregroundColor(HimeColor.ink2)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity)
@@ -131,10 +131,10 @@ struct ReportRow: View {
 
     private var alertColor: Color {
         switch viewModel.alertColor(for: report.alert_level) {
-        case "red":    return .red
-        case "orange": return .orange
-        case "blue":   return .blue
-        default:       return .green
+        case "red":    return HimeColor.bad
+        case "orange": return HimeColor.warn
+        case "blue":   return HimeColor.sky
+        default:       return HimeColor.ok
         }
     }
 
@@ -161,27 +161,27 @@ struct ReportRow: View {
                         .frame(width: 4, height: 36)
 
                     Image(systemName: alertIcon)
-                        .font(.system(size: 14))
+                        .font(.subheadline)
                         .foregroundColor(alertColor)
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(report.title ?? "Health Report")
                             .font(.subheadline.weight(.medium))
-                            .foregroundColor(.primary)
+                            .foregroundColor(HimeColor.ink)
                             .lineLimit(isExpanded ? nil : 1)
 
                         if let timestamp = report.created_at {
                             Text(formatTimestamp(timestamp))
                                 .font(.caption2)
-                                .foregroundColor(.secondary)
+                                .foregroundColor(HimeColor.ink2)
                         }
                     }
 
                     Spacer()
 
                     Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(.secondary)
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(HimeColor.ink2)
                 }
             }
             .buttonStyle(.plain)
@@ -189,7 +189,7 @@ struct ReportRow: View {
             if isExpanded {
                 Divider()
 
-                MarkdownView(text: report.content, foreground: .secondary)
+                MarkdownView(text: report.content, foreground: HimeColor.ink)
                     .fixedSize(horizontal: false, vertical: true)
 
                 HStack {
@@ -198,7 +198,7 @@ struct ReportRow: View {
                     } label: {
                         Label("Delete", systemImage: "trash")
                             .font(.caption.weight(.medium))
-                            .foregroundColor(.red)
+                            .foregroundColor(HimeColor.bad)
                     }
                     .buttonStyle(.plain)
 
@@ -206,7 +206,7 @@ struct ReportRow: View {
 
                     if let level = report.alert_level {
                         Text(level.uppercased())
-                            .font(.system(size: 9, weight: .bold))
+                            .font(.caption2.weight(.bold))
                             .foregroundColor(alertColor)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)
@@ -217,8 +217,8 @@ struct ReportRow: View {
             }
         }
         .padding(12)
-        .background(Color(.secondarySystemGroupedBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(HimeColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: HimeRadius.row, style: .continuous))
         .contextMenu {
             Button(role: .destructive) {
                 showDeleteConfirm = true

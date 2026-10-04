@@ -9,6 +9,6 @@ struct DataListView: View {
             Spacer()
         }
         .padding(.top, 16)
-        .background(Color(.systemGroupedBackground))
+        .background(HimeColor.paper)
     }
 }

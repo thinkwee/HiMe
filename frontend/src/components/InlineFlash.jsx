@@ -10,8 +10,8 @@ export default function InlineFlash({ flash, className = '' }) {
   return (
     <div
       role={isError ? 'alert' : 'status'}
-      className={`flex items-start gap-1.5 rounded px-2 py-1.5 text-xs ${
-        isError ? 'bg-red-50 text-red-700 border border-red-100' : 'bg-green-50 text-green-700 border border-green-100'
+      className={`flex items-start gap-1.5 rounded-chip px-2 py-1.5 text-xs ${
+        isError ? 'bg-bad/10 text-bad-ink border border-bad/30' : 'bg-ok/10 text-ok-ink border border-ok/30'
       } ${className}`}
     >
       {isError ? <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-px" aria-hidden="true" /> : <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0 mt-px" aria-hidden="true" />}

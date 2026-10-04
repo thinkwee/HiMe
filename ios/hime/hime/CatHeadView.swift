@@ -51,6 +51,21 @@ private struct CatHeadExpression {
 
 struct CatHeadView: View {
     let catState: String
+    /// Optional animation overrides, driven by `HimeAvatar`. Defaults draw the
+    /// plain static head, so existing callers are unaffected.
+    let blink: Bool
+    let mouthOpen: Bool
+    let earLift: Int
+    let lookX: Int
+
+    init(catState: String, blink: Bool = false, mouthOpen: Bool = false,
+         earLift: Int = 0, lookX: Int = 0) {
+        self.catState = catState
+        self.blink = blink
+        self.mouthOpen = mouthOpen
+        self.earLift = earLift
+        self.lookX = lookX
+    }
 
     private let cK  = Color(red: 0.42, green: 0.35, blue: 0.28)
     private let cO  = Color(red: 0.95, green: 0.70, blue: 0.35)
@@ -66,12 +81,14 @@ struct CatHeadView: View {
     var body: some View {
         let expr = CatHeadExpression.from(state: catState)
         let gs = gridSize
+        let eyeShape = blink ? CatHeadEyeShape.sleepy : expr.eye
+        let mouthShape = mouthOpen ? CatHeadMouthShape.open : expr.mouth
 
         Canvas { ctx, size in
             let ps = size.width / CGFloat(gs)
             let cx = gs / 2
             let cy = gs / 2
-            let ep = expr.earPerk
+            let ep = expr.earPerk + earLift
 
             func px(_ c: Int, _ r: Int, _ col: Color) {
                 guard c >= 0, c < gs, r >= 0, r < gs else { return }
@@ -147,11 +164,11 @@ struct CatHeadView: View {
             fillTri(cx+6, cy-6-ep, cx+5, cy-4, cx+7, cy-4, cPE)
 
             // ── Eyes ──
-            let elx = cx - 4
-            let erx = cx + 3
+            let elx = cx - 4 + lookX
+            let erx = cx + 3 + lookX
             let eey = cy - 1
 
-            switch expr.eye {
+            switch eyeShape {
             case .normal:
                 for ex in [elx, erx] { fillR(ex, ex+1, eey, eey+1, cEy); px(ex, eey, cW) }
             case .happy:
@@ -185,7 +202,7 @@ struct CatHeadView: View {
             // ── Mouth ──
             let mx = cx
             let my = cy + 5
-            switch expr.mouth {
+            switch mouthShape {
             case .neutral:
                 px(mx-1, my, cK); px(mx+1, my, cK)
             case .smile:
