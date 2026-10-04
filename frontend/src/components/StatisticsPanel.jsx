@@ -1,10 +1,12 @@
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceDot } from 'recharts'
 import { TrendingUp, Users, BarChart3, Database, Calendar, Activity, Heart, Moon, Zap, Footprints, Dumbbell, X, Copy, Check } from 'lucide-react'
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { memo, useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toPng } from 'html-to-image'
 import { api } from '../lib/api'
 import { formatFullDateTime, parseBackendDate } from '../lib/utils'
+import i18n from '../i18n'
+import ErrorBoundary from './ErrorBoundary'
 
 const ENUMERATED_METRICS = {
   // Activity & Fitness
@@ -103,7 +105,7 @@ const ENUMERATED_METRICS = {
 };
 
 const getFriendlyName = (feature, meta = {}) => {
-  if (!feature) return 'Unknown';
+  if (!feature) return i18n.t('statistics.unknown_metric');
 
   // 1. Get the standard cleaned name first
   let cleanName = (meta.name && meta.name !== feature) ? meta.name : feature;
@@ -126,8 +128,13 @@ const getFriendlyName = (feature, meta = {}) => {
 function makeTimeTickFormatter(timestamps) {
   const valid = (timestamps || []).filter(t => t && !isNaN(t))
   if (!valid.length) return () => ''
-  const minTs = Math.min(...valid)
-  const maxTs = Math.max(...valid)
+  // Plain loop: Math.min/max(...arr) throws RangeError on very large arrays.
+  let minTs = Infinity
+  let maxTs = -Infinity
+  for (const ts of valid) {
+    if (ts < minTs) minTs = ts
+    if (ts > maxTs) maxTs = ts
+  }
   const rangeMs = maxTs - minTs
   const rangeMin = rangeMs / 60000
   const d = (ts) => new Date(ts)
@@ -148,22 +155,71 @@ function makeTimeTickFormatter(timestamps) {
  * - Unified logic for Apple Health and GLOBEM
  * - Premium aesthetics (backdrop filters, optimized axis)
  */
-const MetricChartCard = ({
-  feature, displayName, displayUnit, displayScale,
-  featureData, isAppleHealthFormat, isMultiParticipant,
-  aggregationMode, users, chartData, colors,
-  idx, formatDisplayValue, formatFullDateTime
-}) => {
+const COLORS = ['#0ea5e9', '#10b981', '#8b5cf6', '#f59e0b', '#ef4444', '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#84cc16', '#e11d48', '#0d9488']
+
+/** Download a PNG blob (fallback when the async clipboard API is unavailable, e.g. plain http). */
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+const MetricChartCard = memo(function MetricChartCard({
+  feature, meta, featureData, isAppleHealthFormat, isMultiParticipant,
+  aggregationMode, users, chartData, colors, idx,
+}) {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState(false)
   const expandedChartRef = useRef(null)
-  const [copyStatus, setCopyStatus] = useState('idle')
+  const dialogRef = useRef(null)
+  const [copyStatus, setCopyStatus] = useState('idle') // idle | copying | copied | downloaded | failed
+  const statusTimerRef = useRef(null)
+
+  // Display name / unit / value formatting derive from the feature metadata only.
+  const { displayName, displayUnit, displayScale, formatDisplayValue } = useMemo(() => {
+    const name = getFriendlyName(feature, meta)
+    // Extract unit from "(unit)" pattern if it exists
+    const nameMatches = name.match(/(.*?)\s*\((.*?)\)$/)
+    const unit = nameMatches ? nameMatches[2] : ''
+    const isPercentage = unit === '%'
+    const formatStr = meta.format || '{:.2f}'
+    const format = (chartValue) => {
+      if (chartValue == null || typeof chartValue !== 'number' || isNaN(chartValue)) return 'N/A'
+      let formattedStr = ''
+      if (formatStr.includes('0f')) formattedStr = chartValue.toFixed(0)
+      else if (formatStr.includes('1f')) formattedStr = chartValue.toFixed(1)
+      else if (formatStr.includes('2f')) formattedStr = chartValue.toFixed(2)
+      else formattedStr = String(chartValue)
+      return isPercentage ? `${formattedStr}%` : formattedStr
+    }
+    return { displayName: name, displayUnit: unit, displayScale: meta.display_scale || 1, formatDisplayValue: format }
+  }, [feature, meta])
+
+  useEffect(() => () => {
+    if (statusTimerRef.current) clearTimeout(statusTimerRef.current)
+  }, [])
+
+  const flashCopyStatus = useCallback((status) => {
+    setCopyStatus(status)
+    if (statusTimerRef.current) clearTimeout(statusTimerRef.current)
+    statusTimerRef.current = setTimeout(() => {
+      statusTimerRef.current = null
+      setCopyStatus('idle')
+    }, 2500)
+  }, [])
 
   useEffect(() => {
     if (!expanded) return
     const handleEsc = (e) => { if (e.key === 'Escape') setExpanded(false) }
     document.addEventListener('keydown', handleEsc)
     document.body.style.overflow = 'hidden'
+    // Move focus into the dialog so keyboard users land inside it.
+    dialogRef.current?.focus()
     return () => {
       document.removeEventListener('keydown', handleEsc)
       document.body.style.overflow = ''
@@ -177,14 +233,26 @@ const MetricChartCard = ({
       const dataUrl = await toPng(expandedChartRef.current, { backgroundColor: '#ffffff', pixelRatio: 2 })
       const res = await fetch(dataUrl)
       const blob = await res.blob()
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
-      setCopyStatus('copied')
-      setTimeout(() => setCopyStatus('idle'), 2000)
+      // navigator.clipboard / ClipboardItem only exist in secure contexts (https
+      // or localhost); the dashboard is often served over plain http on a LAN.
+      const canCopy = typeof window !== 'undefined' && window.isSecureContext
+        && typeof ClipboardItem !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.write === 'function'
+      if (canCopy) {
+        try {
+          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+          flashCopyStatus('copied')
+          return
+        } catch (e) {
+          console.warn('Clipboard write failed, downloading instead:', e)
+        }
+      }
+      downloadBlob(blob, `${displayName.replace(/[^\w.-]+/g, '_') || 'chart'}.png`)
+      flashCopyStatus('downloaded')
     } catch (e) {
       console.error('Copy failed:', e)
-      setCopyStatus('idle')
+      flashCopyStatus('failed')
     }
-  }, [])
+  }, [displayName, flashCopyStatus])
 
   // Common chart preparation
   const timestamps = featureData.length > 0 ? featureData.map(d => d.timestamp).filter(Boolean) : []
@@ -195,39 +263,52 @@ const MetricChartCard = ({
   const isIndividualMulti = !isAppleHealthFormat && aggregationMode === 'individual' && isMultiParticipant
   // Apply display scaling from metadata (Single Source of Truth)
   const finalDisplayScale = displayScale || 1.0;
-  const mainData = isIndividualMulti ? chartData : featureData.map(d => ({
-    ...d,
-    value: (d.value != null && typeof d.value === 'number' && !isNaN(d.value))
-      ? d.value * finalDisplayScale
-      : d.value
-  }))
+  const stats = useMemo(() => {
+    const mainData = isIndividualMulti ? chartData : featureData.map(d => ({
+      ...d,
+      value: (d.value != null && typeof d.value === 'number' && !isNaN(d.value))
+        ? d.value * finalDisplayScale
+        : d.value
+    }))
+    const prefix = `${feature}__`
 
-  // Calculate dynamic stats for labeling
-  const validData = mainData.filter(d => {
-    if (isIndividualMulti) {
-      return Object.keys(d).some(k => k.startsWith(`${feature}__`) && d[k] != null && !isNaN(d[k]))
+    // Calculate dynamic stats for labeling (single pass, no spread into Math.max/min)
+    const validData = []
+    const values = []
+    let maxVal = -Infinity
+    let minVal = Infinity
+    for (const d of mainData) {
+      if (isIndividualMulti) {
+        let any = false
+        for (const k of Object.keys(d)) {
+          if (k.startsWith(prefix) && d[k] != null && !isNaN(d[k])) {
+            any = true
+            values.push(d[k])
+          }
+        }
+        if (any) validData.push(d)
+      } else if (d.value != null && !isNaN(d.value)) {
+        validData.push(d)
+        values.push(d.value)
+      }
     }
-    return d.value != null && !isNaN(d.value)
-  })
+    for (const v of values) {
+      if (v > maxVal) maxVal = v
+      if (v < minVal) minVal = v
+    }
+    if (values.length === 0) { maxVal = 0; minVal = 0 }
 
-  const values = validData.flatMap(d => isIndividualMulti
-    ? Object.keys(d).filter(k => k.startsWith(`${feature}__`)).map(k => d[k])
-    : [d.value]
-  ).filter(v => v != null && !isNaN(v))
-
-  const hasEnoughPoints = validData.length > 2
-  const maxVal = values.length > 0 ? Math.max(...values) : 0
-  const minVal = values.length > 0 ? Math.min(...values) : 0
+    // Find the max point for the callout
+    const maxIdx = validData.findIndex(d => {
+      if (isIndividualMulti) {
+        return Object.keys(d).some(k => k.startsWith(prefix) && d[k] === maxVal)
+      }
+      return d.value === maxVal
+    })
+    return { mainData, validData, values, maxVal, minVal, maxIdx }
+  }, [isIndividualMulti, chartData, featureData, finalDisplayScale, feature])
+  const { mainData, validData, values, maxVal, minVal, maxIdx } = stats
   const isFlat = maxVal === minVal
-  const midVal = (maxVal + minVal) / 2
-
-  // Find the max point for the callout
-  const maxIdx = validData.findIndex(d => {
-    if (isIndividualMulti) {
-      return Object.keys(d).some(k => k.startsWith(`${feature}__`) && d[k] === maxVal)
-    }
-    return d.value === maxVal
-  })
   const maxPoint = maxIdx !== -1 ? validData[maxIdx] : null
 
   // Determine theme color for consistency
@@ -254,8 +335,18 @@ const MetricChartCard = ({
   return (
     <>
     <div
-      className="cursor-pointer bg-white/80 backdrop-blur-3xl border border-white/40 rounded-[2.5rem] p-5 shadow-sm hover:shadow-2xl hover:shadow-blue-500/10 transition-all duration-700 flex flex-col h-full overflow-hidden group"
+      role="button"
+      tabIndex={0}
+      aria-label={t('statistics.expand_chart', { name: displayName })}
+      className="cursor-pointer bg-white/80 backdrop-blur-3xl border border-white/40 rounded-[2.5rem] p-5 shadow-sm hover:shadow-2xl hover:shadow-blue-500/10 transition-all duration-700 flex flex-col h-full overflow-hidden group focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
       onClick={() => setExpanded(true)}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          setExpanded(true)
+        }
+      }}
     >
       {/* Header Area */}
       <div className="flex-initial mb-1 flex items-start justify-between gap-2 px-1">
@@ -352,7 +443,7 @@ const MetricChartCard = ({
                 }}
                 formatter={(value, name) => [
                   <span key="val" className="text-blue-600 font-black">{formatDisplayValue(typeof value === 'number' ? value : undefined)}</span>,
-                  <span key="lbl" className="text-gray-400 text-[10px] uppercase font-black ml-1 tracking-tighter">{isIndividualMulti ? name : (displayUnit === '%' ? '' : (displayUnit || 'Val'))}</span>
+                  <span key="lbl" className="text-gray-400 text-[10px] uppercase font-black ml-1 tracking-tighter">{isIndividualMulti ? name : (displayUnit === '%' ? '' : (displayUnit || t('statistics.val_short')))}</span>
                 ]}
               />
               {isIndividualMulti && (
@@ -408,28 +499,46 @@ const MetricChartCard = ({
     {/* Expanded Modal */}
     {expanded && (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={() => setExpanded(false)}>
-        <div className="bg-white rounded-3xl shadow-2xl max-w-3xl w-full mx-8" onClick={e => e.stopPropagation()}>
+        <div
+          ref={dialogRef}
+          tabIndex={-1}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={`chart-modal-title-${feature}`}
+          className="bg-white rounded-3xl shadow-2xl max-w-3xl w-full mx-8 outline-none"
+          onClick={e => e.stopPropagation()}
+        >
           {/* Modal Header */}
           <div className="flex items-center justify-between px-7 pt-5 pb-3">
             <div>
-              <h3 className="text-lg font-black text-gray-900">{displayName}</h3>
+              <h3 id={`chart-modal-title-${feature}`} className="text-lg font-black text-gray-900">{displayName}</h3>
               {displayUnit && <p className="text-sm text-gray-400 font-medium mt-0.5">{displayUnit}</p>}
             </div>
             <div className="flex items-center gap-2">
               <button
+                type="button"
                 onClick={handleCopyImage}
                 disabled={copyStatus === 'copying'}
                 className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all ${
-                  copyStatus === 'copied'
+                  copyStatus === 'copied' || copyStatus === 'downloaded'
                     ? 'bg-green-50 text-green-600 border border-green-200'
-                    : 'bg-gray-50 text-gray-600 border border-gray-200 hover:bg-gray-100'
+                    : copyStatus === 'failed'
+                      ? 'bg-red-50 text-red-600 border border-red-200'
+                      : 'bg-gray-50 text-gray-600 border border-gray-200 hover:bg-gray-100'
                 }`}
               >
-                {copyStatus === 'copied' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                {copyStatus === 'copied' ? t('statistics.copied') : t('statistics.copy_image')}
+                {copyStatus === 'copied' || copyStatus === 'downloaded' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                <span role="status">
+                  {copyStatus === 'copied' ? t('statistics.copied')
+                    : copyStatus === 'downloaded' ? t('statistics.downloaded')
+                    : copyStatus === 'failed' ? t('statistics.copy_failed')
+                    : t('statistics.copy_image')}
+                </span>
               </button>
               <button
+                type="button"
                 onClick={() => setExpanded(false)}
+                aria-label={t('common.close')}
                 className="p-2 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
               >
                 <X className="w-5 h-5" />
@@ -491,7 +600,7 @@ const MetricChartCard = ({
                     }}
                     formatter={(value, name) => [
                       <span key="val" className="text-blue-600 font-black">{formatDisplayValue(typeof value === 'number' ? value : undefined)}</span>,
-                      <span key="lbl" className="text-gray-400 text-xs uppercase font-bold ml-1">{isIndividualMulti ? name : (displayUnit || 'Value')}</span>
+                      <span key="lbl" className="text-gray-400 text-xs uppercase font-bold ml-1">{isIndividualMulti ? name : (displayUnit || t('statistics.value'))}</span>
                     ]}
                   />
 
@@ -522,7 +631,7 @@ const MetricChartCard = ({
     )}
     </>
   )
-}
+})
 
 // Taxonomy categories for the statistics panel
 
@@ -565,15 +674,7 @@ const TAXONOMY = [
     icon: Dumbbell,
     color: 'text-amber-600',
     bg: 'bg-amber-50',
-    matches: [
-      'Workout Running', 'Workout Cycling', 'Workout Swimming', 'Workout Walking',
-      'Workout Hiking', 'Workout Yoga', 'Workout Strength', 'Workout Hiit',
-      'Workout Elliptical', 'Workout Rowing', 'Workout Core', 'Workout Flexibility',
-      'Workout Cooldown', 'workout_running', 'workout_cycling', 'workout_swimming',
-      'workout_walking', 'workout_hiking', 'workout_yoga', 'workout_strength',
-      'workout_hiit', 'workout_elliptical', 'workout_rowing', 'workout_core',
-      'workout_flexibility', 'workout_cooldown'
-    ]
+    matches: ['Workout']
   },
   {
     id: 'mobility',
@@ -612,20 +713,28 @@ const TAXONOMY = [
   }
 ];
 
-const getCategory = (feature) => {
+/** Lower-case and strip everything but letters/digits so "Heart_Rate", "heart rate" and "HeartRate" compare equal. */
+const normalizeFeatureName = (s) => String(s)
+  .toLowerCase()
+  .replace(/hkquantitytypeidentifier|hkcategorytypeidentifier|hkcharacteristictypeidentifier/g, '')
+  .replace(/[^a-z0-9]/g, '')
+
+// Keywords normalised once, not on every lookup.
+const NORMALIZED_MATCHES = TAXONOMY.map(cat => ({ cat, keys: cat.matches.map(normalizeFeatureName) }))
+const WORKOUT_CATEGORY = TAXONOMY.find(c => c.id === 'workouts')
+
+export const getCategory = (feature) => {
   if (!feature) return TAXONOMY[TAXONOMY.length - 1];
 
-  const f = feature.toLowerCase();
+  const f = normalizeFeatureName(feature);
 
-  // Clean up common prefixes to improve matching
-  const cleanF = f.replace(/hkquantitytypeidentifier|hkcategorytypeidentifier|hkcharacteristictypeidentifier/gi, '');
+  // Workout features also contain Activity keywords (Energy, Cycling, Distance…),
+  // so the prefix has to win before the keyword scan.
+  if (f.startsWith('workout')) return WORKOUT_CATEGORY;
 
-  // Find category based on keyword matches
-  // Iterate through TAXONOMY to find first match
-  for (const cat of TAXONOMY) {
-    if (cat.matches.some(m => cleanF.includes(m.toLowerCase()) || f.includes(m.toLowerCase()))) {
-      return cat;
-    }
+  // Find category based on keyword matches (first TAXONOMY entry wins)
+  for (const { cat, keys } of NORMALIZED_MATCHES) {
+    if (keys.some(m => f.includes(m))) return cat;
   }
 
   // Default to General Wellness instead of "Uncategorized"
@@ -639,41 +748,26 @@ const WINDOW_OPTIONS = [
   { labelKey: 'statistics.window_1month', value: '1month' },
 ]
 
-export default function StatisticsPanel({ data, historicalData = [], featureMetadata = {}, liveHistoryWindow = '1hour', setLiveHistoryWindow, isStreaming = false }) {
-  const { t } = useTranslation()
-  const [aggregationMode, setAggregationMode] = useState('individual') // 'individual' or 'average'
-  const [storageTotal, setStorageTotal] = useState(null)
+const WINDOW_MS = {
+  '1hour': 60 * 60 * 1000,
+  '1day': 24 * 60 * 60 * 1000,
+  '1week': 7 * 24 * 60 * 60 * 1000,
+  '1month': 30 * 24 * 60 * 60 * 1000,
+}
 
-  // Fetch true total storage count from the lightweight count endpoint.
-  // (The dashboard endpoint truncates each feature to 2000 points for chart
-  // rendering, so summing its arrays caps the total at ~features × 2000.)
-  useEffect(() => {
-    const ctrl = new AbortController()
-    // Goes through lib/api so the optional auth header is attached.
-    api.getDataCount(ctrl.signal).then(resp => {
-      if (resp && resp.success && resp.count != null) {
-        setStorageTotal(resp.count)
-      }
-    })
-    return () => ctrl.abort()
-  }, [])
-
-  // Derive data-dependent variables unconditionally (before any early returns)
+/**
+ * Everything the panel derives from the stream buffer. Pure and heavy (the
+ * buffer can hold tens of thousands of rows), so the component memoises it on
+ * (data, historicalData, window, aggregation mode) instead of redoing it on
+ * every render.
+ */
+export function computePanelData(data, historicalData, liveHistoryWindow, aggregationMode) {
   const safeHistorical = Array.isArray(historicalData) ? historicalData : []
-
-  // Calculate sliding window
-  const windowMsMap = {
-    '1hour': 60 * 60 * 1000,
-    '1day': 24 * 60 * 60 * 1000,
-    '1week': 7 * 24 * 60 * 60 * 1000,
-    '1month': 30 * 24 * 60 * 60 * 1000,
-  }
-  const windowSizeMs = windowMsMap[liveHistoryWindow] || windowMsMap['1hour']
+  const windowSizeMs = WINDOW_MS[liveHistoryWindow] || WINDOW_MS['1hour']
 
   // Single pass over the history buffer: every record's timestamp is parsed
-  // once (the buffer can hold tens of thousands of rows, and this runs on
-  // every render), yielding the overall range, the sliding-window slice and
-  // that slice's range.
+  // once, yielding the overall range, the sliding-window slice and that
+  // slice's range.
   const parsedTs = new Array(safeHistorical.length)
   let totalMinTs = null
   let totalMaxTs = null
@@ -739,8 +833,9 @@ export default function StatisticsPanel({ data, historicalData = [], featureMeta
   try {
     if (isAppleHealthFormat) {
       // Apple Health: keep raw records with timestamps for time-aligned display
+      const featureSet = new Set(featuresToDisplay)
       chartData = dataToVisualize
-        .filter(record => record && featuresToDisplay.includes(record.feature_type))
+        .filter(record => record && featureSet.has(record.feature_type))
         .map((record, idx) => ({
           index: idx,
           date: record.date,
@@ -779,7 +874,7 @@ export default function StatisticsPanel({ data, historicalData = [], featureMeta
       // Sort by date
       const sortedDates = Object.keys(groupedByDate).sort()
       chartData = sortedDates.map((dateKey, idx) => {
-        const data = groupedByDate[dateKey]
+        const grouped = groupedByDate[dateKey]
         return {
           index: idx,
           date: dateKey,
@@ -787,7 +882,7 @@ export default function StatisticsPanel({ data, historicalData = [], featureMeta
           ...Object.fromEntries(
             featuresToDisplay.map(feature => [
               feature,
-              data.counts[feature] > 0 ? data.sums[feature] / data.counts[feature] : null
+              grouped.counts[feature] > 0 ? grouped.sums[feature] / grouped.counts[feature] : null
             ])
           )
         }
@@ -798,6 +893,11 @@ export default function StatisticsPanel({ data, historicalData = [], featureMeta
       const allDates = [...new Set(dataToVisualize.map(r => r && r.date).filter(d => d))].sort()
 
       if (allDates.length > 0 && isMultiParticipant) {
+        // One lookup table instead of a linear find per (date, user) pair.
+        const byDatePid = new Map()
+        for (const r of dataToVisualize) {
+          if (r && r.date) byDatePid.set(`${r.date}\u0000${r.pid}`, r)
+        }
         // Create a data point for each date, with values for each user
         chartData = allDates.map((date, idx) => {
           const point = {
@@ -808,7 +908,7 @@ export default function StatisticsPanel({ data, historicalData = [], featureMeta
 
           // Add data for each user
           users.forEach(pid => {
-            const pidData = dataToVisualize.find(r => r && r.date === date && r.pid === pid)
+            const pidData = byDatePid.get(`${date}\u0000${pid}`)
             featuresToDisplay.forEach(feature => {
               point[`${feature}__${pid}`] = pidData ? pidData[feature] : null
             })
@@ -839,7 +939,72 @@ export default function StatisticsPanel({ data, historicalData = [], featureMeta
     chartData = []
   }
 
-  const colors = ['#0ea5e9', '#10b981', '#8b5cf6', '#f59e0b', '#ef4444', '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#84cc16', '#e11d48', '#0d9488']
+  // Per-feature slices, grouped in one pass (not one full filter per feature).
+  const featureDataMap = new Map()
+  if (isAppleHealthFormat) {
+    for (const record of chartData) {
+      let list = featureDataMap.get(record.feature_type)
+      if (!list) { list = []; featureDataMap.set(record.feature_type, list) }
+      list.push(record)
+    }
+  }
+
+  return {
+    filteredHistorical, totalMinTs, totalMaxTs, visibleMinTs, visibleMaxTs,
+    users, isMultiParticipant, isAppleHealthFormat, featuresToDisplay, chartData, featureDataMap,
+  }
+}
+
+const EMPTY_META = {}
+const EMPTY_DATA = []
+
+/** Compact placeholder shown in place of a chart card that threw while rendering. */
+function ChartCardError({ feature }) {
+  const { t } = useTranslation()
+  return (
+    <div role="alert" className="bg-white/80 border border-red-100 rounded-[2.5rem] p-5 text-sm text-red-600">
+      {t('statistics.chart_error', { name: getFriendlyName(feature) })}
+    </div>
+  )
+}
+
+function StatisticsPanel({ data, historicalData = [], featureMetadata = {}, liveHistoryWindow = '1hour', setLiveHistoryWindow }) {
+  const { t } = useTranslation()
+  const [aggregationMode, setAggregationMode] = useState('individual') // 'individual' or 'average'
+  const [storageTotal, setStorageTotal] = useState(null)
+
+  // Fetch true total storage count from the lightweight count endpoint.
+  // (The dashboard endpoint truncates each feature to 2000 points for chart
+  // rendering, so summing its arrays caps the total at ~features × 2000.)
+  useEffect(() => {
+    const ctrl = new AbortController()
+    // Goes through lib/api so the optional auth header is attached.
+    api.getDataCount(ctrl.signal).then(resp => {
+      if (resp && resp.success && resp.count != null) {
+        setStorageTotal(resp.count)
+      }
+    })
+    return () => ctrl.abort()
+  }, [])
+
+  const {
+    filteredHistorical, totalMinTs, totalMaxTs, visibleMinTs, visibleMaxTs,
+    users, isMultiParticipant, isAppleHealthFormat, featuresToDisplay, chartData, featureDataMap,
+  } = useMemo(
+    () => computePanelData(data, historicalData, liveHistoryWindow, aggregationMode),
+    [data, historicalData, liveHistoryWindow, aggregationMode],
+  )
+
+  // Features grouped by taxonomy category (cheap, but keyed so it only reruns with the feature set).
+  const featuresByCategory = useMemo(() => {
+    const map = new Map(TAXONOMY.map(c => [c.id, []]))
+    for (const f of featuresToDisplay) map.get(getCategory(f).id).push(f)
+    return map
+  }, [featuresToDisplay])
+  const featureIndex = useMemo(() => new Map(featuresToDisplay.map((f, i) => [f, i])), [featuresToDisplay])
+
+  const colors = COLORS
+
 
   return (
     <div className="card">
@@ -897,7 +1062,9 @@ export default function StatisticsPanel({ data, historicalData = [], featureMeta
             {WINDOW_OPTIONS.map((opt) => (
               <button
                 key={opt.value}
+                type="button"
                 onClick={() => setLiveHistoryWindow && setLiveHistoryWindow(opt.value)}
+                aria-pressed={liveHistoryWindow === opt.value}
                 className={`px-3 py-2.5 text-sm font-bold rounded-lg transition-all ${
                   liveHistoryWindow === opt.value
                     ? 'bg-primary-600 text-white shadow-md transform scale-[1.02]'
@@ -995,7 +1162,7 @@ export default function StatisticsPanel({ data, historicalData = [], featureMeta
       {chartData.length > 0 && featuresToDisplay.length > 0 && (
         <div className="space-y-12">
           {TAXONOMY.map(category => {
-            const categoryFeatures = featuresToDisplay.filter(f => getCategory(f).id === category.id);
+            const categoryFeatures = featuresByCategory.get(category.id) || [];
             if (categoryFeatures.length === 0) return null;
 
             return (
@@ -1011,17 +1178,17 @@ export default function StatisticsPanel({ data, historicalData = [], featureMeta
                   </div>
                 </div>
 
-                <div className={`${category.bg} p-6 rounded-[2.5rem] border border-gray-100/50 shadow-inner-sm`}>
+                <div className={`${category.bg} p-6 rounded-[2.5rem] border border-gray-100/50 shadow-inner`}>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     {categoryFeatures.map((feature) => {
-                      const idx = featuresToDisplay.indexOf(feature);
+                      const idx = featureIndex.get(feature);
 
                       // For GLOBEM: skip if feature not present in chart data columns
                       if (!isAppleHealthFormat && chartData.length > 0 && !(feature in chartData[0])) return null
 
-                      // For Apple Health: filter records by feature_type
+                      // For Apple Health: records pre-grouped by feature_type
                       const featureData = isAppleHealthFormat
-                        ? chartData.filter(record => record.feature_type === feature)
+                        ? (featureDataMap.get(feature) || EMPTY_DATA)
                         : (aggregationMode === 'individual' && isMultiParticipant
                           ? chartData  // Multi-user mode handled separately
                           : chartData.filter(point => point).map(point => ({
@@ -1034,48 +1201,22 @@ export default function StatisticsPanel({ data, historicalData = [], featureMeta
 
                       if (!isAppleHealthFormat && featureData.length === 0) return null
 
-                      // Display name and indicator parsing
-                      const meta = featureMetadata[feature] || {}
-                      const displayName = getFriendlyName(feature, meta)
-                      
-                      // Extract unit from "(unit)" pattern if it exists
-                      const nameMatches = displayName.match(/(.*?)\s*\((.*?)\)$/);
-                      const displayUnit = nameMatches ? nameMatches[2] : '';
-                      const isPercentage = displayUnit === '%';
-
-                      const displayScale = meta.display_scale || 1
-                      const formatStr = meta.format || '{:.2f}'
-
-                      const formatDisplayValue = (chartValue) => {
-                        if (chartValue == null || typeof chartValue !== 'number' || isNaN(chartValue)) return 'N/A'
-                        let formattedStr = '';
-                        if (formatStr.includes('0f')) formattedStr = chartValue.toFixed(0)
-                        else if (formatStr.includes('1f')) formattedStr = chartValue.toFixed(1)
-                        else if (formatStr.includes('2f')) formattedStr = chartValue.toFixed(2)
-                        else formattedStr = String(chartValue)
-                        
-                        return isPercentage ? `${formattedStr}%` : formattedStr;
-                      }
-
-                      // Use a unified, robust chart component for both formats
+                      // One failing chart must not blank the whole dashboard.
                       return (
-                        <MetricChartCard
-                          key={feature}
-                          feature={feature}
-                          displayName={displayName}
-                          displayUnit={displayUnit}
-                          displayScale={displayScale}
-                          featureData={featureData}
-                          isAppleHealthFormat={isAppleHealthFormat}
-                          isMultiParticipant={isMultiParticipant}
-                          aggregationMode={aggregationMode}
-                          users={users}
-                          chartData={chartData}
-                          colors={colors}
-                          idx={idx}
-                          formatDisplayValue={formatDisplayValue}
-                          formatFullDateTime={formatFullDateTime}
-                        />
+                        <ErrorBoundary key={feature} fallback={<ChartCardError feature={feature} />}>
+                          <MetricChartCard
+                            feature={feature}
+                            meta={featureMetadata[feature] || EMPTY_META}
+                            featureData={featureData}
+                            isAppleHealthFormat={isAppleHealthFormat}
+                            isMultiParticipant={isMultiParticipant}
+                            aggregationMode={aggregationMode}
+                            users={users}
+                            chartData={chartData}
+                            colors={colors}
+                            idx={idx}
+                          />
+                        </ErrorBoundary>
                       )
                     })}
                   </div>
@@ -1089,3 +1230,5 @@ export default function StatisticsPanel({ data, historicalData = [], featureMeta
     </div>
   )
 }
+
+export default memo(StatisticsPanel)

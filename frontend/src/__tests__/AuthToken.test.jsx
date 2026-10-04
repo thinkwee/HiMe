@@ -238,4 +238,27 @@ describe('AuthTokenPrompt', () => {
     fireAuthRequired()
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
+
+  it('leaves a persistent banner after dismissal that re-opens the prompt', async () => {
+    const user = userEvent.setup()
+    render(<AuthTokenPrompt />)
+    fireAuthRequired()
+
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+    // Not silent forever: an inline banner stays, with a way back in.
+    expect(screen.getByRole('alert')).toHaveTextContent(/API token is required/i)
+    await user.click(screen.getByRole('button', { name: 'Enter token' }))
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+
+  it('Escape dismisses the dialog', async () => {
+    const user = userEvent.setup()
+    render(<AuthTokenPrompt />)
+    fireAuthRequired()
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
 })

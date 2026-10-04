@@ -2,9 +2,11 @@ import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api, getAuthToken } from '../lib/api'
 import {
-  AppWindow, Trash2, ExternalLink, RefreshCw, X, Maximize2, Minimize2,
+  AppWindow, Trash2, ExternalLink, RefreshCw, X, Maximize2, Minimize2, AlertTriangle,
 } from 'lucide-react'
 import { parseBackendDate } from '../lib/utils'
+import { useFlash, useOnActivate } from '../lib/hooks'
+import InlineFlash from '../components/InlineFlash'
 
 // ---------------------------------------------------------------------------
 // Why the page HTML is fetched here instead of being an `<iframe src>`
@@ -94,7 +96,7 @@ function sanitiseBody(raw) {
   return json
 }
 
-export default function PersonalisedPages() {
+export default function PersonalisedPages({ active = true }) {
   const { t } = useTranslation()
   const [pages, setPages] = useState([])
   const [loading, setLoading] = useState(true)
@@ -108,13 +110,35 @@ export default function PersonalisedPages() {
   // never needs a synchronous state reset inside an effect.
   const [pageDoc, setPageDoc] = useState(null)
   const iframeRef = useRef(null)
+  const viewerRef = useRef(null)
+  const [loadError, setLoadError] = useState('')
+  const [flash, setFlash] = useFlash(6000)
 
-  const loadPages = async () => {
-    setLoading(true)
+  // `silent` refetches (route re-activation) don't flash the loading state.
+  const loadPages = async (silent = false) => {
+    if (silent !== true) setLoading(true)
     const res = await api.listPersonalisedPages()
-    if (res.success) setPages(res.pages || [])
+    if (res.success) {
+      setPages(res.pages || [])
+      setLoadError('')
+    } else {
+      // Keep the list that is already shown and say what went wrong.
+      setLoadError(res.error || t('common.load_failed'))
+    }
     setLoading(false)
   }
+
+  // The page stays mounted while hidden: refetch when it becomes active again.
+  useOnActivate(active, () => loadPages(true))
+
+  // Maximised viewer behaves like a dialog: Escape closes it, focus moves in.
+  useEffect(() => {
+    if (!expanded) return undefined
+    const onKey = (e) => { if (e.key === 'Escape') setExpanded(false) }
+    document.addEventListener('keydown', onKey)
+    viewerRef.current?.focus()
+    return () => document.removeEventListener('keydown', onKey)
+  }, [expanded])
 
   // Initial load. The state updates are deliberately kept behind the `await`
   // (rather than calling loadPages(), which sets `loading` synchronously) so
@@ -125,6 +149,7 @@ export default function PersonalisedPages() {
       const res = await api.listPersonalisedPages()
       if (cancelled) return
       const list = res.success ? (res.pages || []) : []
+      if (!res.success) setLoadError(res.error || t('common.load_failed'))
       setPages(list)
       // `?page=<id>` — what the "open in a new tab" buttons link to. The new
       // tab is this same SPA, so the page still renders inside the sandboxed
@@ -138,6 +163,7 @@ export default function PersonalisedPages() {
       setLoading(false)
     })()
     return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Fetch the open page's HTML with the bearer token and render it via
@@ -262,11 +288,11 @@ export default function PersonalisedPages() {
         if (activePage?.page_id === pageId) setActivePage(null)
       } else {
         console.error('Delete failed:', res.error)
-        alert(t('pages.delete_failed', { error: res.error || t('common.unknown_error') }))
+        setFlash('error', t('pages.delete_failed', { error: res.error || t('common.unknown_error') }))
       }
     } catch (err) {
       console.error('Delete page error:', err)
-      alert(t('pages.delete_failed', { error: err.message || t('common.network_error') }))
+      setFlash('error', t('pages.delete_failed', { error: err.message || t('common.network_error') }))
     }
     setDeleting(null)
   }
@@ -308,17 +334,28 @@ export default function PersonalisedPages() {
             {pages.length}
           </span>
         </div>
-        <button onClick={loadPages} className="btn btn-secondary flex items-center space-x-2">
+        <button type="button" onClick={() => loadPages()} className="btn btn-secondary flex items-center space-x-2">
           <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           <span>{t('pages.refresh')}</span>
         </button>
       </div>
 
+      <InlineFlash flash={flash} />
+      {loadError && (
+        <div role="alert" className="flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
+          <span className="flex-1 break-words">{t('pages.list_failed', { error: loadError })}</span>
+          <button type="button" onClick={() => loadPages()} className="font-semibold underline hover:text-red-900">
+            {t('common.retry')}
+          </button>
+        </div>
+      )}
+
       {/* Page list */}
       {loading && pages.length === 0 ? (
         <div className="card p-12 text-center text-gray-500">{t('pages.loading')}</div>
       ) : pages.length === 0 ? (
-        <div className="card p-12 text-center">
+        loadError ? null : <div className="card p-12 text-center">
           <AppWindow className="w-12 h-12 text-gray-300 mx-auto mb-3" />
           <p className="text-gray-500">{t('pages.empty')}</p>
           <p className="text-sm text-gray-400 mt-1">
@@ -330,7 +367,16 @@ export default function PersonalisedPages() {
           {pages.map((page) => (
             <div
               key={page.page_id}
-              className={`card p-4 cursor-pointer transition-all hover:shadow-md ${
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.target !== e.currentTarget) return
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  openPage(page)
+                }
+              }}
+              className={`card p-4 cursor-pointer transition-all hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 ${
                 activePage?.page_id === page.page_id
                   ? 'ring-2 ring-primary-500 shadow-md'
                   : ''
@@ -346,17 +392,21 @@ export default function PersonalisedPages() {
                 </div>
                 <div className="flex items-center space-x-1 ml-2 flex-shrink-0">
                   <button
+                    type="button"
                     onClick={(e) => { e.stopPropagation(); openInNewTab(page.page_id) }}
                     className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-gray-100"
                     title={t('pages.open_new_tab')}
+                    aria-label={t('pages.open_new_tab')}
                   >
                     <ExternalLink className="w-4 h-4" />
                   </button>
                   <button
+                    type="button"
                     onClick={(e) => { e.stopPropagation(); handleDelete(page.page_id) }}
                     disabled={deleting === page.page_id}
                     className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 disabled:opacity-50"
                     title={t('pages.delete_page')}
+                    aria-label={t('pages.delete_page')}
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -377,7 +427,14 @@ export default function PersonalisedPages() {
 
       {/* Embedded page viewer */}
       {activePage && (
-        <div className={`card overflow-hidden ${expanded ? 'fixed inset-4 z-50 m-0' : ''}`}>
+        <div
+          ref={viewerRef}
+          tabIndex={-1}
+          role={expanded ? 'dialog' : undefined}
+          aria-modal={expanded ? 'true' : undefined}
+          aria-label={expanded ? activePage.display_name : undefined}
+          className={`card overflow-hidden outline-none ${expanded ? 'fixed inset-4 z-50 m-0' : ''}`}
+        >
           {/* Toolbar */}
           <div className="flex items-center justify-between px-4 py-2 bg-gray-50 border-b border-gray-200">
             <div className="flex items-center space-x-2 min-w-0">
@@ -388,23 +445,29 @@ export default function PersonalisedPages() {
             </div>
             <div className="flex items-center space-x-1">
               <button
+                type="button"
                 onClick={() => openInNewTab(activePage.page_id)}
                 className="p-1.5 text-gray-400 hover:text-primary-600 rounded"
                 title={t('pages.open_new_tab')}
+                aria-label={t('pages.open_new_tab')}
               >
                 <ExternalLink className="w-4 h-4" />
               </button>
               <button
+                type="button"
                 onClick={() => setExpanded(!expanded)}
                 className="p-1.5 text-gray-400 hover:text-gray-600 rounded"
                 title={expanded ? t('pages.minimize') : t('pages.maximize')}
+                aria-label={expanded ? t('pages.minimize') : t('pages.maximize')}
               >
                 {expanded ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
               </button>
               <button
+                type="button"
                 onClick={() => { setActivePage(null); setExpanded(false) }}
                 className="p-1.5 text-gray-400 hover:text-gray-600 rounded"
                 title={t('pages.close')}
+                aria-label={t('pages.close')}
               >
                 <X className="w-4 h-4" />
               </button>

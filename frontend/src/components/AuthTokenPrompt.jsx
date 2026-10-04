@@ -22,22 +22,49 @@ export default function AuthTokenPrompt() {
   const [open, setOpen] = useState(false)
   const [token, setToken] = useState('')
   const [remember, setRemember] = useState(false)
-  // Once dismissed, stay quiet until the next page load — otherwise the
-  // stream's auto-reconnect would re-open the dialog every few seconds.
+  // Once any call has been rejected the page is effectively unauthenticated.
+  // `needed` keeps a small persistent banner visible after the dialog is
+  // dismissed, so the user can always get back to the prompt.
+  const [needed, setNeeded] = useState(false)
+  // Once dismissed, don't pop the modal again until the next page load —
+  // otherwise the stream's auto-reconnect would re-open it every few seconds.
   const dismissedRef = useRef(false)
 
   useEffect(() => {
     if (typeof onAuthRequired !== 'function') return undefined
     return onAuthRequired(() => {
+      setNeeded(true)
       if (!dismissedRef.current) setOpen(true)
     })
   }, [])
 
-  if (!open) return null
+  if (!open) {
+    if (!needed) return null
+    return (
+      <div
+        role="alert"
+        className="fixed top-0 inset-x-0 z-[90] flex items-center justify-center gap-3 bg-amber-100 text-amber-900 text-sm px-4 py-2 shadow"
+      >
+        <KeyRound className="w-4 h-4" aria-hidden="true" />
+        <span>{t('auth.banner')}</span>
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="font-semibold underline hover:text-amber-700"
+        >
+          {t('auth.enter_token')}
+        </button>
+      </div>
+    )
+  }
 
   const dismiss = () => {
     dismissedRef.current = true
     setOpen(false)
+  }
+
+  const onKeyDown = (e) => {
+    if (e.key === 'Escape') dismiss()
   }
 
   const handleSubmit = (e) => {
@@ -54,6 +81,7 @@ export default function AuthTokenPrompt() {
       role="dialog"
       aria-modal="true"
       aria-labelledby="auth-token-title"
+      onKeyDown={onKeyDown}
     >
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
         {/* Header */}
