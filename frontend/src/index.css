@@ -2,49 +2,316 @@
 @tailwind components;
 @tailwind utilities;
 
-@layer base {
-  :root {
-    --primary-50: 255, 248, 237;
-    --primary-100: 255, 242, 219;
-    --primary-500: 212, 144, 46;
-    --primary-600: 199, 128, 51;
-    --primary-700: 166, 106, 40;
+/* ==========================================================================
+   Design tokens
+   --------------------------------------------------------------------------
+   Colours are space-separated RGB channels so Tailwind's alpha syntax works
+   (`bg-accent/20`, `border-line`). Components never hard-code hues: they use
+   the semantic names mapped in tailwind.config.js.
+
+   Theme is tri-state (system / light / dark):
+     - default            : light
+     - OS dark            : @media (prefers-color-scheme: dark) unless pinned light
+     - [data-theme=dark]  : explicit dark
+   The dark set is declared twice (media + attribute); keep both in sync.
+   ========================================================================== */
+:root {
+  color-scheme: light;
+
+  /* surfaces */
+  --bg: 249 245 240;            /* page      #F9F5F0 */
+  --panel: 255 255 255;         /* cards, sidebar, modals */
+  --sunken: 247 243 237;        /* inset fills, table stripes, hover */
+  --line: 234 227 218;          /* hairlines */
+  --line-2: 216 206 193;        /* stronger borders, inputs */
+
+  /* text */
+  --ink: 36 31 26;              /* primary   #241F1A */
+  --ink-2: 107 97 87;           /* secondary */
+  --ink-3: 152 141 129;         /* tertiary / placeholder */
+
+  /* accent (amber) */
+  --accent: 242 179 89;         /* #F2B359 */
+  --accent-strong: 199 128 51;  /* #C78033 */
+  --accent-ink: 36 31 26;       /* text on --accent */
+
+  /* status: base = fills/dots, -ink = readable text on a tint of the base */
+  --ok: 90 173 80;              /* leaf */
+  --ok-ink: 52 112 46;
+  --warn: 214 158 30;
+  --warn-ink: 133 92 8;
+  --bad: 214 72 84;             /* rose-red */
+  --bad-ink: 163 33 52;
+  --info: 76 164 214;           /* sky */
+  --info-ink: 33 104 152;
+
+  /* brand scale (primary-*) */
+  --primary-50: 255 248 237;
+  --primary-100: 255 242 219;
+  --primary-200: 250 209 133;
+  --primary-300: 242 179 89;
+  --primary-400: 232 160 64;
+  --primary-500: 212 144 46;
+  --primary-600: 199 128 51;
+  --primary-700: 166 106 40;
+  --primary-800: 122 78 30;
+  --primary-900: 77 49 19;
+
+  /* chart categories: one fixed hue per health category */
+  --c-heart: 224 108 120;       /* rose */
+  --c-sleep: 112 120 186;       /* muted night indigo */
+  --c-activity: 226 148 40;     /* amber */
+  --c-body: 90 173 80;          /* leaf */
+  --c-vitals: 76 164 214;       /* sky */
+  --c-mind: 62 160 152;         /* muted teal */
+  --c-env: 168 140 112;         /* clay */
+  --c-other: 150 140 130;       /* neutral */
+
+  /* radii: chip / control / card (+ rounded-full for pills) */
+  --r-chip: 6px;
+  --r-control: 10px;
+  --r-card: 16px;
+
+  /* two elevation levels, neutral shadows only */
+  --shadow-1: 0 1px 2px rgb(60 40 20 / 0.06), 0 1px 1px rgb(60 40 20 / 0.04);
+  --shadow-2: 0 10px 30px -8px rgb(60 40 20 / 0.18), 0 2px 6px rgb(60 40 20 / 0.06);
+
+  --scrollbar-thumb: 216 206 193;
+  --scrollbar-thumb-hover: 190 178 163;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg: 28 24 20;             /* #1c1814 */
+    --panel: 36 31 26;          /* #241F1A */
+    --sunken: 46 40 34;
+    --line: 62 54 46;
+    --line-2: 86 76 66;
+    --ink: 245 237 225;
+    --ink-2: 196 184 169;
+    --ink-3: 143 131 118;
+    --accent: 242 179 89;
+    --accent-strong: 214 144 46;
+    --accent-ink: 36 31 26;
+    --ok: 110 190 100;
+    --ok-ink: 156 214 146;
+    --warn: 232 185 70;
+    --warn-ink: 240 202 112;
+    --bad: 232 110 122;
+    --bad-ink: 255 165 175;
+    --info: 122 196 232;
+    --info-ink: 150 208 240;
+    --primary-50: 44 34 23;
+    --primary-100: 58 44 27;
+    --primary-200: 96 70 34;
+    --primary-700: 242 179 89;
+    --primary-800: 250 209 133;
+    --primary-900: 255 232 190;
+    --c-heart: 240 130 142;
+    --c-sleep: 142 150 214;
+    --c-activity: 242 172 70;
+    --c-body: 118 196 108;
+    --c-vitals: 110 190 232;
+    --c-mind: 88 196 186;
+    --c-env: 196 168 138;
+    --c-other: 168 158 148;
+    --shadow-1: 0 1px 2px rgb(0 0 0 / 0.35);
+    --shadow-2: 0 14px 34px -8px rgb(0 0 0 / 0.55), 0 2px 6px rgb(0 0 0 / 0.3);
+    --scrollbar-thumb: 76 67 57;
+    --scrollbar-thumb-hover: 104 92 79;
   }
 }
 
-body {
-  background-color: #F9F5F0;
-  @apply text-gray-900;
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: 28 24 20;
+  --panel: 36 31 26;
+  --sunken: 46 40 34;
+  --line: 62 54 46;
+  --line-2: 86 76 66;
+  --ink: 245 237 225;
+  --ink-2: 196 184 169;
+  --ink-3: 143 131 118;
+  --accent: 242 179 89;
+  --accent-strong: 214 144 46;
+  --accent-ink: 36 31 26;
+  --ok: 110 190 100;
+  --ok-ink: 156 214 146;
+  --warn: 232 185 70;
+  --warn-ink: 240 202 112;
+  --bad: 232 110 122;
+  --bad-ink: 255 165 175;
+  --info: 122 196 232;
+  --info-ink: 150 208 240;
+  --primary-50: 44 34 23;
+  --primary-100: 58 44 27;
+  --primary-200: 96 70 34;
+  --primary-700: 242 179 89;
+  --primary-800: 250 209 133;
+  --primary-900: 255 232 190;
+  --c-heart: 240 130 142;
+  --c-sleep: 142 150 214;
+  --c-activity: 242 172 70;
+  --c-body: 118 196 108;
+  --c-vitals: 110 190 232;
+  --c-mind: 88 196 186;
+  --c-env: 196 168 138;
+  --c-other: 168 158 148;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.35);
+  --shadow-2: 0 14px 34px -8px rgb(0 0 0 / 0.55), 0 2px 6px rgb(0 0 0 / 0.3);
+  --scrollbar-thumb: 76 67 57;
+  --scrollbar-thumb-hover: 104 92 79;
 }
 
-.card {
-  @apply bg-white rounded-lg shadow-sm border border-gray-200 p-6;
+/* ==========================================================================
+   Base
+   ========================================================================== */
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-bg text-ink antialiased;
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::selection {
+    background: rgb(var(--accent) / 0.35);
+  }
+
+  /* One focus ring everywhere, in the accent colour. */
+  :focus-visible {
+    outline: 2px solid rgb(var(--accent-strong));
+    outline-offset: 2px;
+  }
+
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible {
+    outline-offset: 0;
+  }
+
+  input, textarea, select {
+    background-color: rgb(var(--panel));
+    color: rgb(var(--ink));
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: rgb(var(--ink-3));
+  }
+
+  /* Thin themed scrollbars (Firefox + WebKit). */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--scrollbar-thumb)) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: rgb(var(--scrollbar-thumb));
+    border-radius: 10px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--scrollbar-thumb-hover));
+  }
 }
 
-.btn {
-  @apply px-4 py-2 rounded-lg font-medium transition-colors duration-200;
+/* ==========================================================================
+   Components (shared utility classes)
+   ========================================================================== */
+@layer components {
+  /* Typography: one page title, one section heading, one eyebrow. */
+  .page-title {
+    @apply text-3xl font-bold tracking-tight text-ink;
+  }
+  .page-subtitle {
+    @apply mt-2 text-base text-ink-2;
+  }
+  .section-title {
+    @apply text-lg font-semibold text-ink;
+  }
+
+  .card {
+    @apply bg-panel rounded-card shadow-sm border border-line p-6;
+  }
+
+  /* Buttons: primary / secondary / ghost / danger. */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-control text-sm font-medium
+      transition duration-150 select-none
+      disabled:opacity-50 disabled:cursor-not-allowed disabled:active:translate-y-0;
+  }
+  .btn:not(:disabled):active {
+    transform: translateY(1px);
+  }
+  .btn-primary {
+    @apply btn bg-primary-600 text-white hover:bg-primary-600/90;
+  }
+  .btn-secondary {
+    @apply btn bg-sunken text-ink border border-line-2 hover:bg-line;
+  }
+  .btn-ghost {
+    @apply btn text-ink-2 hover:bg-sunken hover:text-ink;
+  }
+  .btn-danger {
+    @apply btn bg-bad text-panel hover:bg-bad/90;
+  }
+
+  .input {
+    @apply w-full bg-panel text-ink border border-line-2 rounded-control px-3 py-2
+      focus:outline-none focus:ring-2 focus:ring-accent/60 focus:border-accent-strong;
+  }
+  .select {
+    @apply input;
+  }
+
+  /* Warm tinted callout, used where dark gradient "note" cards used to be. */
+  .note {
+    @apply rounded-card border border-primary-200/60 bg-primary-100/60 text-ink p-5;
+  }
+
+  /* Status pill / badge. Pair with bg-{ok|warn|bad|info}/15 text-{...}-ink. */
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold;
+  }
+
+  /* Markdown prose in the brand palette; every colour is a token so it flips with the theme. */
+  .prose.prose-hime {
+    --tw-prose-body: rgb(var(--ink));
+    --tw-prose-headings: rgb(var(--ink));
+    --tw-prose-lead: rgb(var(--ink-2));
+    --tw-prose-links: rgb(var(--primary-700));
+    --tw-prose-bold: rgb(var(--ink));
+    --tw-prose-counters: rgb(var(--ink-2));
+    --tw-prose-bullets: rgb(var(--ink-3));
+    --tw-prose-hr: rgb(var(--line));
+    --tw-prose-quotes: rgb(var(--ink));
+    --tw-prose-quote-borders: rgb(var(--accent));
+    --tw-prose-captions: rgb(var(--ink-2));
+    --tw-prose-code: rgb(var(--ink));
+    --tw-prose-pre-code: rgb(var(--ink));
+    --tw-prose-pre-bg: rgb(var(--sunken));
+    --tw-prose-th-borders: rgb(var(--line-2));
+    --tw-prose-td-borders: rgb(var(--line));
+  }
+
+  .skeleton {
+    @apply rounded-control bg-line/70;
+    animation: himePulse 1.4s ease-in-out infinite;
+  }
 }
 
-.btn-primary {
-  @apply btn bg-primary-600 text-white hover:bg-primary-700;
-}
-
-.btn-secondary {
-  @apply btn bg-gray-200 text-gray-800 hover:bg-gray-300;
-}
-
-.btn-danger {
-  @apply btn bg-red-600 text-white hover:bg-red-700;
-}
-
-.input {
-  @apply w-full border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 px-3 py-2;
-}
-
-.select {
-  @apply input;
-}
-
+/* ==========================================================================
+   Motion
+   ========================================================================== */
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
@@ -52,6 +319,11 @@ body {
 
 .animate-fade-in {
   animation: fadeIn 0.5s ease-out forwards;
+}
+
+@keyframes himePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
 }
 
 /* Entrance animations used by modals (`animate-in` + `fade-in` / `zoom-in-95`).
@@ -64,6 +336,11 @@ body {
 @keyframes himeZoomIn {
   from { opacity: 0; transform: scale(0.95); }
   to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes himeSlideIn {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
 }
 
 .animate-in {
@@ -80,27 +357,25 @@ body {
   animation-name: himeZoomIn;
 }
 
+.animate-drawer {
+  animation: himeSlideIn 200ms ease-out both;
+}
+
+/* Global kill switch: honour the OS "reduce motion" setting everywhere. */
 @media (prefers-reduced-motion: reduce) {
-  .animate-in {
-    animation: none;
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
   }
 }
 
-/* Slim scrollbars for inner scroll areas (tool list, inspected tables). */
+/* Slim scrollbars for inner scroll areas (kept for existing markup; the global
+   rule above already themes every scrollbar). */
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;
   height: 6px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background: #e5e7eb;
-  border-radius: 10px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: #d1d5db;
 }

@@ -12,12 +12,12 @@ export default function LanguageSwitcher() {
   }
 
   return (
-    <label className="flex items-center gap-1.5 text-xs text-gray-500" title={t('common.language')}>
-      <Languages className="w-3.5 h-3.5 text-gray-400" aria-hidden="true" />
+    <label className="flex items-center gap-1.5 text-xs text-ink-2" title={t('common.language')}>
+      <Languages className="w-3.5 h-3.5 text-ink-3" aria-hidden="true" />
       <select
         value={current}
         onChange={handleChange}
-        className="bg-transparent border border-gray-200 rounded-md px-1.5 py-0.5 text-xs font-medium text-gray-700 focus:outline-none focus:ring-1 focus:ring-primary-300 cursor-pointer"
+        className="bg-transparent border border-line rounded-chip px-1.5 py-0.5 text-xs font-medium text-ink focus:outline-none focus:ring-1 focus:ring-primary-300 cursor-pointer"
         aria-label={t('common.language')}
       >
         <option value="en">{t('language_switcher.english')}</option>

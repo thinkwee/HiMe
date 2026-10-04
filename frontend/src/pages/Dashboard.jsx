@@ -46,16 +46,16 @@ export default function Dashboard({ active = true }) {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-4xl font-extrabold text-gray-900 tracking-tight">{t('dashboard.title')}</h2>
-          <p className="mt-2 text-base text-gray-500">
+          <h2 className="page-title">{t('dashboard.title')}</h2>
+          <p className="page-subtitle">
             {t('dashboard.subtitle')}
-            <span className="ml-3 px-2.5 py-1 text-sm font-semibold bg-green-100 text-green-800 rounded-lg">
+            <span className="ml-3 px-2.5 py-1 text-sm font-semibold bg-ok/15 text-ok-ink rounded-control">
               {t('dashboard.live_badge')}
             </span>
             {isStreaming && (
-              <span className="ml-2 px-2.5 py-1 text-sm font-semibold bg-blue-100 text-blue-800 rounded-lg animate-pulse">
+              <span className="ml-2 px-2.5 py-1 text-sm font-semibold bg-info/15 text-info-ink rounded-control animate-pulse">
                 {t('dashboard.streaming_badge')}
               </span>
             )}

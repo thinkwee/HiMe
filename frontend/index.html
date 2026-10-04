@@ -3,8 +3,27 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#F9F5F0" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#1c1814" media="(prefers-color-scheme: dark)" />
     <link rel="icon" type="image/png" href="/assets/logo_web.png" />
     <title>HiMe | Health Intelligence Monitor</title>
+    <script>
+      // Apply the saved theme before first paint (no flash). Keep in sync with src/lib/theme.js.
+      (function () {
+        try {
+          var t = localStorage.getItem('hime_theme');
+          if (t === 'light' || t === 'dark') {
+            document.documentElement.setAttribute('data-theme', t);
+            var m = document.querySelectorAll('meta[name="theme-color"]');
+            for (var i = 0; i < m.length; i++) {
+              m[i].removeAttribute('media');
+              m[i].setAttribute('content', t === 'dark' ? '#1c1814' : '#F9F5F0');
+            }
+          }
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

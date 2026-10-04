@@ -7,6 +7,7 @@ import { api } from '../lib/api'
 import { formatFullDateTime, parseBackendDate } from '../lib/utils'
 import i18n from '../i18n'
 import ErrorBoundary from './ErrorBoundary'
+import { useChartTheme } from '../lib/chartColors'
 
 const ENUMERATED_METRICS = {
   // Activity & Fitness
@@ -155,7 +156,6 @@ function makeTimeTickFormatter(timestamps) {
  * - Unified logic for Apple Health and GLOBEM
  * - Premium aesthetics (backdrop filters, optimized axis)
  */
-const COLORS = ['#0ea5e9', '#10b981', '#8b5cf6', '#f59e0b', '#ef4444', '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#84cc16', '#e11d48', '#0d9488']
 
 /** Download a PNG blob (fallback when the async clipboard API is unavailable, e.g. plain http). */
 function downloadBlob(blob, filename) {
@@ -171,9 +171,10 @@ function downloadBlob(blob, filename) {
 
 const MetricChartCard = memo(function MetricChartCard({
   feature, meta, featureData, isAppleHealthFormat, isMultiParticipant,
-  aggregationMode, users, chartData, colors, idx,
+  aggregationMode, users, chartData,
 }) {
   const { t } = useTranslation()
+  const chart = useChartTheme()
   const [expanded, setExpanded] = useState(false)
   const expandedChartRef = useRef(null)
   const dialogRef = useRef(null)
@@ -230,7 +231,7 @@ const MetricChartCard = memo(function MetricChartCard({
     if (!expandedChartRef.current) return
     setCopyStatus('copying')
     try {
-      const dataUrl = await toPng(expandedChartRef.current, { backgroundColor: '#ffffff', pixelRatio: 2 })
+      const dataUrl = await toPng(expandedChartRef.current, { backgroundColor: chart.panel, pixelRatio: 2 })
       const res = await fetch(dataUrl)
       const blob = await res.blob()
       // navigator.clipboard / ClipboardItem only exist in secure contexts (https
@@ -252,7 +253,7 @@ const MetricChartCard = memo(function MetricChartCard({
       console.error('Copy failed:', e)
       flashCopyStatus('failed')
     }
-  }, [displayName, flashCopyStatus])
+  }, [displayName, flashCopyStatus, chart.panel])
 
   // Common chart preparation
   const timestamps = featureData.length > 0 ? featureData.map(d => d.timestamp).filter(Boolean) : []
@@ -320,17 +321,11 @@ const MetricChartCard = memo(function MetricChartCard({
       maxLinePidIdx = users.indexOf(pid);
     }
   }
-  const themeColor = isIndividualMulti ? colors[maxLinePidIdx % colors.length] : colors[idx % colors.length];
-  
-  // Custom darker color for the label text (simple darken logic)
-  const getDarkColor = (hex) => {
-    if (!hex || hex[0] !== '#') return hex;
-    const r = parseInt(hex.slice(1, 3), 16);
-    const g = parseInt(hex.slice(3, 5), 16);
-    const b = parseInt(hex.slice(5, 7), 16);
-    return `rgb(${Math.floor(r * 0.7)}, ${Math.floor(g * 0.7)}, ${Math.floor(b * 0.7)})`;
-  };
-  const darkThemeColor = getDarkColor(themeColor);
+  // One fixed hue per health category (same metric, same colour); several
+  // participants on one chart fall back to the distinct-hue series palette.
+  const categoryColor = chart.colors[chartKeyFor(feature)]
+  const seriesColor = (pidIdx) => chart.series[pidIdx % chart.series.length]
+  const themeColor = isIndividualMulti ? seriesColor(maxLinePidIdx) : categoryColor
 
   return (
     <>
@@ -338,7 +333,7 @@ const MetricChartCard = memo(function MetricChartCard({
       role="button"
       tabIndex={0}
       aria-label={t('statistics.expand_chart', { name: displayName })}
-      className="cursor-pointer bg-white/80 backdrop-blur-3xl border border-white/40 rounded-[2.5rem] p-5 shadow-sm hover:shadow-2xl hover:shadow-blue-500/10 transition-all duration-700 flex flex-col h-full overflow-hidden group focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+      className="cursor-pointer bg-panel/80 backdrop-blur-3xl border border-panel/40 rounded-card p-5 shadow-sm hover:shadow-2xl  transition-all duration-700 flex flex-col h-full overflow-hidden group focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
       onClick={() => setExpanded(true)}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return
@@ -351,11 +346,11 @@ const MetricChartCard = memo(function MetricChartCard({
       {/* Header Area */}
       <div className="flex-initial mb-1 flex items-start justify-between gap-2 px-1">
         <div className="min-w-0">
-          <h5 className="text-base font-black text-gray-900 truncate leading-normal transition-all group-hover:text-blue-600 tracking-tight" title={displayName}>
+          <h5 className="text-base font-bold text-ink truncate leading-normal transition-all group-hover:text-info-ink tracking-tight" title={displayName}>
             {displayName}
           </h5>
           <div className="flex items-center gap-2 mt-0.5 opacity-60">
-            <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+            <span className="text-[10px] font-bold uppercase tracking-widest text-ink-3">
               {isAppleHealthFormat ? `${featureData.length} ${t('statistics.points_suffix')}` : t('statistics.realtime')}
             </span>
           </div>
@@ -367,8 +362,8 @@ const MetricChartCard = memo(function MetricChartCard({
         {featureData.length === 0 ? (
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="text-center opacity-20">
-              <div className="w-16 h-1 bg-gray-900 mx-auto rounded-full mb-2" />
-              <div className="font-black uppercase tracking-[0.3em] text-[10px]">{t('statistics.syncing')}</div>
+              <div className="w-16 h-1 bg-ink mx-auto rounded-full mb-2" />
+              <div className="font-bold uppercase tracking-[0.3em] text-[10px]">{t('statistics.syncing')}</div>
             </div>
           </div>
         ) : (
@@ -377,13 +372,13 @@ const MetricChartCard = memo(function MetricChartCard({
               data={mainData}
               margin={{ top: 12, right: 10, left: 10, bottom: 0 }} // Minimal top gap
             >
-              <CartesianGrid strokeDasharray="6 6" stroke="#f1f5f9" vertical={false} />
+              <CartesianGrid strokeDasharray="6 6" stroke={chart.grid} vertical={false} />
               <XAxis
                 dataKey={xKey}
                 type="number"
                 domain={['dataMin', 'dataMax']}
                 tickFormatter={timeFormatter}
-                tick={{ fontSize: 9, fontWeight: 900, fill: '#94a3b8' }}
+                tick={{ fontSize: 9, fontWeight: 700, fill: chart.axisText }}
                 axisLine={false}
                 tickLine={false}
                 minTickGap={60}
@@ -406,19 +401,19 @@ const MetricChartCard = memo(function MetricChartCard({
                   y={maxVal} 
                   r={4}
                   fill={themeColor} 
-                  stroke="#fff" 
+                  stroke={chart.panel}
                   strokeWidth={2}
                   label={{ 
                     position: 'top',
                     textAnchor: validData.length <= 1 ? 'middle' : (maxIdx < 5 ? 'start' : (maxIdx > validData.length - 5 ? 'end' : 'middle')),
                     value: formatDisplayValue(maxVal), 
-                    fill: darkThemeColor, 
+                    fill: themeColor, 
                     fontSize: 10, 
                     fontWeight: 900,
                     offset: 5,
                     style: { 
                       paintOrder: 'stroke',
-                      stroke: '#ffffff',
+                      stroke: chart.panel,
                       strokeWidth: '4px',
                       strokeLinejoin: 'round'
                     }
@@ -428,22 +423,21 @@ const MetricChartCard = memo(function MetricChartCard({
 
               <Tooltip
                 contentStyle={{
+                  ...chart.tooltip,
                   fontSize: 11,
-                  fontWeight: 800,
-                  borderRadius: '16px',
-                  border: 'none',
-                  boxShadow: '0 25px 50px -12px rgb(0 0 0 / 0.25)',
-                  backgroundColor: 'rgba(255, 255, 255, 0.98)',
-                  backdropFilter: 'blur(16px)',
+                  fontWeight: 600,
+                  borderRadius: '12px',
+                  boxShadow: 'var(--shadow-2)',
                   padding: '10px 14px'
                 }}
+                labelStyle={{ color: chart.axisText }}
                 labelFormatter={(val) => {
                   const pt = mainData.find(d => (d.timestamp ?? d.index) === val)
                   return pt?.date ? formatFullDateTime(pt.date) : String(val)
                 }}
                 formatter={(value, name) => [
-                  <span key="val" className="text-blue-600 font-black">{formatDisplayValue(typeof value === 'number' ? value : undefined)}</span>,
-                  <span key="lbl" className="text-gray-400 text-[10px] uppercase font-black ml-1 tracking-tighter">{isIndividualMulti ? name : (displayUnit === '%' ? '' : (displayUnit || t('statistics.val_short')))}</span>
+                  <span key="val" className="text-info-ink font-bold">{formatDisplayValue(typeof value === 'number' ? value : undefined)}</span>,
+                  <span key="lbl" className="text-ink-3 text-[10px] uppercase font-bold ml-1 tracking-tighter">{isIndividualMulti ? name : (displayUnit === '%' ? '' : (displayUnit || t('statistics.val_short')))}</span>
                 ]}
               />
               {isIndividualMulti && (
@@ -469,7 +463,7 @@ const MetricChartCard = memo(function MetricChartCard({
                     key={pid}
                     type="monotone"
                     dataKey={`${feature}__${pid}`}
-                    stroke={colors[pidIdx % colors.length]}
+                    stroke={seriesColor(pidIdx)}
                     strokeWidth={2.5}
                     dot={false}
                     activeDot={{ r: 4, strokeWidth: 0 }}
@@ -482,7 +476,7 @@ const MetricChartCard = memo(function MetricChartCard({
                 <Line
                   type="monotone"
                   dataKey="value"
-                  stroke={colors[idx % colors.length]}
+                  stroke={categoryColor}
                   strokeWidth={3}
                   dot={false}
                   activeDot={{ r: 4, strokeWidth: 0 }}
@@ -505,26 +499,26 @@ const MetricChartCard = memo(function MetricChartCard({
           role="dialog"
           aria-modal="true"
           aria-labelledby={`chart-modal-title-${feature}`}
-          className="bg-white rounded-3xl shadow-2xl max-w-3xl w-full mx-8 outline-none"
+          className="bg-panel rounded-card shadow-2xl max-w-3xl w-full mx-4 md:mx-8 outline-none"
           onClick={e => e.stopPropagation()}
         >
           {/* Modal Header */}
           <div className="flex items-center justify-between px-7 pt-5 pb-3">
             <div>
-              <h3 id={`chart-modal-title-${feature}`} className="text-lg font-black text-gray-900">{displayName}</h3>
-              {displayUnit && <p className="text-sm text-gray-400 font-medium mt-0.5">{displayUnit}</p>}
+              <h3 id={`chart-modal-title-${feature}`} className="section-title">{displayName}</h3>
+              {displayUnit && <p className="text-sm text-ink-3 font-medium mt-0.5">{displayUnit}</p>}
             </div>
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={handleCopyImage}
                 disabled={copyStatus === 'copying'}
-                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all ${
+                className={`flex items-center gap-2 px-4 py-2 rounded-control text-sm font-bold transition-all ${
                   copyStatus === 'copied' || copyStatus === 'downloaded'
-                    ? 'bg-green-50 text-green-600 border border-green-200'
+                    ? 'bg-ok/10 text-ok-ink border border-ok/30'
                     : copyStatus === 'failed'
-                      ? 'bg-red-50 text-red-600 border border-red-200'
-                      : 'bg-gray-50 text-gray-600 border border-gray-200 hover:bg-gray-100'
+                      ? 'bg-bad/10 text-bad-ink border border-bad/30'
+                      : 'bg-sunken text-ink-2 border border-line hover:bg-sunken'
                 }`}
               >
                 {copyStatus === 'copied' || copyStatus === 'downloaded' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
@@ -539,7 +533,7 @@ const MetricChartCard = memo(function MetricChartCard({
                 type="button"
                 onClick={() => setExpanded(false)}
                 aria-label={t('common.close')}
-                className="p-2 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+                className="p-2 rounded-control text-ink-3 hover:text-ink-2 hover:bg-sunken transition-colors"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -547,13 +541,13 @@ const MetricChartCard = memo(function MetricChartCard({
           </div>
 
           {/* Modal Chart */}
-          <div ref={expandedChartRef} className="px-7 pt-2 pb-6 bg-white rounded-b-3xl">
-            <div className="text-base font-bold text-gray-800 mb-1">{displayName}</div>
-            {displayUnit && <div className="text-xs text-gray-400 mb-3">{displayUnit}</div>}
+          <div ref={expandedChartRef} className="px-7 pt-2 pb-6 bg-panel rounded-b-3xl">
+            <div className="text-base font-bold text-ink mb-1">{displayName}</div>
+            {displayUnit && <div className="text-xs text-ink-3 mb-3">{displayUnit}</div>}
             {featureData.length === 0 ? (
               <div className="flex items-center justify-center h-64">
                 <div className="text-center opacity-30">
-                  <div className="font-black uppercase tracking-[0.3em] text-sm">{t('statistics.no_data')}</div>
+                  <div className="font-bold uppercase tracking-[0.3em] text-sm">{t('statistics.no_data')}</div>
                 </div>
               </div>
             ) : (
@@ -562,15 +556,15 @@ const MetricChartCard = memo(function MetricChartCard({
                   data={mainData}
                   margin={{ top: 10, right: 20, left: 10, bottom: 20 }}
                 >
-                  <CartesianGrid strokeDasharray="4 4" stroke="#e2e8f0" />
+                  <CartesianGrid strokeDasharray="4 4" stroke={chart.grid} />
                   <XAxis
                     dataKey={xKey}
                     type="number"
                     domain={['dataMin', 'dataMax']}
                     tickFormatter={timeFormatter}
-                    tick={{ fontSize: 11, fontWeight: 600, fill: '#64748b' }}
-                    axisLine={{ stroke: '#cbd5e1' }}
-                    tickLine={{ stroke: '#cbd5e1' }}
+                    tick={{ fontSize: 11, fontWeight: 600, fill: chart.axisText }}
+                    axisLine={{ stroke: chart.axisLine }}
+                    tickLine={{ stroke: chart.axisLine }}
                     minTickGap={60}
                     height={35}
                     padding={{ left: 15, right: 15 }}
@@ -581,26 +575,27 @@ const MetricChartCard = memo(function MetricChartCard({
                       : [minVal - (isFlat ? (maxVal === 0 ? 1 : Math.abs(maxVal * 0.1)) : (maxVal - minVal) * 0.05),
                          maxVal + (isFlat ? (maxVal === 0 ? 1 : Math.abs(maxVal * 0.1)) : (maxVal - minVal) * 0.05)]
                     }
-                    tick={{ fontSize: 11, fontWeight: 600, fill: '#64748b' }}
-                    axisLine={{ stroke: '#cbd5e1' }}
-                    tickLine={{ stroke: '#cbd5e1' }}
+                    tick={{ fontSize: 11, fontWeight: 600, fill: chart.axisText }}
+                    axisLine={{ stroke: chart.axisLine }}
+                    tickLine={{ stroke: chart.axisLine }}
                     width={60}
                     tickFormatter={(v) => formatDisplayValue(v)}
                   />
 
                   <Tooltip
                     contentStyle={{
-                      fontSize: 12, fontWeight: 700, borderRadius: '12px', border: 'none',
-                      boxShadow: '0 10px 40px -10px rgb(0 0 0 / 0.2)',
-                      backgroundColor: 'rgba(255, 255, 255, 0.98)', padding: '12px 16px'
+                      ...chart.tooltip,
+                      fontSize: 12, fontWeight: 600, borderRadius: '12px',
+                      boxShadow: 'var(--shadow-2)', padding: '12px 16px'
                     }}
+                    labelStyle={{ color: chart.axisText }}
                     labelFormatter={(val) => {
                       const pt = mainData.find(d => (d.timestamp ?? d.index) === val)
                       return pt?.date ? formatFullDateTime(pt.date) : String(val)
                     }}
                     formatter={(value, name) => [
-                      <span key="val" className="text-blue-600 font-black">{formatDisplayValue(typeof value === 'number' ? value : undefined)}</span>,
-                      <span key="lbl" className="text-gray-400 text-xs uppercase font-bold ml-1">{isIndividualMulti ? name : (displayUnit || t('statistics.value'))}</span>
+                      <span key="val" className="text-info-ink font-bold">{formatDisplayValue(typeof value === 'number' ? value : undefined)}</span>,
+                      <span key="lbl" className="text-ink-3 text-xs uppercase font-bold ml-1">{isIndividualMulti ? name : (displayUnit || t('statistics.value'))}</span>
                     ]}
                   />
 
@@ -612,13 +607,13 @@ const MetricChartCard = memo(function MetricChartCard({
                   {isIndividualMulti ? (
                     users.map((pid, pidIdx) => pid && (
                       <Line key={pid} type="monotone" dataKey={`${feature}__${pid}`}
-                        stroke={colors[pidIdx % colors.length]} strokeWidth={2.5}
+                        stroke={seriesColor(pidIdx)} strokeWidth={2.5}
                         dot={false} activeDot={{ r: 4, strokeWidth: 0 }}
                         name={pid} isAnimationActive={false} connectNulls />
                     ))
                   ) : (
                     <Line type="monotone" dataKey="value"
-                      stroke={colors[idx % colors.length]} strokeWidth={2.5}
+                      stroke={categoryColor} strokeWidth={2.5}
                       dot={false} activeDot={{ r: 4, strokeWidth: 0 }}
                       isAnimationActive={false} connectNulls />
                   )}
@@ -640,8 +635,9 @@ const TAXONOMY = [
     id: 'heart',
     nameKey: 'statistics.category_heart',
     icon: Heart,
-    color: 'text-red-500',
-    bg: 'bg-red-50',
+    chart: 'heart',
+    color: 'text-chart-heart',
+    bg: 'bg-chart-heart/10',
     matches: [
       'Heart', 'Pulse', 'Respiratory', 'Oxygen', 'Saturation', 'BloodPressure', 'Glucose',
       'Vitals', 'SpO2', 'Temperature', 'Beat', 'Atrial', 'Fibrillation', 'ECG', 'EKG',
@@ -652,16 +648,18 @@ const TAXONOMY = [
     id: 'sleep',
     nameKey: 'statistics.category_sleep',
     icon: Moon,
-    color: 'text-indigo-500',
-    bg: 'bg-indigo-50',
+    chart: 'sleep',
+    color: 'text-chart-sleep',
+    bg: 'bg-chart-sleep/10',
     matches: ['Sleep', 'Mindful', 'Rem', 'Arousal', 'Insomnia', 'Awake', 'DeepSleep']
   },
   {
     id: 'activity',
     nameKey: 'statistics.category_activity',
     icon: Activity,
-    color: 'text-orange-500',
-    bg: 'bg-orange-50',
+    chart: 'activity',
+    color: 'text-chart-activity',
+    bg: 'bg-chart-activity/10',
     matches: [
       'Step', 'Distance', 'Flight', 'Energy', 'Calorie', 'Stand', 'Exercise', 'Move', 'Push',
       'Cycling', 'Swimming', 'Active', 'Downhill', 'Strokes', 'Cadence', 'Pace',
@@ -672,16 +670,18 @@ const TAXONOMY = [
     id: 'workouts',
     nameKey: 'statistics.category_workouts',
     icon: Dumbbell,
-    color: 'text-amber-600',
-    bg: 'bg-amber-50',
+    chart: 'activity',
+    color: 'text-chart-activity',
+    bg: 'bg-chart-activity/10',
     matches: ['Workout']
   },
   {
     id: 'mobility',
     nameKey: 'statistics.category_mobility',
     icon: Footprints,
-    color: 'text-emerald-500',
-    bg: 'bg-emerald-50',
+    chart: 'mind',
+    color: 'text-chart-mind',
+    bg: 'bg-chart-mind/10',
     matches: [
       'Gait', 'Walking', 'StepLength', 'Asymmetry', 'Steadiness', 'Balance', 'Stair',
       'SixMinute', 'Support', 'Swing', 'GroundContact', 'Vertical'
@@ -691,8 +691,9 @@ const TAXONOMY = [
     id: 'environment',
     nameKey: 'statistics.category_environment',
     icon: Zap,
-    color: 'text-amber-500',
-    bg: 'bg-amber-50',
+    chart: 'env',
+    color: 'text-chart-env',
+    bg: 'bg-chart-env/10',
     matches: [
       'Audio', 'Noise', 'Exposure', 'Dietary', 'Water', 'Nutrition', 'UV', 'Vitamin',
       'Sugar', 'Carb', 'Fat', 'Protein', 'Mineral', 'Micro', 'Milligram', 'Ounce', 'Fiber',
@@ -703,8 +704,9 @@ const TAXONOMY = [
     id: 'body',
     nameKey: 'statistics.category_body',
     icon: Activity,
-    color: 'text-cyan-500',
-    bg: 'bg-cyan-50',
+    chart: 'body',
+    color: 'text-chart-body',
+    bg: 'bg-chart-body/10',
     matches: [
       'Body', 'Mass', 'Fat', 'Height', 'Waist', 'BMI', 'Weight', 'Composition',
       'Menstrual', 'Period', 'Cycle', 'Ovulation', 'Symptoms', 'Sexual', 'Headache',
@@ -740,6 +742,16 @@ export const getCategory = (feature) => {
   // Default to General Wellness instead of "Uncategorized"
   return TAXONOMY[TAXONOMY.length - 1];
 };
+
+// Vital-sign metrics live in the Heart section but keep their own (vitals) hue.
+const VITALS_KEYS = ['oxygen', 'saturation', 'spo2', 'respiratory', 'vo2', 'temperature', 'glucose', 'bloodpressure']
+
+/** Chart colour key (see lib/chartColors.js) for a feature: fixed per metric. */
+export const chartKeyFor = (feature) => {
+  const f = normalizeFeatureName(feature || '')
+  if (!f.includes('sleep') && VITALS_KEYS.some(k => f.includes(k))) return 'vitals'
+  return getCategory(feature).chart || 'other'
+}
 
 const WINDOW_OPTIONS = [
   { labelKey: 'statistics.window_1hour', value: '1hour' },
@@ -962,7 +974,7 @@ const EMPTY_DATA = []
 function ChartCardError({ feature }) {
   const { t } = useTranslation()
   return (
-    <div role="alert" className="bg-white/80 border border-red-100 rounded-[2.5rem] p-5 text-sm text-red-600">
+    <div role="alert" className="bg-panel/80 border border-bad/30 rounded-card p-5 text-sm text-bad-ink">
       {t('statistics.chart_error', { name: getFriendlyName(feature) })}
     </div>
   )
@@ -1001,31 +1013,27 @@ function StatisticsPanel({ data, historicalData = [], featureMetadata = {}, live
     for (const f of featuresToDisplay) map.get(getCategory(f).id).push(f)
     return map
   }, [featuresToDisplay])
-  const featureIndex = useMemo(() => new Map(featuresToDisplay.map((f, i) => [f, i])), [featuresToDisplay])
-
-  const colors = COLORS
-
 
   return (
     <div className="card">
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center space-x-3">
-          <TrendingUp className="w-6 h-6 text-gray-600" />
-          <h3 className="text-lg font-extrabold text-gray-900">{t('statistics.data_overview')}</h3>
+          <TrendingUp className="w-6 h-6 text-ink-2" />
+          <h3 className="section-title">{t('statistics.data_overview')}</h3>
           {isMultiParticipant && (
-            <span className="text-sm font-bold bg-blue-100 text-blue-700 px-3 py-1 rounded-lg">
+            <span className="text-sm font-bold bg-info/15 text-info-ink px-3 py-1 rounded-control">
               {t('statistics.users_count', { count: users.length })}
             </span>
           )}
         </div>
         <div className="flex items-center space-x-2">
           {isMultiParticipant && (
-            <div className="flex items-center space-x-1 bg-gray-100 rounded-lg p-1">
+            <div className="flex items-center space-x-1 bg-sunken rounded-control p-1">
               <button
                 onClick={() => setAggregationMode('individual')}
-                className={`px-4 py-2 text-base font-semibold rounded-lg ${aggregationMode === 'individual'
-                  ? 'bg-white text-gray-900 shadow-md'
-                  : 'text-gray-600 hover:text-gray-900'
+                className={`px-4 py-2 text-base font-semibold rounded-control ${aggregationMode === 'individual'
+                  ? 'bg-panel text-ink shadow-md'
+                  : 'text-ink-2 hover:text-ink'
                   }`}
                 title={t('statistics.show_individual_tooltip')}
               >
@@ -1034,9 +1042,9 @@ function StatisticsPanel({ data, historicalData = [], featureMetadata = {}, live
               </button>
               <button
                 onClick={() => setAggregationMode('average')}
-                className={`px-4 py-2 text-base font-semibold rounded-lg ${aggregationMode === 'average'
-                  ? 'bg-white text-gray-900 shadow-md'
-                  : 'text-gray-600 hover:text-gray-900'
+                className={`px-4 py-2 text-base font-semibold rounded-control ${aggregationMode === 'average'
+                  ? 'bg-panel text-ink shadow-md'
+                  : 'text-ink-2 hover:text-ink'
                   }`}
                 title={t('statistics.show_average_tooltip')}
               >
@@ -1051,12 +1059,12 @@ function StatisticsPanel({ data, historicalData = [], featureMetadata = {}, live
       {/* Top Stats Overview - unified 4-card row */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         {/* Data Window Card */}
-        <div className="bg-white border border-gray-100 rounded-xl p-5 shadow-sm flex flex-col">
+        <div className="bg-panel border border-line rounded-card p-5 shadow-sm flex flex-col">
           <div className="flex items-center gap-2 mb-4">
-            <div className="p-2 bg-orange-50 rounded-lg">
-              <Calendar className="w-5 h-5 text-orange-500" />
+            <div className="p-2 bg-warn/10 rounded-control">
+              <Calendar className="w-5 h-5 text-warn" />
             </div>
-            <p className="text-sm font-bold text-gray-500 uppercase tracking-widest">{t('statistics.data_window')}</p>
+            <p className="text-sm font-bold text-ink-2 uppercase tracking-widest">{t('statistics.data_window')}</p>
           </div>
           <div className="grid grid-cols-2 gap-2 flex-1">
             {WINDOW_OPTIONS.map((opt) => (
@@ -1065,69 +1073,69 @@ function StatisticsPanel({ data, historicalData = [], featureMetadata = {}, live
                 type="button"
                 onClick={() => setLiveHistoryWindow && setLiveHistoryWindow(opt.value)}
                 aria-pressed={liveHistoryWindow === opt.value}
-                className={`px-3 py-2.5 text-sm font-bold rounded-lg transition-all ${
+                className={`px-3 py-2.5 text-sm font-bold rounded-control transition-all ${
                   liveHistoryWindow === opt.value
                     ? 'bg-primary-600 text-white shadow-md transform scale-[1.02]'
-                    : 'bg-gray-50 text-gray-600 border border-gray-200 hover:bg-gray-100 hover:border-gray-300'
+                    : 'bg-sunken text-ink-2 border border-line hover:bg-sunken hover:border-line-2'
                 }`}
               >
                 {t(opt.labelKey)}
               </button>
             ))}
           </div>
-          <div className="mt-3 text-xs text-gray-400 font-medium">{t('statistics.switch_window')}</div>
+          <div className="mt-3 text-xs text-ink-3 font-medium">{t('statistics.switch_window')}</div>
         </div>
 
         {/* Visible Data Card */}
-        <div className="bg-white border border-gray-100 rounded-xl p-5 shadow-sm flex flex-col">
+        <div className="bg-panel border border-line rounded-card p-5 shadow-sm flex flex-col">
           <div className="flex items-center gap-2 mb-4">
-            <div className="p-2 bg-blue-50 rounded-lg">
-              <TrendingUp className="w-5 h-5 text-blue-500" />
+            <div className="p-2 bg-info/10 rounded-control">
+              <TrendingUp className="w-5 h-5 text-info" />
             </div>
-            <p className="text-sm font-bold text-gray-500 uppercase tracking-widest">{t('statistics.visible_data')}</p>
+            <p className="text-sm font-bold text-ink-2 uppercase tracking-widest">{t('statistics.visible_data')}</p>
           </div>
-          <p className="text-4xl font-extrabold text-gray-900 tabular-nums leading-none">{filteredHistorical.length.toLocaleString()}</p>
-          <div className="mt-3 text-xs text-gray-400 font-medium">{t('statistics.records_in_window')}</div>
+          <p className="text-4xl font-bold text-ink tabular-nums leading-none">{filteredHistorical.length.toLocaleString()}</p>
+          <div className="mt-3 text-xs text-ink-3 font-medium">{t('statistics.records_in_window')}</div>
         </div>
 
         {/* Storage Total Card */}
-        <div className="bg-white border border-gray-100 rounded-xl p-5 shadow-sm flex flex-col">
+        <div className="bg-panel border border-line rounded-card p-5 shadow-sm flex flex-col">
           <div className="flex items-center gap-2 mb-4">
-            <div className="p-2 bg-green-50 rounded-lg">
-              <Database className="w-5 h-5 text-green-500" />
+            <div className="p-2 bg-ok/10 rounded-control">
+              <Database className="w-5 h-5 text-ok" />
             </div>
-            <p className="text-sm font-bold text-gray-500 uppercase tracking-widest">{t('statistics.storage_total')}</p>
+            <p className="text-sm font-bold text-ink-2 uppercase tracking-widest">{t('statistics.storage_total')}</p>
           </div>
-          <p className="text-4xl font-extrabold text-gray-900 tabular-nums leading-none">{storageTotal !== null ? storageTotal.toLocaleString() : '—'}</p>
-          <div className="mt-3 text-xs text-gray-400 font-medium">{t('statistics.storage_total_desc')}</div>
+          <p className="text-4xl font-bold text-ink tabular-nums leading-none">{storageTotal !== null ? storageTotal.toLocaleString() : '—'}</p>
+          <div className="mt-3 text-xs text-ink-3 font-medium">{t('statistics.storage_total_desc')}</div>
         </div>
 
         {/* Time Range Card */}
-        <div className="bg-white border border-gray-100 rounded-xl p-5 shadow-sm flex flex-col">
+        <div className="bg-panel border border-line rounded-card p-5 shadow-sm flex flex-col">
           <div className="flex items-center gap-2 mb-4">
-            <div className="p-2 bg-purple-50 rounded-lg">
-              <Calendar className="w-5 h-5 text-purple-500" />
+            <div className="p-2 bg-info/10 rounded-control">
+              <Calendar className="w-5 h-5 text-info" />
             </div>
-            <p className="text-sm font-bold text-gray-500 uppercase tracking-widest">{t('statistics.time_range')}</p>
+            <p className="text-sm font-bold text-ink-2 uppercase tracking-widest">{t('statistics.time_range')}</p>
           </div>
 
           <div className="space-y-3 flex-1">
             {/* Visible Window Range */}
             <div>
-              <div className="text-[11px] font-bold text-blue-600 uppercase tracking-tight mb-1.5 flex items-center gap-2">
-                <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+              <div className="text-[11px] font-bold text-info-ink uppercase tracking-tight mb-1.5 flex items-center gap-2">
+                <div className="w-1.5 h-1.5 rounded-full bg-info animate-pulse" />
                 {t('statistics.current_window')}
               </div>
               <div className="space-y-1">
                 <div className="flex items-center justify-between gap-1">
-                  <span className="text-[10px] text-gray-400 font-bold tracking-tighter">{t('statistics.start')}</span>
-                  <span className="text-[11px] font-mono font-bold text-gray-700 bg-gray-50 px-1.5 py-0.5 rounded-md border border-gray-100">
+                  <span className="text-[10px] text-ink-3 font-bold tracking-tighter">{t('statistics.start')}</span>
+                  <span className="text-[11px] font-mono font-bold text-ink bg-sunken px-1.5 py-0.5 rounded-chip border border-line">
                     {visibleMinTs !== null ? formatFullDateTime(visibleMinTs) : '--'}
                   </span>
                 </div>
                 <div className="flex items-center justify-between gap-1">
-                  <span className="text-[10px] text-gray-400 font-bold tracking-tighter">{t('statistics.end')}</span>
-                  <span className="text-[11px] font-mono font-bold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded-md border border-blue-100">
+                  <span className="text-[10px] text-ink-3 font-bold tracking-tighter">{t('statistics.end')}</span>
+                  <span className="text-[11px] font-mono font-bold text-info-ink bg-info/10 px-1.5 py-0.5 rounded-chip border border-info/30">
                     {visibleMaxTs !== null ? formatFullDateTime(visibleMaxTs) : '--'}
                   </span>
                 </div>
@@ -1135,21 +1143,21 @@ function StatisticsPanel({ data, historicalData = [], featureMetadata = {}, live
             </div>
 
             {/* Total Storage Range */}
-            <div className="pt-2 border-t border-dashed border-gray-100">
-              <div className="text-[11px] font-bold text-gray-500 uppercase tracking-tight mb-1.5 flex items-center gap-2">
-                <div className="w-1.5 h-1.5 rounded-full bg-gray-300" />
+            <div className="pt-2 border-t border-dashed border-line">
+              <div className="text-[11px] font-bold text-ink-2 uppercase tracking-tight mb-1.5 flex items-center gap-2">
+                <div className="w-1.5 h-1.5 rounded-full bg-line-2" />
                 {t('statistics.total_history')}
               </div>
               <div className="space-y-1">
                 <div className="flex items-center justify-between gap-1">
-                  <span className="text-[10px] text-gray-400 font-bold tracking-tighter">{t('statistics.start')}</span>
-                  <span className="text-[11px] font-mono text-gray-500 italic font-medium px-1.5 py-0.5">
+                  <span className="text-[10px] text-ink-3 font-bold tracking-tighter">{t('statistics.start')}</span>
+                  <span className="text-[11px] font-mono text-ink-2 italic font-medium px-1.5 py-0.5">
                     {totalMinTs !== null ? formatFullDateTime(totalMinTs) : '--'}
                   </span>
                 </div>
                 <div className="flex items-center justify-between gap-1">
-                  <span className="text-[10px] text-gray-400 font-bold tracking-tighter">{t('statistics.end')}</span>
-                  <span className="text-[11px] font-mono text-gray-500 italic font-medium px-1.5 py-0.5">
+                  <span className="text-[10px] text-ink-3 font-bold tracking-tighter">{t('statistics.end')}</span>
+                  <span className="text-[11px] font-mono text-ink-2 italic font-medium px-1.5 py-0.5">
                     {totalMaxTs !== null ? formatFullDateTime(totalMaxTs) : '--'}
                   </span>
                 </div>
@@ -1168,21 +1176,19 @@ function StatisticsPanel({ data, historicalData = [], featureMetadata = {}, live
             return (
               <div key={category.id} className="space-y-6">
                 {/* Category Header */}
-                <div className="flex items-center gap-3 border-b border-gray-100 pb-4">
-                  <div className={`p-2.5 ${category.bg} rounded-xl shadow-sm`}>
+                <div className="flex items-center gap-3 border-b border-line pb-4">
+                  <div className={`p-2.5 ${category.bg} rounded-card shadow-sm`}>
                     <category.icon className={`w-6 h-6 ${category.color}`} />
                   </div>
                   <div>
-                    <h4 className="text-xl font-black text-gray-900 tracking-tight">{t(category.nameKey)}</h4>
-                    <p className="text-sm text-gray-400 font-medium">{t('statistics.metrics_identified', { count: categoryFeatures.length })}</p>
+                    <h4 className="text-xl font-bold text-ink tracking-tight">{t(category.nameKey)}</h4>
+                    <p className="text-sm text-ink-3 font-medium">{t('statistics.metrics_identified', { count: categoryFeatures.length })}</p>
                   </div>
                 </div>
 
-                <div className={`${category.bg} p-6 rounded-[2.5rem] border border-gray-100/50 shadow-inner`}>
+                <div className={`${category.bg} p-6 rounded-card border border-line/50 shadow-inner`}>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     {categoryFeatures.map((feature) => {
-                      const idx = featureIndex.get(feature);
-
                       // For GLOBEM: skip if feature not present in chart data columns
                       if (!isAppleHealthFormat && chartData.length > 0 && !(feature in chartData[0])) return null
 
@@ -1213,8 +1219,6 @@ function StatisticsPanel({ data, historicalData = [], featureMetadata = {}, live
                             aggregationMode={aggregationMode}
                             users={users}
                             chartData={chartData}
-                            colors={colors}
-                            idx={idx}
                           />
                         </ErrorBoundary>
                       )

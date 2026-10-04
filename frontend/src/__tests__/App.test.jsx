@@ -173,7 +173,7 @@ describe('App', () => {
     // The green dot is a span with specific classes next to "Agent Monitor"
     await waitFor(() => {
       const agentLink = screen.getByText('Agent Monitor').closest('a')
-      const dot = agentLink.querySelector('.bg-green-500')
+      const dot = agentLink.querySelector('.bg-ok')
       expect(dot).toBeInTheDocument()
     })
   })
@@ -194,7 +194,7 @@ describe('App', () => {
     // Allow bootstrap to complete
     await waitFor(() => {
       const agentLink = screen.getByText('Agent Monitor').closest('a')
-      const dot = agentLink.querySelector('.bg-green-500')
+      const dot = agentLink.querySelector('.bg-ok')
       expect(dot).toBeNull()
     })
   })

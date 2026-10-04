@@ -14,6 +14,7 @@ import {
   MessageSquare,
   Edit3
 } from 'lucide-react'
+import Skeleton from '../components/Skeleton'
 
 const PROMPT_ICONS = {
   soul: Heart,
@@ -133,12 +134,7 @@ export default function PromptEditor() {
   }
 
   if (loading && prompts.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-64 space-y-4">
-        <RefreshCw className="w-8 h-8 text-primary-500 animate-spin" />
-        <p className="text-gray-500 font-medium">{t('prompts.loading_prompts')}</p>
-      </div>
-    )
+    return <Skeleton lines={4} label={t('prompts.loading_prompts')} />
   }
 
   const selectedPrompt = prompts.find(p => p.id === selectedId)
@@ -148,15 +144,15 @@ export default function PromptEditor() {
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
-          <h2 className="text-4xl font-extrabold text-gray-900 tracking-tight">{t('prompts.title')}</h2>
-          <p className="mt-2 text-base text-gray-500 max-w-2xl">
+          <h2 className="page-title">{t('prompts.title')}</h2>
+          <p className="page-subtitle max-w-2xl">
             {t('prompts.subtitle')}
           </p>
         </div>
         <div className="flex items-center space-x-3">
           {status && (
             <div className={`flex items-center space-x-2 px-4 py-2 rounded-full text-sm font-semibold transition-all ${
-              status.type === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+              status.type === 'success' ? 'bg-ok/15 text-ok-ink' : 'bg-bad/15 text-bad-ink'
             }`}>
               {status.type === 'success' ? <CheckCircle2 className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
               <span>{status.message}</span>
@@ -166,18 +162,18 @@ export default function PromptEditor() {
             onClick={loadPrompts}
             disabled={loading}
             title={t('prompts.refresh_tooltip')}
-            className="btn flex items-center space-x-2 px-4 py-2.5 bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 transition-all active:scale-95 disabled:opacity-50 disabled:active:scale-100"
+            className="btn-secondary"
           >
-            <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
-            <span className="text-base font-semibold">{t('common.refresh')}</span>
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            <span>{t('common.refresh')}</span>
           </button>
           <button
             onClick={handleSave}
             disabled={saving || !selectedId}
-            className="btn btn-primary flex items-center space-x-2 px-6 py-2.5 shadow-lg shadow-primary-200/50 hover:shadow-primary-300/50 transition-all active:scale-95 disabled:opacity-50 disabled:active:scale-100"
+            className="btn-primary"
           >
-            {saving ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
-            <span className="text-base font-bold text-white">{t('prompts.save_changes')}</span>
+            {saving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            <span>{t('prompts.save_changes')}</span>
           </button>
         </div>
       </div>
@@ -185,7 +181,7 @@ export default function PromptEditor() {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
         {/* Sidebar / Tabs */}
         <div className="lg:col-span-4 space-y-3">
-          <div className="text-sm font-bold text-gray-400 uppercase tracking-wider px-2 mb-2">{t('prompts.prompt_library')}</div>
+          <div className="text-sm font-bold text-ink-3 uppercase tracking-wider px-2 mb-2">{t('prompts.prompt_library')}</div>
           {prompts.map(p => {
             const Icon = PROMPT_ICONS[p.id] || MessageSquare
             const isActive = selectedId === p.id
@@ -193,15 +189,15 @@ export default function PromptEditor() {
               <button
                 key={p.id}
                 onClick={() => handleSelect(p.id)}
-                className={`w-full text-left p-4 rounded-2xl transition-all border-2 flex items-center justify-between group ${
+                className={`w-full text-left p-4 rounded-card transition-all border-2 flex items-center justify-between group ${
                   isActive 
-                    ? 'bg-white border-primary-500 shadow-xl shadow-primary-100/20 ring-1 ring-primary-500/10' 
-                    : 'bg-white border-transparent hover:border-gray-200 shadow-sm text-gray-600 hover:text-gray-900'
+                    ? 'bg-panel border-primary-500 shadow-md' 
+                    : 'bg-panel border-transparent hover:border-line shadow-sm text-ink-2 hover:text-ink'
                 }`}
               >
                 <div className="flex items-center space-x-4">
-                  <div className={`p-3 rounded-xl transition-colors ${
-                    isActive ? 'bg-primary-100 text-primary-600' : 'bg-gray-100 text-gray-400 group-hover:bg-gray-200 group-hover:text-gray-600'
+                  <div className={`p-3 rounded-card transition-colors ${
+                    isActive ? 'bg-primary-100 text-primary-600' : 'bg-sunken text-ink-3 group-hover:bg-line group-hover:text-ink-2'
                   }`}>
                     <Icon className="w-6 h-6" />
                   </div>
@@ -210,10 +206,10 @@ export default function PromptEditor() {
                     <div className="text-sm opacity-60 font-medium">{p.file}</div>
                   </div>
                 </div>
-                <div className={`flex items-center px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-tighter ${
+                <div className={`flex items-center px-2 py-1 rounded-chip text-[10px] font-bold uppercase tracking-tighter ${
                   p.agent_editable 
-                    ? 'bg-blue-50 text-blue-600 border border-blue-100' 
-                    : 'bg-amber-50 text-amber-600 border border-amber-100'
+                    ? 'bg-info/10 text-info-ink border border-info/30' 
+                    : 'bg-warn/10 text-warn-ink border border-warn/30'
                 }`}>
                   {p.agent_editable ? (
                     <div className="flex items-center gap-1">
@@ -230,31 +226,31 @@ export default function PromptEditor() {
           })}
 
           {/* Info Card */}
-          <div className="mt-8 p-6 bg-gradient-to-br from-gray-900 to-gray-800 rounded-3xl text-white shadow-2xl relative overflow-hidden">
+          <div className="note mt-8 p-6 relative overflow-hidden">
              <div className="relative z-10">
                 <div className="flex items-center gap-2 mb-3">
-                  <Edit3 className="w-5 h-5 text-primary-400" />
+                  <Edit3 className="w-5 h-5 text-primary-600" />
                   <h4 className="font-bold text-lg">{t('prompts.editor_note')}</h4>
                 </div>
-                <p className="text-gray-300 text-sm leading-relaxed mb-4">
+                <p className="text-ink-2 text-sm leading-relaxed mb-4">
                   <Trans i18nKey="prompts.editor_note_body_1" components={[<strong key="b" />]} />
                   <br/><br/>
                   <Trans i18nKey="prompts.editor_note_body_2" components={[<strong key="b" />]} />
                 </p>
              </div>
              {/* Decorative blob */}
-             <div className="absolute -right-10 -bottom-10 w-40 h-40 bg-primary-500/20 rounded-full blur-3xl"></div>
+             <div className="absolute -right-10 -bottom-10 w-40 h-40 bg-primary-300/20 rounded-full blur-3xl"></div>
           </div>
         </div>
 
         {/* Editor Area */}
         <div className="lg:col-span-8 space-y-4 h-full flex flex-col">
-          <div className="card h-full flex flex-col p-1 bg-gray-50 border-gray-200 shadow-inner min-h-[600px] relative">
+          <div className="card h-full flex flex-col p-1 bg-sunken border-line shadow-inner min-h-[600px] relative">
             {/* Legend Overlay for Agent-Editable sections if applicable */}
             {selectedPrompt?.agent_editable && (
-               <div className="absolute top-4 right-6 z-10 flex items-center space-x-2 text-[10px] font-bold uppercase bg-white/80 backdrop-blur-sm px-3 py-1.5 rounded-full border border-blue-100 shadow-sm pointer-events-none">
-                  <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></div>
-                  <span className="text-blue-600">{t('prompts.dynamic_evolution')}</span>
+               <div className="absolute top-4 right-6 z-10 flex items-center space-x-2 text-[10px] font-bold uppercase bg-panel/80 backdrop-blur-sm px-3 py-1.5 rounded-full border border-info/30 shadow-sm pointer-events-none">
+                  <div className="w-2 h-2 rounded-full bg-info animate-pulse"></div>
+                  <span className="text-info-ink">{t('prompts.dynamic_evolution')}</span>
                </div>
             )}
             
@@ -263,7 +259,7 @@ export default function PromptEditor() {
               id="prompt-content"
               value={content}
               onChange={(e) => setContent(e.target.value)}
-              className="w-full flex-1 p-8 bg-white rounded-2xl border-none focus:ring-0 font-mono text-sm leading-relaxed text-gray-800 resize-none shadow-sm placeholder-gray-400"
+              className="w-full flex-1 p-8 bg-panel rounded-card border-none focus:ring-0 font-mono text-sm leading-relaxed text-ink resize-none shadow-sm placeholder-ink-3"
               placeholder={t('prompts.writer_placeholder', { title: selectedPrompt?.title || t('prompts.this_prompt') })}
               onKeyDown={(e) => {
                 if ((e.ctrlKey || e.metaKey) && e.key === 's') {
@@ -273,7 +269,7 @@ export default function PromptEditor() {
               }}
             />
           </div>
-          <div className="flex items-center justify-between px-2 text-xs text-gray-400 font-medium font-mono">
+          <div className="flex items-center justify-between px-2 text-xs text-ink-3 font-medium font-mono">
             <div>{t('prompts.tokens_lines', { tokens: Math.ceil(content.length / 4), lines: content.split('\n').length })}</div>
             <div>{t('prompts.shortcut_save')}</div>
           </div>

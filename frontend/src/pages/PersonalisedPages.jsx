@@ -7,6 +7,7 @@ import {
 import { parseBackendDate } from '../lib/utils'
 import { useFlash, useOnActivate } from '../lib/hooks'
 import InlineFlash from '../components/InlineFlash'
+import Skeleton from '../components/Skeleton'
 
 // ---------------------------------------------------------------------------
 // Why the page HTML is fetched here instead of being an `<iframe src>`
@@ -326,11 +327,11 @@ export default function PersonalisedPages({ active = true }) {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center space-x-3">
           <AppWindow className="w-8 h-8 text-primary-600" />
-          <h2 className="text-3xl font-bold text-gray-900">{t('pages.title')}</h2>
-          <span className="text-sm text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full">
+          <h2 className="page-title">{t('pages.title')}</h2>
+          <span className="text-sm text-ink-2 bg-sunken px-2 py-0.5 rounded-full">
             {pages.length}
           </span>
         </div>
@@ -342,10 +343,10 @@ export default function PersonalisedPages({ active = true }) {
 
       <InlineFlash flash={flash} />
       {loadError && (
-        <div role="alert" className="flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <div role="alert" className="flex items-center gap-3 rounded-card border border-bad/30 bg-bad/10 px-4 py-3 text-sm text-bad-ink">
           <AlertTriangle className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
           <span className="flex-1 break-words">{t('pages.list_failed', { error: loadError })}</span>
-          <button type="button" onClick={() => loadPages()} className="font-semibold underline hover:text-red-900">
+          <button type="button" onClick={() => loadPages()} className="font-semibold underline hover:text-bad-ink">
             {t('common.retry')}
           </button>
         </div>
@@ -353,12 +354,12 @@ export default function PersonalisedPages({ active = true }) {
 
       {/* Page list */}
       {loading && pages.length === 0 ? (
-        <div className="card p-12 text-center text-gray-500">{t('pages.loading')}</div>
+        <Skeleton lines={4} label={t('pages.loading')} />
       ) : pages.length === 0 ? (
         loadError ? null : <div className="card p-12 text-center">
-          <AppWindow className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-          <p className="text-gray-500">{t('pages.empty')}</p>
-          <p className="text-sm text-gray-400 mt-1">
+          <AppWindow className="w-12 h-12 text-ink-3 mx-auto mb-3" />
+          <p className="text-ink-2">{t('pages.empty')}</p>
+          <p className="text-sm text-ink-3 mt-1">
             {t('pages.empty_hint')}
           </p>
         </div>
@@ -385,16 +386,16 @@ export default function PersonalisedPages({ active = true }) {
             >
               <div className="flex items-start justify-between">
                 <div className="flex-1 min-w-0">
-                  <h3 className="font-semibold text-gray-900 truncate">
+                  <h3 className="font-semibold text-ink truncate">
                     {page.display_name}
                   </h3>
-                  <p className="text-xs text-gray-400 font-mono mt-0.5">{page.page_id}</p>
+                  <p className="text-xs text-ink-3 font-mono mt-0.5">{page.page_id}</p>
                 </div>
                 <div className="flex items-center space-x-1 ml-2 flex-shrink-0">
                   <button
                     type="button"
                     onClick={(e) => { e.stopPropagation(); openInNewTab(page.page_id) }}
-                    className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-gray-100"
+                    className="p-1.5 text-ink-3 hover:text-primary-600 rounded-control hover:bg-sunken"
                     title={t('pages.open_new_tab')}
                     aria-label={t('pages.open_new_tab')}
                   >
@@ -404,7 +405,7 @@ export default function PersonalisedPages({ active = true }) {
                     type="button"
                     onClick={(e) => { e.stopPropagation(); handleDelete(page.page_id) }}
                     disabled={deleting === page.page_id}
-                    className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 disabled:opacity-50"
+                    className="p-1.5 text-ink-3 hover:text-bad-ink rounded-control hover:bg-bad/10 disabled:opacity-50"
                     title={t('pages.delete_page')}
                     aria-label={t('pages.delete_page')}
                   >
@@ -413,10 +414,10 @@ export default function PersonalisedPages({ active = true }) {
                 </div>
               </div>
               {page.description && (
-                <p className="text-sm text-gray-500 mt-2 line-clamp-2">{page.description}</p>
+                <p className="text-sm text-ink-2 mt-2 line-clamp-2">{page.description}</p>
               )}
               {page.created_at && (
-                <p className="text-xs text-gray-400 mt-2">
+                <p className="text-xs text-ink-3 mt-2">
                   {parseBackendDate(page.created_at).toLocaleString()}
                 </p>
               )}
@@ -436,10 +437,10 @@ export default function PersonalisedPages({ active = true }) {
           className={`card overflow-hidden outline-none ${expanded ? 'fixed inset-4 z-50 m-0' : ''}`}
         >
           {/* Toolbar */}
-          <div className="flex items-center justify-between px-4 py-2 bg-gray-50 border-b border-gray-200">
+          <div className="flex items-center justify-between px-4 py-2 bg-sunken border-b border-line">
             <div className="flex items-center space-x-2 min-w-0">
               <AppWindow className="w-4 h-4 text-primary-600 flex-shrink-0" />
-              <span className="font-medium text-sm text-gray-700 truncate">
+              <span className="font-medium text-sm text-ink truncate">
                 {activePage.display_name}
               </span>
             </div>
@@ -447,7 +448,7 @@ export default function PersonalisedPages({ active = true }) {
               <button
                 type="button"
                 onClick={() => openInNewTab(activePage.page_id)}
-                className="p-1.5 text-gray-400 hover:text-primary-600 rounded"
+                className="p-1.5 text-ink-3 hover:text-primary-600 rounded-chip"
                 title={t('pages.open_new_tab')}
                 aria-label={t('pages.open_new_tab')}
               >
@@ -456,7 +457,7 @@ export default function PersonalisedPages({ active = true }) {
               <button
                 type="button"
                 onClick={() => setExpanded(!expanded)}
-                className="p-1.5 text-gray-400 hover:text-gray-600 rounded"
+                className="p-1.5 text-ink-3 hover:text-ink-2 rounded-chip"
                 title={expanded ? t('pages.minimize') : t('pages.maximize')}
                 aria-label={expanded ? t('pages.minimize') : t('pages.maximize')}
               >
@@ -465,7 +466,7 @@ export default function PersonalisedPages({ active = true }) {
               <button
                 type="button"
                 onClick={() => { setActivePage(null); setExpanded(false) }}
-                className="p-1.5 text-gray-400 hover:text-gray-600 rounded"
+                className="p-1.5 text-ink-3 hover:text-ink-2 rounded-chip"
                 title={t('pages.close')}
                 aria-label={t('pages.close')}
               >
@@ -509,7 +510,7 @@ export default function PersonalisedPages({ active = true }) {
             />
           ) : (
             <div
-              className="flex items-center justify-center text-sm text-gray-500 px-4 text-center"
+              className="flex items-center justify-center text-sm text-ink-2 px-4 text-center"
               style={{ height: expanded ? 'calc(100% - 41px)' : '600px' }}
             >
               {pageDoc?.pageId === activePage.page_id && pageDoc.error !== undefined
