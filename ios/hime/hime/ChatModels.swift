@@ -197,7 +197,12 @@ final class TurnState: ObservableObject {
     /// One-line status for the activity header.
     var statusText: String {
         let n = stepCount
-        let suffix = n == 0 ? "" : " · " + (n == 1 ? String(localized: "1 step") : String(localized: "\(n) steps"))
+        var suffix = ""
+        if n == 1 {
+            suffix = " · " + String(localized: "1 step")
+        } else if n > 1 {
+            suffix = " · " + String(localized: "\(n) steps")
+        }
         switch phase {
         case .live:
             let base: String
