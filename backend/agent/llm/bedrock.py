@@ -9,6 +9,7 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
+from ..errors import FallbackTriggered  # noqa: E402
 from . import (
     BaseLLMProvider,
     provider_write_log,
@@ -64,6 +65,11 @@ class AmazonBedrockProvider(BaseLLMProvider):
         }
         if bedrock_tools:
             kwargs["toolConfig"] = {"tools": bedrock_tools}
+        # The Converse API takes the system prompt out-of-band; the message
+        # list cannot carry a "system" role.
+        system_blocks = self._system_blocks(messages)
+        if system_blocks:
+            kwargs["system"] = system_blocks
 
         try:
             # Bedrock SDK is sync, so we run in thread
@@ -183,6 +189,22 @@ class AmazonBedrockProvider(BaseLLMProvider):
                 response_texts=content_parts,
             )
 
+        except FallbackTriggered as exc:
+            # Capacity / out-of-credit exhaustion: let the agent loop switch to
+            # the fallback provider instead of turning it into an error chunk.
+            logger.warning("Bedrock fallback triggered: %s", exc)
+            provider_write_log(
+                provider="amazon_bedrock",
+                model=self.model,
+                prompt_tokens=None,
+                completion_tokens=None,
+                duration_ms=int((time.perf_counter() - _t0) * 1000),
+                tools=tools,
+                messages=messages,
+                tool_calls_list=[],
+                response_texts=[f"ERROR: fallback — {exc}"],
+            )
+            raise
         except Exception as exc:
             logger.error("Bedrock API error: %s", exc)
             provider_write_log(
@@ -197,6 +219,22 @@ class AmazonBedrockProvider(BaseLLMProvider):
                 response_texts=[f"ERROR: {exc}"],
             )
             yield {"type": "error", "error": str(exc)}
+
+    @staticmethod
+    def _system_blocks(messages: list[dict]) -> list[dict]:
+        """Collect every system message into Converse ``system`` text blocks."""
+        blocks: list[dict] = []
+        for msg in messages:
+            if msg.get("role") != "system":
+                continue
+            content = msg.get("content") or ""
+            if isinstance(content, list):
+                content = "\n".join(
+                    str(b.get("text", "")) for b in content if isinstance(b, dict)
+                )
+            if content:
+                blocks.append({"text": content})
+        return blocks
 
     def _convert_messages(self, messages: list[dict]) -> list[dict]:
         """Convert OpenAI-style messages to Bedrock Converse format.

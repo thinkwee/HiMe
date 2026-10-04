@@ -22,12 +22,35 @@ from ..config import settings
 from ..utils import ts_now
 from .errors import ErrorCategory, FallbackTriggered, classify_error
 from .llm import set_llm_log_context
+from .tools.base import _tool_role
+from .tools.result_manager import truncate_result
 
-# model name → time.monotonic() until which that primary is bypassed in favour
-# of FALLBACK_LLM_PROVIDER (set when it stalls / hits capacity limits).
-_primary_down_until: dict[str, float] = {}
+# (provider class, model) → time.monotonic() until which that primary is
+# bypassed in favour of FALLBACK_LLM_PROVIDER (set when it stalls / hits
+# capacity limits).  Keyed by provider *and* model so two providers serving the
+# same model name can't mask each other.
+_primary_down_until: dict[tuple[str, str], float] = {}
+
+# (provider, model) → fallback provider instance.  Built once: creating a new
+# SDK client (and connection pool) per LLM call during a primary outage is
+# wasteful and defeats keep-alive.
+_fallback_providers: dict[tuple[str, str], Any] = {}
 
 logger = logging.getLogger(__name__)
+
+# Hard wall-clock cap for one cron / trigger analysis.  The agent processes one
+# task at a time, so a runaway analysis would otherwise block chat forever.
+ONE_SHOT_ANALYSIS_TIMEOUT_S = 15 * 60.0
+
+# Tools the chat orchestrator may execute; everything else is rejected at
+# execution time (not just hidden from the tool definitions).
+CHAT_ALLOWED_TOOLS = frozenset({"reply_user", "finish_chat", "analyze", "manage"})
+# Tools sub_analysis may execute by default (callers add extras / narrow it).
+SUB_ANALYSIS_BASE_TOOLS = frozenset({"sql", "code", "read_skill"})
+TOOL_NOT_AVAILABLE_RESULT = {"success": False, "error": "tool not available in this role"}
+
+# Friendly caption for the iOS cat when the quick check could not run.
+QUICK_FAILURE_MESSAGE = "Couldn't check in right now. I'll try again soon."
 
 # ---------------------------------------------------------------------------
 # Fire-and-forget task tracking
@@ -317,19 +340,22 @@ def _yield_missing_tool_results(messages: list) -> list:
             if tc_id:
                 existing_result_ids.add(tc_id)
     # Find tool_calls in the last assistant message that lack results
-    missing = []
+    missing: list[tuple[str, str]] = []
     for tc in last_assistant.get("tool_calls", []):
         tc_id = tc.get("id", "")
         if tc_id and tc_id not in existing_result_ids:
-            missing.append(tc_id)
+            missing.append((tc_id, (tc.get("function") or {}).get("name", "")))
     if not missing:
         return messages
-    for id_ in missing:
-        messages.append({
-            "role": "tool",
-            "tool_call_id": id_,
-            "content": json.dumps({"success": False, "error": "Tool execution was interrupted."}),
-        })
+    for id_, name in missing:
+        # ``_tool_name`` is required by Gemini's functionResponse; without it
+        # the synthetic result is sent under the placeholder name "tool".
+        messages.append(_build_tool_result_msg(
+            id_,
+            {"success": False, "error": "Tool execution was interrupted."},
+            name,
+            truncate=False,
+        ))
     logger.warning("Injected %d synthetic tool results for orphaned tool_use blocks", len(missing))
     return messages
 
@@ -345,6 +371,147 @@ def _loop_meta(loop: str, agent, chat_id: str) -> dict:
     if loop == "quick":
         return {"task": "quick_analysis"}
     return {"cycle": agent.cycle_count}
+
+
+def _provider_key(llm: Any) -> tuple[str, str]:
+    return (type(llm).__name__, str(getattr(llm, "model", "") or ""))
+
+
+def _get_fallback_provider() -> Any:
+    """The configured FALLBACK_LLM provider, created once per (provider, model)."""
+    key = (settings.FALLBACK_LLM_PROVIDER or "", settings.FALLBACK_LLM_MODEL or "")
+    provider = _fallback_providers.get(key)
+    if provider is None:
+        from . import llm_providers
+        provider = llm_providers.create_provider(*key)
+        _fallback_providers[key] = provider
+    return provider
+
+
+async def _run_with_provider_fallback(primary: Any, attempt, reset) -> None:
+    """Run ``attempt(llm)`` against *primary*, switching to the configured
+    fallback provider when the primary stalls or exhausts its capacity /
+    out-of-credit retries (``FallbackTriggered``).
+
+    * ``reset()`` discards partial state before every retry on another provider.
+    * A failed primary is skipped for ``LLM_FALLBACK_COOLDOWN_SECONDS`` so a
+      multi-round tool loop doesn't re-wait out the stall on every call.
+    * If the fallback itself fails while the primary is cooling down, the
+      primary is tried once before giving up (it may have recovered).
+    * With no fallback configured the original error (carrying the real
+      provider message) is raised unchanged.
+    """
+    has_fallback = bool(settings.FALLBACK_LLM_PROVIDER and settings.FALLBACK_LLM_MODEL)
+    pkey = _provider_key(primary)
+    cooling = has_fallback and time.monotonic() < _primary_down_until.get(pkey, 0.0)
+
+    if not cooling:
+        try:
+            await attempt(primary)
+            return
+        except FallbackTriggered as exc:
+            if not has_fallback:
+                raise
+            _primary_down_until[pkey] = time.monotonic() + settings.LLM_FALLBACK_COOLDOWN_SECONDS
+            logger.warning(
+                "LLM fallback: primary %s/%s gave up (%s) — switching to %s/%s for %.0fs",
+                pkey[0], pkey[1], exc.reason or "stalled or capacity-exhausted",
+                settings.FALLBACK_LLM_PROVIDER, settings.FALLBACK_LLM_MODEL,
+                settings.LLM_FALLBACK_COOLDOWN_SECONDS,
+            )
+        reset()
+
+    fallback = _get_fallback_provider()
+    try:
+        await attempt(fallback)
+    except asyncio.CancelledError:
+        raise
+    except Exception as fb_exc:
+        if not cooling:
+            raise
+        logger.warning(
+            "LLM fallback failed during primary cooldown (%s) — trying primary %s once",
+            fb_exc, pkey[1],
+        )
+        reset()
+        await attempt(primary)
+        _primary_down_until.pop(pkey, None)
+
+
+class _ResilientProvider:
+    """Provider facade with the agent's fallback behaviour, for auxiliary LLM
+    calls (the context summariser) that take a bare provider.  Chunks are
+    buffered per attempt so a failed attempt never leaks partial output."""
+
+    def __init__(self, primary: Any) -> None:
+        self._primary = primary
+        self.model = getattr(primary, "model", "")
+
+    async def complete(self, messages, tools=None, stream=True, max_tokens=None, temperature=0.7):
+        chunks: list[dict] = []
+
+        async def _attempt(llm: Any) -> None:
+            async for chunk in llm.complete(
+                messages=messages, tools=tools, stream=stream,
+                max_tokens=max_tokens, temperature=temperature,
+            ):
+                if chunk.get("type") == "error":
+                    raise RuntimeError(chunk.get("error", "LLM error"))
+                chunks.append(chunk)
+
+        await _run_with_provider_fallback(self._primary, _attempt, chunks.clear)
+        for chunk in chunks:
+            yield chunk
+
+
+def _check_cancelled(agent: Any) -> None:
+    """Raise ``cancellation.CancelledError`` once the agent's token is cancelled
+    (``/stop``).  Called at turn boundaries so a stopped agent doesn't keep
+    spending LLM calls."""
+    check = getattr(getattr(agent, "_cancellation", None), "check", None)
+    if callable(check):
+        check()
+
+
+def _read_image_b64(path: str) -> str:
+    """Blocking read + base64 of an inbound image (run via ``to_thread``)."""
+    import base64 as _b64
+    with open(path, "rb") as f:
+        return _b64.b64encode(f.read()).decode()
+
+
+def _normalize_history(hist: list[dict]) -> list[dict]:
+    """Make a chat-history window safe for strict providers.
+
+    Anthropic / Gemini / some OpenAI-compatible backends reject a conversation
+    that starts with an assistant turn or has consecutive same-role turns.  A
+    sliding window (or a proactive report appended without a user turn) can
+    produce both, so: drop leading non-user messages and merge adjacent
+    same-role string messages.
+    """
+    out: list[dict] = []
+    for m in hist:
+        if not out and m.get("role") != "user":
+            continue
+        if (
+            out
+            and out[-1].get("role") == m.get("role")
+            and isinstance(out[-1].get("content"), str)
+            and isinstance(m.get("content"), str)
+        ):
+            out[-1] = {**out[-1], "content": out[-1]["content"] + "\n\n" + m["content"]}
+            continue
+        out.append(m)
+    return out
+
+
+def _trim_history(hist: list[dict], limit: int) -> list[dict]:
+    """Keep the last *limit* messages, never starting on an assistant turn."""
+    if len(hist) > limit:
+        hist = hist[-limit:]
+    while hist and hist[0].get("role") != "user":
+        hist = hist[1:]
+    return hist
 
 
 async def _llm_call(
@@ -435,42 +602,13 @@ async def _llm_call(
                 await agent._emit({"type": "error", "error": chunk["error"], **_loop_meta(loop, agent, chat_id)})
                 raise RuntimeError(chunk["error"])
 
-    async def _run_with_fallback() -> None:
-        """Run the consume loop against the primary provider; if the primary
-        stalls or exhausts its capacity-error retry budget (FallbackTriggered)
-        and a fallback provider is configured, swap to the fallback for one
-        retry. Any partial state from the failed primary attempt is discarded.
-        A failed primary is skipped for LLM_FALLBACK_COOLDOWN_SECONDS so a
-        multi-round tool loop doesn't re-wait out the stall on every call."""
-        has_fallback = bool(settings.FALLBACK_LLM_PROVIDER and settings.FALLBACK_LLM_MODEL)
-        primary_model = getattr(agent.llm, "model", "")
-        if not (has_fallback and time.monotonic() < _primary_down_until.get(primary_model, 0.0)):
-            try:
-                await _consume(agent.llm)
-                return
-            except FallbackTriggered:
-                if not has_fallback:
-                    raise
-            _primary_down_until[primary_model] = (
-                time.monotonic() + settings.LLM_FALLBACK_COOLDOWN_SECONDS
-            )
-            # Primary gave up — discard partial output and retry once against
-            # the configured fallback provider.
-            logger.warning(
-                "LLM fallback: primary %s stalled or exhausted capacity retries — "
-                "switching to %s/%s for %.0fs",
-                primary_model,
-                settings.FALLBACK_LLM_PROVIDER, settings.FALLBACK_LLM_MODEL,
-                settings.LLM_FALLBACK_COOLDOWN_SECONDS,
-            )
+    def _reset() -> None:
+        # Discard any partial output from a failed attempt.
         response_content.clear()
         tool_calls.clear()
-        from .llm_providers import create_provider
-        fallback_llm = create_provider(
-            settings.FALLBACK_LLM_PROVIDER,
-            settings.FALLBACK_LLM_MODEL,
-        )
-        await _consume(fallback_llm)
+
+    async def _run_with_fallback() -> None:
+        await _run_with_provider_fallback(agent.llm, _consume, _reset)
 
     if timeout is not None:
         await asyncio.wait_for(_run_with_fallback(), timeout=timeout)
@@ -531,13 +669,30 @@ def _build_assistant_msg(text: str, tool_calls: list[dict], signature: str | Non
     return msg
 
 
-def _build_tool_result_msg(tool_call_id: str, result: dict, tool_name: str = "") -> dict:
+# Keys of an analyze/manage result that exist for the *evidence store* only.
+# They are bulky raw tool outputs and must not be echoed back into the
+# orchestrator's context (it only needs the findings / result text).
+_ORCHESTRATOR_HIDDEN_KEYS = ("evidence", "report_args")
+
+
+def _build_tool_result_msg(
+    tool_call_id: str, result: dict, tool_name: str = "", *, truncate: bool = True,
+) -> dict:
     """Build a role: 'tool' message for a single tool result.
 
     The tool_call_id links this result to the corresponding tool_call
     in the preceding assistant message.  For Gemini, we also stash the
     tool name in ``_tool_name`` since functionResponse requires it.
+
+    Oversized results are smart-truncated (``truncate_result``) so a huge SQL
+    table or DataFrame dump can't blow the context window, and the raw
+    ``evidence`` of analyze/manage results is stripped (it still flows to the
+    fact verifier through the caller's evidence list).
     """
+    if truncate and isinstance(result, dict):
+        if tool_name in ("analyze", "manage"):
+            result = {k: v for k, v in result.items() if k not in _ORCHESTRATOR_HIDDEN_KEYS}
+        result = truncate_result(result, tool_name)
     content = json.dumps(result, ensure_ascii=False, default=str)
     msg: dict[str, Any] = {
         "role": "tool",
@@ -831,6 +986,437 @@ async def _compress_context_if_needed(
     return new_messages, new_summary
 
 
+async def _push_report_programmatic(
+    agent: Any, push_args: dict, evidence: list[dict], timeout: float = 60.0,
+) -> dict:
+    """Publish a report on behalf of a wrapper (no LLM in the loop).
+
+    The push runs as its own task and is *shielded*: if the wait times out the
+    push is not cancelled mid-way (which could persist the report but skip the
+    notify step), it simply finishes in the background.
+    """
+    task = asyncio.ensure_future(
+        agent._execute_tool("push_report", push_args, evidence_trail=evidence)
+    )
+    try:
+        return await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.warning("push_report still running after %.0fs — letting it finish in background", timeout)
+        task.add_done_callback(lambda t: t.cancelled() or t.exception())
+        return {"success": False, "error": f"push_report did not finish within {timeout:.0f}s"}
+
+
+async def _run_sub_analysis_loop(
+    self,
+    goal: str,
+    *,
+    chat_id: str | None,
+    source: str,
+    max_turns: int,
+    allowed_tools: set | None,
+    extra_tools: set | None,
+    system_prompt: str | None,
+) -> dict:
+    """Body of ``_run_sub_analysis`` (runs with the tool role already set)."""
+    # Send a single "typing..." indicator at the start. Only Telegram
+    # currently supports this — other channels silently skip.
+    if chat_id is not None:
+        try:
+            reply_tool = self.tool_registry.get_tool("reply_user")
+            registry = getattr(reply_tool, "_gateway_registry", None) if reply_tool else None
+            if registry is not None:
+                from ..messaging.base import MessageChannel as _MC
+                tg_gw = registry.get(_MC.TELEGRAM)
+                sender = getattr(tg_gw, "sender", None) if tg_gw is not None else None
+                if sender is not None and hasattr(sender, "send_chat_action"):
+                    await sender.send_chat_action(chat_id, "typing")
+        except Exception:
+            pass  # best-effort
+
+    # Refresh code tool's df so the sub-agent sees the latest health data
+    _code_tool = self.tool_registry.get_tool("code")
+    if _code_tool is not None and hasattr(_code_tool, "refresh_df_async"):
+        await _code_tool.refresh_df_async()
+
+    # Single source of truth for prompt assembly: agent_prompts.py.
+    # Callers that need a different engine (e.g. the plan designer, which
+    # is allowed to write) pass their own system_prompt; everyone else gets
+    # the shared read-only sub_analysis prompt (KV-cache friendly).
+    if system_prompt is None:
+        system_prompt = await asyncio.to_thread(self.build_sub_analysis_prompt)
+
+    from ..utils import language_directive, local_tz_line
+    preamble = f"[{local_tz_line()}]"
+    # Proactive paths (scheduled reports, the iOS cat caption, the plan
+    # designer) have no incoming user message to infer language from, so
+    # they default to the prompt's English. Give them a language directive
+    # inferred from the user's own recent chat messages. Chat-spawned
+    # analyze (source="chat") is internal to the orchestrator, which
+    # already handles language.
+    if source in ("analysis", "quick", "plan"):
+        try:
+            sample = await asyncio.to_thread(self._chat_memory().recent_user_text)
+            preamble += f"\n[{language_directive(sample, settings.DEFAULT_USER_LANGUAGE)}]"
+        except Exception as exc:
+            logger.debug("language inference skipped: %s", exc)
+        # Proactive runs have no human in the loop to catch confabulation.
+        # If the data for this period is missing/empty/insufficient, the
+        # agent must say so plainly — never fabricate values and never
+        # recycle figures from an earlier report to fill the gap.
+        preamble += (
+            "\n[Honesty: if the data needed for this report is missing, "
+            "empty, or insufficient for the requested period, state that "
+            "honestly in your findings. Do NOT invent numbers and do NOT "
+            "reuse or rephrase data from a previous report to fill gaps. "
+            "Absence of data is itself a valid, reportable finding.]"
+        )
+    original_user_content = f"{preamble}\n{goal}"
+    messages: list[dict] = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": original_user_content},
+    ]
+    accumulated_summary = ""
+
+    sub_tools = self._get_sub_analysis_tool_definitions(extra_tools=extra_tools)
+    # The set of tool names the loop will actually *execute*.  Hiding a
+    # tool from the definitions is not enough — the LLM can still name any
+    # registered tool — so ``allowed_tools`` narrows execution too.
+    _executable_tools = set(SUB_ANALYSIS_BASE_TOOLS)
+    if extra_tools:
+        _executable_tools |= set(extra_tools)
+    if allowed_tools is not None:
+        _executable_tools &= set(allowed_tools)
+        sub_tools = [
+            t for t in sub_tools
+            if (t.get("function", {}) if isinstance(t, dict) else {}).get("name") in _executable_tools
+        ]
+    all_evidence: list[dict] = []
+    charts: list[str] = []
+    findings = ""
+    prev_tool_results: list[dict] = []
+    prev_call_sig = ""
+    dup_count = 0
+
+    # Event names are source-tagged so the monitor UI can route per-source.
+    evt_call = f"{source}_tool_call"
+    evt_result = f"{source}_tool_result"
+
+    def _evt_payload(base: dict) -> dict:
+        if chat_id is not None:
+            base["chat_id"] = chat_id
+        base["source"] = source
+        return base
+
+    def _failure(exc: Exception) -> dict:
+        """LLM failure → an explicit failed result, never fake findings."""
+        err = str(exc) or type(exc).__name__
+        logger.error("Sub-analysis (%s) failed: %s", source, err)
+        return {
+            "success": False,
+            "error": err[:500],
+            "findings": "",
+            "charts": charts,
+            "evidence": _filter_data_evidence(all_evidence),
+        }
+
+    for _turn in range(1, max_turns + 1):
+        _check_cancelled(self)
+        try:
+            text, tool_calls, sig = await _llm_call(
+                self, messages, sub_tools,
+                loop=source, chat_id=chat_id,
+                prev_tool_results=prev_tool_results,
+            )
+        except Exception as e:
+            agent_error = classify_error(e, "sub_analysis_llm")
+            logger.error("Sub-analysis LLM error (%s): %s", agent_error.category.value, e)
+            # Recovery: context overflow → emergency truncate and retry once
+            if agent_error.category == ErrorCategory.CONTEXT_OVERFLOW:
+                from .context_manager import ContextManager
+                messages, _ = ContextManager().emergency_truncate(messages, 2)
+                try:
+                    text, tool_calls, sig = await _llm_call(
+                        self, messages, sub_tools,
+                        loop=source, chat_id=chat_id,
+                        prev_tool_results=prev_tool_results,
+                    )
+                except Exception as e2:
+                    return _failure(e2)
+            else:
+                return _failure(e)
+
+        # No tool calls → text IS the findings
+        if not tool_calls:
+            findings = text
+            break
+
+        # Duplicate detection
+        call_sig = _hash_tool_calls(tool_calls)
+        if call_sig == prev_call_sig:
+            dup_count += 1
+            if dup_count >= 2:
+                logger.warning("Sub-analysis (%s): 3 identical rounds, breaking", source)
+                findings = text or "Analysis stalled."
+                break
+        else:
+            dup_count = 0
+        prev_call_sig = call_sig
+
+        messages.append(_build_assistant_msg(text, tool_calls, sig))
+        tool_results: list[dict] = []
+
+        for tc in tool_calls:
+            tool_name = tc.get("name")
+            tc_id = tc.get("id", "")
+            arguments = _parse_arguments(tc.get("arguments", {}))
+            if tool_name not in _executable_tools:
+                # Keep the tool_call/result pairing intact and let the LLM
+                # self-correct instead of silently dropping the call.
+                logger.warning(
+                    "Sub-analysis (%s): rejected tool %r (not available in this role)",
+                    source, tool_name,
+                )
+                tool_results.append({
+                    "id": tc_id, "tool": tool_name, "arguments": arguments,
+                    "result": dict(TOOL_NOT_AVAILABLE_RESULT),
+                })
+                continue
+
+            await self._emit(_evt_payload({
+                "type": evt_call, "tool": tool_name,
+                "arguments": arguments,
+            }))
+
+            # push_report needs the evidence trail for fact verification:
+            # everything gathered in earlier turns *plus* this turn's
+            # results so far (data queried in the same batch).  Also stamp
+            # the correct ``source`` based on this sub-analysis's caller —
+            # the LLM doesn't see ``source`` in the schema, so without this
+            # every direct LLM push falls back to the PushReportTool
+            # default ("scheduled_analysis") regardless of whether it came
+            # from iOS quick or autonomous analysis.
+            evidence_kw: dict = {}
+            if tool_name == "push_report":
+                evidence_kw["evidence_trail"] = _filter_data_evidence(all_evidence + tool_results)
+                arguments["source"] = (
+                    "quick_analysis" if source == "quick" else "scheduled_analysis"
+                )
+
+            try:
+                result = await asyncio.wait_for(
+                    self._execute_tool(tool_name, arguments, **evidence_kw),
+                    timeout=60.0,
+                )
+            except asyncio.TimeoutError:
+                result = {"success": False, "error": "Tool timed out."}
+            await self._emit(_evt_payload({
+                "type": evt_result, "tool": tool_name,
+                "success": result.get("success", False),
+                "result": result,
+            }))
+            tool_results.append({
+                "id": tc_id, "tool": tool_name,
+                "arguments": arguments, "result": result,
+            })
+
+            # Detect chart paths from code calls
+            if tool_name == "code" and result.get("success"):
+                code_text = arguments.get("code", "")
+                for m in re.finditer(
+                    r"savefig\(['\"](/tmp/[^'\"]+\.png)['\"]", code_text,
+                ):
+                    charts.append(m.group(1))
+
+            # push_report success → record it and stop the loop.  This
+            # return is also the "one report per run" guard: the run ends
+            # at the first published report, so no shared "already pushed"
+            # flag is needed (and none can leak between concurrent flows).
+            if tool_name == "push_report" and result.get("success"):
+                all_evidence.extend(tool_results)
+                return {
+                    "success": True,
+                    "findings": text or "",
+                    "charts": charts,
+                    "evidence": _filter_data_evidence(all_evidence),
+                    "report_pushed": True,
+                    "report_id": result.get("report_id"),
+                    "report_args": arguments,
+                }
+
+        all_evidence.extend(tool_results)
+        prev_tool_results = tool_results
+        for tr in tool_results:
+            messages.append(
+                _build_tool_result_msg(tr["id"], tr["result"], tr["tool"])
+            )
+        # Defensive: any tool_use id that still has no result would be a
+        # hard HTTP 400 on the next turn.
+        _yield_missing_tool_results(messages)
+
+        # Sliding-window compression. Without it this loop can run up to
+        # ``max_turns`` (100) rounds of raw tool output until the provider
+        # errors out and emergency_truncate drops results mid-analysis.
+        # preamble_size=2 → [system, user] are always preserved.
+        try:
+            messages, accumulated_summary = await _compress_context_if_needed(
+                messages, 2, self.context_window_size,
+                original_user_content, _ResilientProvider(self.llm), accumulated_summary,
+            )
+        except Exception as exc:
+            logger.warning("Context compression error (sub_analysis): %s", exc)
+
+        findings = text  # keep last text as fallback findings
+
+    if not findings:
+        findings = "Analysis completed but no findings were generated."
+
+    return {
+        "success": True,
+        "findings": findings,
+        "charts": charts,
+        "evidence": _filter_data_evidence(all_evidence),
+    }
+
+
+async def _run_chat_manage_loop(self, goal: str, chat_id: str) -> dict:
+    """Body of ``_run_chat_manage`` (runs with the tool role already set)."""
+    # Single source of truth for prompt assembly: agent_prompts.py.
+    system_prompt = await asyncio.to_thread(self.build_sub_manage_prompt)
+
+    from ..utils import local_tz_line
+    messages: list[dict] = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": f"[{local_tz_line()}]\n{goal}"},
+    ]
+
+    sub_tools = self._get_sub_manage_tool_definitions()
+    allowed_manage_tools = {
+        (t.get("function", {}) if isinstance(t, dict) else {}).get("name")
+        for t in sub_tools
+    }
+
+    all_evidence: list[dict] = []
+    actions_taken: list[str] = []
+    result_text = ""
+    prev_tool_results: list[dict] = []
+    prev_call_sig = ""
+    dup_count = 0
+    max_sub_turns = 8
+
+    def _failure(exc: Exception) -> dict:
+        err = str(exc) or type(exc).__name__
+        logger.error("Sub-manage failed: %s", err)
+        return {
+            "success": False,
+            "error": err[:500],
+            "result": f"Management error: {err[:300]}",
+            "actions_taken": actions_taken,
+            "evidence": all_evidence,
+        }
+
+    for _turn in range(1, max_sub_turns + 1):
+        _check_cancelled(self)
+        try:
+            text, tool_calls, sig = await _llm_call(
+                self, messages, sub_tools,
+                loop="chat", chat_id=chat_id,
+                prev_tool_results=prev_tool_results,
+            )
+        except Exception as e:
+            agent_error = classify_error(e, "sub_manage_llm")
+            logger.error("Sub-manage LLM error (%s): %s", agent_error.category.value, e)
+            if agent_error.category == ErrorCategory.CONTEXT_OVERFLOW:
+                from .context_manager import ContextManager
+                messages, _ = ContextManager().emergency_truncate(messages, 2)
+                try:
+                    text, tool_calls, sig = await _llm_call(
+                        self, messages, sub_tools,
+                        loop="chat", chat_id=chat_id,
+                        prev_tool_results=prev_tool_results,
+                    )
+                except Exception as e2:
+                    return _failure(e2)
+            else:
+                return _failure(e)
+
+        # No tool calls → text IS the result
+        if not tool_calls:
+            result_text = text
+            break
+
+        # Duplicate detection
+        call_sig = _hash_tool_calls(tool_calls)
+        if call_sig == prev_call_sig:
+            dup_count += 1
+            if dup_count >= 2:
+                logger.warning("Sub-manage: 3 identical rounds, breaking")
+                result_text = text or "Management operation stalled."
+                break
+        else:
+            dup_count = 0
+        prev_call_sig = call_sig
+
+        messages.append(_build_assistant_msg(text, tool_calls, sig))
+        tool_results: list[dict] = []
+
+        for tc in tool_calls:
+            tool_name = tc.get("name")
+            tc_id = tc.get("id", "")
+            arguments = _parse_arguments(tc.get("arguments", {}))
+            if tool_name not in allowed_manage_tools:
+                logger.warning(
+                    "Sub-manage: rejected tool %r (not available in this role)", tool_name,
+                )
+                tool_results.append({
+                    "id": tc_id, "tool": tool_name, "arguments": arguments,
+                    "result": dict(TOOL_NOT_AVAILABLE_RESULT),
+                })
+                continue
+
+            await self._emit({
+                "type": "chat_tool_call", "tool": tool_name,
+                "arguments": arguments, "chat_id": chat_id,
+            })
+            try:
+                result = await asyncio.wait_for(
+                    self._execute_tool(tool_name, arguments),
+                    timeout=30.0,
+                )
+            except asyncio.TimeoutError:
+                result = {"success": False, "error": "Tool timed out."}
+            await self._emit({
+                "type": "chat_tool_result", "tool": tool_name,
+                "success": result.get("success", False),
+                "result": result, "chat_id": chat_id,
+            })
+            tool_results.append({
+                "id": tc_id, "tool": tool_name,
+                "arguments": arguments, "result": result,
+            })
+            if result.get("success"):
+                actions_taken.append(f"{tool_name}: {str(arguments)[:120]}")
+
+        all_evidence.extend(tool_results)
+        prev_tool_results = tool_results
+        for tr in tool_results:
+            messages.append(
+                _build_tool_result_msg(tr["id"], tr["result"], tr["tool"])
+            )
+        # Same orphan-tool_use guard as the analysis sub-loop.
+        _yield_missing_tool_results(messages)
+        result_text = text  # keep last text as fallback
+
+    if not result_text:
+        result_text = "Management operation completed."
+
+    return {
+        "success": True,
+        "result": result_text,
+        "actions_taken": actions_taken,
+        "evidence": all_evidence,
+    }
+
+
 class AgentLoopsMixin:
     """Analysis and chat loop implementations."""
 
@@ -849,6 +1435,9 @@ class AgentLoopsMixin:
              read-only data work.
           2. Programmatically calls ``push_report`` with the findings,
              since cron-triggered analyses always publish their output.
+             A *failed* analysis (LLM error / timeout) is never published —
+             an exception string is not a health report — it is logged and
+             surfaced as an ``error`` event instead.
 
         The autonomous loop has **no write powers** — sub_analysis can
         only read.  Any persistence (memory CRUD, experience updates,
@@ -857,7 +1446,6 @@ class AgentLoopsMixin:
         every state mutation user-authorised and auditable.
         """
         self.cycle_count += 1
-        self.pushed_report_in_cycle = False
         self._set_state("thinking", loop="analysis")
 
         # Resolve current simulation timestamp from latest data — used by
@@ -894,43 +1482,63 @@ class AgentLoopsMixin:
             "something meaningful to report, and publish the report."
         )
         try:
-            sub_result = await self._run_sub_analysis(
-                sub_goal,
-                chat_id=None,
-                source="analysis",
-                max_turns=self.max_turns,
-                extra_tools={"push_report"},
+            sub_result = await asyncio.wait_for(
+                self._run_sub_analysis(
+                    sub_goal,
+                    chat_id=None,
+                    source="analysis",
+                    max_turns=self.max_turns,
+                    extra_tools={"push_report"},
+                ),
+                timeout=ONE_SHOT_ANALYSIS_TIMEOUT_S,
             )
-        except Exception as exc:
-            logger.error("Autonomous analysis sub_analysis error: %s", exc, exc_info=True)
+        except asyncio.TimeoutError:
+            logger.error(
+                "Autonomous analysis exceeded %.0fs — abandoned", ONE_SHOT_ANALYSIS_TIMEOUT_S,
+            )
             sub_result = {
                 "success": False,
-                "findings": f"Analysis error: {exc}",
-                "evidence": [],
-                "charts": [],
+                "error": f"analysis timed out after {ONE_SHOT_ANALYSIS_TIMEOUT_S:.0f}s",
             }
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("Autonomous analysis sub_analysis error: %s", exc, exc_info=True)
+            sub_result = {"success": False, "error": str(exc)}
 
         findings = sub_result.get("findings", "") or ""
         evidence = _filter_data_evidence(sub_result.get("evidence", []))
 
         # --- Stage 2: handle post-analysis bookkeeping ---
-        # If the LLM called push_report itself (happy path), we only need
-        # to update internal state.  Otherwise fall back to a programmatic
-        # push so every autonomous cycle produces a report.
-        if sub_result.get("report_pushed"):
+        # Per-run bookkeeping: ``report_published`` is local to this run, so
+        # overlapping flows (quick check, plan designer) cannot affect it.
+        report_published = False
+        shared_text = findings
+        if not sub_result.get("success", True):
+            # The analysis itself failed: publish nothing, tell the monitor.
+            err = sub_result.get("error") or "analysis failed"
+            logger.error("Autonomous analysis failed — nothing published: %s", err)
+            await self._emit({
+                "type": "error",
+                "error": f"Scheduled analysis failed: {err}",
+                "cycle": self.cycle_count,
+                "source": "analysis",
+            })
+        elif sub_result.get("report_pushed"):
             # LLM authored the report — just update internal state
-            self.pushed_report_in_cycle = True
+            report_published = True
+            args = sub_result.get("report_args") or {}
+            shared_text = args.get("im_digest") or args.get("content") or findings
             self.last_sleep_time = time.time()
-            report_id = sub_result.get("report_id")
             await self._emit({
                 "type": "report_pushed",
                 "cycle": self.cycle_count,
-                "report_id": report_id,
+                "report_id": sub_result.get("report_id"),
                 "timestamp": ts_now(),
             })
         else:
-            # Fallback: LLM didn't call push_report (weak model, error,
-            # or hit max_turns).  Programmatically push with findings.
+            # Fallback: LLM didn't call push_report (weak model or hit
+            # max_turns).  Programmatically push with findings.
             logger.info("LLM did not call push_report — using programmatic fallback")
             title = (goal[:80] if goal else f"Analysis Cycle {self.cycle_count}")
             clean_findings = (
@@ -942,6 +1550,7 @@ class AgentLoopsMixin:
                     f"Analysis completed but no detailed findings were generated.\n\n"
                     f"Goal: {goal or 'general analysis'}"
                 )
+            shared_text = clean_findings
 
             push_args = {
                 "title": title,
@@ -952,14 +1561,9 @@ class AgentLoopsMixin:
                 "alert_level": "info",
             }
             try:
-                push_result = await asyncio.wait_for(
-                    self._execute_tool(
-                        "push_report", push_args, evidence_trail=evidence,
-                    ),
-                    timeout=15.0,
-                )
+                push_result = await _push_report_programmatic(self, push_args, evidence)
                 if push_result.get("success"):
-                    self.pushed_report_in_cycle = True
+                    report_published = True
                     self.last_sleep_time = time.time()
                     await self._emit({
                         "type": "report_pushed",
@@ -972,8 +1576,8 @@ class AgentLoopsMixin:
 
         # Share the report with chat histories so the orchestrator can
         # reference it in subsequent conversation.
-        if self.pushed_report_in_cycle and findings:
-            bot_msg = {"role": "assistant", "content": findings}
+        if report_published and shared_text:
+            bot_msg = {"role": "assistant", "content": shared_text}
             reply_tool = self.tool_registry.get_tool("reply_user")
             gw_registry = getattr(reply_tool, "_gateway_registry", None) if reply_tool else None
             if gw_registry is not None:
@@ -984,10 +1588,13 @@ class AgentLoopsMixin:
                     key = f"{gw.channel.value}:{default_chat_id}"
                     if key not in self._chat_histories:
                         self._chat_histories[key] = []
-            for key, hist in self._chat_histories.items():
-                hist.append(bot_msg)
-                if len(hist) > self._max_chat_history:
-                    self._chat_histories[key] = hist[-self._max_chat_history:]
+            for key, hist in list(self._chat_histories.items()):
+                # A proactive report has no user turn of its own; the history
+                # window is normalised (no leading / consecutive assistant
+                # turns) when it is read back for the LLM.
+                self._chat_histories[key] = _trim_history(
+                    [*hist, bot_msg], self._max_chat_history,
+                ) if hist else [bot_msg]
 
         await self._emit({
             "type": "cycle_end",
@@ -1000,7 +1607,6 @@ class AgentLoopsMixin:
         # hadn't happened yet.
         self.last_analysis_complete_time = ts_now()
         self.cycle_messages = []
-        self.pushed_report_in_cycle = False
         self._set_state("idle", loop="analysis")
         self._save_state()
 
@@ -1053,9 +1659,10 @@ class AgentLoopsMixin:
         creates ``scheduled_tasks`` via the ``sql`` tool (which auto-refreshes
         the cron scheduler), records the plan as a memory note, and publishes a
         plan report via ``push_report`` (delivered to in-app chat + Reports
-        tab, in the user's own language). On success the survey is flipped to
-        'done' so it never fires again; on a transient failure it stays
-        'pending' and retries on the next chat reply.
+        tab, in the user's own language). The survey is flipped to 'done' only
+        when the run *succeeded* (so it never fires twice); on any failure —
+        LLM error, timeout, crash — it stays 'pending' and retries on the next
+        chat reply.
         """
         survey_id = survey.get("id")
         goals = survey.get("goals") or []
@@ -1079,12 +1686,20 @@ class AgentLoopsMixin:
                 extra_tools={"push_report", "update_md"},
                 system_prompt=system_prompt,
             )
+            if not result.get("success", True):
+                # LLM error / timeout: nothing was planned. Keep the survey
+                # 'pending' so the next chat reply retries.
+                logger.error(
+                    "Plan designer for %s failed (%s) — survey %s stays pending",
+                    self.user_id, result.get("error", "unknown error"), survey_id,
+                )
+                return
             if not result.get("report_pushed"):
                 logger.warning(
                     "Plan designer for %s finished without publishing a report",
                     self.user_id,
                 )
-            # Mark done regardless of whether a report was pushed: the run
+            # Mark done once the run succeeded, even without a report: it
             # completed, so we don't want to re-fire on every subsequent turn.
             if survey_id is not None:
                 await asyncio.to_thread(self._chat_memory().mark_survey_planned, survey_id)
@@ -1114,29 +1729,35 @@ class AgentLoopsMixin:
           4. Parse the JSON contract from the resulting findings text.
           5. Programmatically push a record-keeping report (no LLM call).
           6. Return ``{state, message}`` to the iOS endpoint.
+
+        Concurrent quick requests are serialised: two overlapping runs would
+        each publish a report and fight over the agent's state.
         """
-        self._set_state("quick_analysis", loop="analysis")
-        self.pushed_report_in_cycle = False
-        await self._emit({"type": "quick_analysis_start", "timestamp": ts_now()})
-        final_state = "neutral"
-        try:
-            result = await self._run_quick_analysis_inner()
-            final_state = (result or {}).get("state") or "neutral"
-            return result
-        except asyncio.CancelledError:
-            # Never swallow cancellation — re-raise so the caller's wait_for
-            # timeout and agent shutdown can tear this task down cleanly.
-            raise
-        except Exception as exc:
-            logger.warning("Quick analysis interrupted: %s", type(exc).__name__)
-            return {"state": "neutral", "message": "Analysis interrupted. Try again later."}
-        finally:
-            self._set_state("idle", loop="analysis")
-            await self._emit({
-                "type": "quick_analysis_complete",
-                "state": final_state,
-                "timestamp": ts_now(),
-            })
+        lock = getattr(self, "_quick_lock", None)
+        if lock is None:
+            lock = self._quick_lock = asyncio.Lock()
+        async with lock:
+            self._set_state("quick_analysis", loop="analysis")
+            await self._emit({"type": "quick_analysis_start", "timestamp": ts_now()})
+            final_state = "neutral"
+            try:
+                result = await self._run_quick_analysis_inner()
+                final_state = (result or {}).get("state") or "neutral"
+                return result
+            except asyncio.CancelledError:
+                # Never swallow cancellation — re-raise so the caller's wait_for
+                # timeout and agent shutdown can tear this task down cleanly.
+                raise
+            except Exception as exc:
+                logger.warning("Quick analysis interrupted: %s", type(exc).__name__)
+                return {"state": "neutral", "message": "Analysis interrupted. Try again later."}
+            finally:
+                self._set_state("idle", loop="analysis")
+                await self._emit({
+                    "type": "quick_analysis_complete",
+                    "state": final_state,
+                    "timestamp": ts_now(),
+                })
 
     async def _run_quick_analysis_inner(self) -> dict[str, str]:
         """Inner implementation — see ``run_quick_analysis`` docstring.
@@ -1177,6 +1798,12 @@ class AgentLoopsMixin:
             logger.error("Quick analysis sub_analysis error: %s", exc)
             return {"state": "neutral", "message": "Analysis error. Try again later."}
 
+        if not sub_result.get("success", True):
+            # LLM failure: give the cat a neutral state and a friendly caption —
+            # never the raw exception text — and publish nothing.
+            logger.warning("Quick analysis failed: %s", sub_result.get("error", "unknown error"))
+            return {"state": "neutral", "message": QUICK_FAILURE_MESSAGE}
+
         # --- Extract cat state from report_args.metadata ---
         result_state = "relaxed"
         # Defaults are derived from the sub-agent's findings rather than a
@@ -1193,7 +1820,6 @@ class AgentLoopsMixin:
                 result_state = meta.get("state", result_state) or result_state
                 result_message = meta.get("message", result_message) or result_message
 
-            self.pushed_report_in_cycle = True
             await self._emit({
                 "type": "report_pushed",
                 "task": "quick_analysis",
@@ -1217,12 +1843,8 @@ class AgentLoopsMixin:
                     "source": "quick_analysis",
                     "metadata": {"state": result_state, "message": result_message},
                 }
-                push_result = await asyncio.wait_for(
-                    self._execute_tool("push_report", push_args, evidence_trail=evidence),
-                    timeout=15.0,
-                )
+                push_result = await _push_report_programmatic(self, push_args, evidence)
                 if push_result.get("success"):
-                    self.pushed_report_in_cycle = True
                     await self._emit({
                         "type": "report_pushed",
                         "task": "quick_analysis",
@@ -1261,257 +1883,44 @@ class AgentLoopsMixin:
         The sub-agent has ``sql`` + ``code`` + ``read_skill`` and stops
         when the LLM outputs text without tool calls (= findings).  It
         never writes anything — all persistence flows through the chat
-        path's ``manage`` → ``sub_manage`` route.
+        path's ``manage`` → ``sub_manage`` route.  (The one exception is the
+        onboarding plan designer, ``source="plan"``, which also gets
+        write access to the memory DB.)
 
         Args:
             goal:          user-message goal string the LLM acts on.
             chat_id:       Gateway chat id for typing indicator + event
                            tagging.  ``None`` for non-chat callers.
             source:        label used in emit events (``chat`` / ``analysis``
-                           / ``quick``) so the monitor UI can route them.
+                           / ``quick`` / ``plan``) so the monitor UI can route
+                           them; ``plan`` also selects the memory-write role.
             max_turns:     hard cap on LLM turns (default 15).
             allowed_tools: optional whitelist of tool names; if given,
-                           filters the sub-agent's tool definitions
-                           (e.g. ``{"sql"}`` for the latency-sensitive
-                           iOS quick path that wants to skip ``code``).
+                           narrows both the tool definitions *and* the set
+                           of tools the loop will execute (e.g. ``{"sql"}``
+                           for the latency-sensitive iOS quick path that
+                           wants to skip ``code``).
             extra_tools:   additional tool names to expose beyond the
                            default ``sql/code/read_skill`` set.  The
                            autonomous path passes ``{"push_report"}`` so
                            the LLM can publish the report itself with
                            distinct ``content`` and ``im_digest``.
 
-        Returns ``{"success", "findings", "charts", "evidence"}``.
+        Returns ``{"success", "findings", "charts", "evidence"}``; on an LLM
+        failure ``success`` is False, ``error`` carries the reason and
+        ``findings`` is empty — callers must not publish it as a result.
         """
-        # Send a single "typing..." indicator at the start. Only Telegram
-        # currently supports this — other channels silently skip.
-        if chat_id is not None:
-            try:
-                reply_tool = self.tool_registry.get_tool("reply_user")
-                registry = getattr(reply_tool, "_gateway_registry", None) if reply_tool else None
-                if registry is not None:
-                    from ..messaging.base import MessageChannel as _MC
-                    tg_gw = registry.get(_MC.TELEGRAM)
-                    sender = getattr(tg_gw, "sender", None) if tg_gw is not None else None
-                    if sender is not None and hasattr(sender, "send_chat_action"):
-                        await sender.send_chat_action(chat_id, "typing")
-            except Exception:
-                pass  # best-effort
-
-        # Refresh code tool's df so the sub-agent sees the latest health data
-        _code_tool = self.tool_registry.get_tool("code")
-        if _code_tool is not None and hasattr(_code_tool, "refresh_df_async"):
-            await _code_tool.refresh_df_async()
-
-        # Single source of truth for prompt assembly: agent_prompts.py.
-        # Callers that need a different engine (e.g. the plan designer, which
-        # is allowed to write) pass their own system_prompt; everyone else gets
-        # the shared read-only sub_analysis prompt (KV-cache friendly).
-        if system_prompt is None:
-            system_prompt = await asyncio.to_thread(self.build_sub_analysis_prompt)
-
-        from ..utils import language_directive, local_tz_line
-        preamble = f"[{local_tz_line()}]"
-        # Proactive paths (scheduled reports, the iOS cat caption, the plan
-        # designer) have no incoming user message to infer language from, so
-        # they default to the prompt's English. Give them a language directive
-        # inferred from the user's own recent chat messages. Chat-spawned
-        # analyze (source="chat") is internal to the orchestrator, which
-        # already handles language.
-        if source in ("analysis", "quick", "plan"):
-            try:
-                sample = await asyncio.to_thread(self._chat_memory().recent_user_text)
-                preamble += f"\n[{language_directive(sample, settings.DEFAULT_USER_LANGUAGE)}]"
-            except Exception as exc:
-                logger.debug("language inference skipped: %s", exc)
-            # Proactive runs have no human in the loop to catch confabulation.
-            # If the data for this period is missing/empty/insufficient, the
-            # agent must say so plainly — never fabricate values and never
-            # recycle figures from an earlier report to fill the gap.
-            preamble += (
-                "\n[Honesty: if the data needed for this report is missing, "
-                "empty, or insufficient for the requested period, state that "
-                "honestly in your findings. Do NOT invent numbers and do NOT "
-                "reuse or rephrase data from a previous report to fill gaps. "
-                "Absence of data is itself a valid, reportable finding.]"
+        # The role decides what the sql tool may do: sub_analysis can read the
+        # memory DB, only the plan designer may write it.
+        token = _tool_role.set("plan" if source == "plan" else "analysis")
+        try:
+            return await _run_sub_analysis_loop(
+                self, goal, chat_id=chat_id, source=source, max_turns=max_turns,
+                allowed_tools=allowed_tools, extra_tools=extra_tools,
+                system_prompt=system_prompt,
             )
-        original_user_content = f"{preamble}\n{goal}"
-        messages: list[dict] = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": original_user_content},
-        ]
-        accumulated_summary = ""
-
-        sub_tools = self._get_sub_analysis_tool_definitions(extra_tools=extra_tools)
-        if allowed_tools is not None:
-            sub_tools = [
-                t for t in sub_tools
-                if (t.get("function", {}) if isinstance(t, dict) else {}).get("name") in allowed_tools
-            ]
-        # Build the set of tool names the loop will actually execute
-        _executable_tools = {"sql", "code", "read_skill"}
-        if extra_tools:
-            _executable_tools |= extra_tools
-        all_evidence: list[dict] = []
-        charts: list[str] = []
-        findings = ""
-        prev_tool_results: list[dict] = []
-        prev_call_sig = ""
-        dup_count = 0
-
-        # Event names are source-tagged so the monitor UI can route per-source.
-        evt_call = f"{source}_tool_call"
-        evt_result = f"{source}_tool_result"
-
-        def _evt_payload(base: dict) -> dict:
-            if chat_id is not None:
-                base["chat_id"] = chat_id
-            base["source"] = source
-            return base
-
-        for _turn in range(1, max_turns + 1):
-            try:
-                text, tool_calls, sig = await _llm_call(
-                    self, messages, sub_tools,
-                    loop=source, chat_id=chat_id,
-                    prev_tool_results=prev_tool_results,
-                )
-            except Exception as e:
-                agent_error = classify_error(e, "sub_analysis_llm")
-                logger.error("Sub-analysis LLM error (%s): %s", agent_error.category.value, e)
-                # Recovery: context overflow → emergency truncate and retry once
-                if agent_error.category == ErrorCategory.CONTEXT_OVERFLOW:
-                    from .context_manager import ContextManager
-                    messages, _ = ContextManager().emergency_truncate(messages, 2)
-                    try:
-                        text, tool_calls, sig = await _llm_call(
-                            self, messages, sub_tools,
-                            loop=source, chat_id=chat_id,
-                            prev_tool_results=prev_tool_results,
-                        )
-                    except Exception:
-                        findings = f"Analysis error: {e}"
-                        break
-                else:
-                    findings = f"Analysis error: {e}"
-                    break
-
-            # No tool calls → text IS the findings
-            if not tool_calls:
-                findings = text
-                break
-
-            # Duplicate detection
-            call_sig = _hash_tool_calls(tool_calls)
-            if call_sig == prev_call_sig:
-                dup_count += 1
-                if dup_count >= 2:
-                    logger.warning("Sub-analysis (%s): 3 identical rounds, breaking", source)
-                    findings = text or "Analysis stalled."
-                    break
-            else:
-                dup_count = 0
-            prev_call_sig = call_sig
-
-            messages.append(_build_assistant_msg(text, tool_calls, sig))
-            tool_results: list[dict] = []
-
-            for tc in tool_calls:
-                tool_name = tc.get("name")
-                tc_id = tc.get("id", "")
-                if tool_name not in _executable_tools:
-                    continue
-                arguments = _parse_arguments(tc.get("arguments", {}))
-
-                await self._emit(_evt_payload({
-                    "type": evt_call, "tool": tool_name,
-                    "arguments": arguments,
-                }))
-
-                # push_report needs the evidence trail for fact verification.
-                # Also stamp the correct ``source`` based on this sub-analysis's
-                # caller — the LLM doesn't see ``source`` in the schema, so
-                # without this every direct LLM push falls back to the
-                # PushReportTool default ("scheduled_analysis") regardless of
-                # whether it came from iOS quick or autonomous analysis.
-                evidence_kw: dict = {}
-                if tool_name == "push_report":
-                    evidence_kw["evidence_trail"] = _filter_data_evidence(all_evidence)
-                    arguments["source"] = (
-                        "quick_analysis" if source == "quick" else "scheduled_analysis"
-                    )
-
-                try:
-                    result = await asyncio.wait_for(
-                        self._execute_tool(tool_name, arguments, **evidence_kw),
-                        timeout=60.0,
-                    )
-                except asyncio.TimeoutError:
-                    result = {"success": False, "error": "Tool timed out."}
-                await self._emit(_evt_payload({
-                    "type": evt_result, "tool": tool_name,
-                    "success": result.get("success", False),
-                    "result": result,
-                }))
-                tool_results.append({
-                    "id": tc_id, "tool": tool_name,
-                    "arguments": arguments, "result": result,
-                })
-
-                # Detect chart paths from code calls
-                if tool_name == "code" and result.get("success"):
-                    code_text = arguments.get("code", "")
-                    for m in re.finditer(
-                        r"savefig\(['\"](/tmp/[^'\"]+\.png)['\"]", code_text,
-                    ):
-                        charts.append(m.group(1))
-
-                # push_report success → record it and stop the loop
-                if tool_name == "push_report" and result.get("success"):
-                    all_evidence.extend(tool_results)
-                    return {
-                        "success": True,
-                        "findings": text or "",
-                        "charts": charts,
-                        "evidence": _filter_data_evidence(all_evidence),
-                        "report_pushed": True,
-                        "report_id": result.get("report_id"),
-                        "report_args": arguments,
-                    }
-
-            all_evidence.extend(tool_results)
-            prev_tool_results = tool_results
-            for tr in tool_results:
-                messages.append(
-                    _build_tool_result_msg(tr["id"], tr["result"], tr["tool"])
-                )
-            # Calls to non-whitelisted tools were skipped above without
-            # producing a result. Their tool_use ids would otherwise go back to
-            # the provider unanswered, which is a hard HTTP 400 on the next turn.
-            _yield_missing_tool_results(messages)
-
-            # Sliding-window compression. Without it this loop can run up to
-            # ``max_turns`` (100) rounds of raw tool output until the provider
-            # errors out and emergency_truncate drops results mid-analysis.
-            # preamble_size=2 → [system, user] are always preserved.
-            try:
-                messages, accumulated_summary = await _compress_context_if_needed(
-                    messages, 2, self.context_window_size,
-                    original_user_content, self.llm, accumulated_summary,
-                )
-            except Exception as exc:
-                logger.warning("Context compression error (sub_analysis): %s", exc)
-
-            findings = text  # keep last text as fallback findings
-
-        if not findings:
-            findings = "Analysis completed but no findings were generated."
-
-        return {
-            "success": True,
-            "findings": findings,
-            "charts": charts,
-            "evidence": _filter_data_evidence(all_evidence),
-        }
+        finally:
+            _tool_role.reset(token)
 
     # ==================================================================
     # Chat manage sub-agent — framework CRUD operations for chat
@@ -1524,127 +1933,16 @@ class AgentLoopsMixin:
         The sub-agent has ``sql`` (memory DB read/write) and ``create_page``.
         It stops when the LLM outputs text without tool calls (= result summary).
 
-        Returns ``{"success", "result", "actions_taken", "evidence"}``.
+        Returns ``{"success", "result", "actions_taken", "evidence"}``; on an
+        LLM failure ``success`` is False and ``error`` carries the reason.
         """
-        # Single source of truth for prompt assembly: agent_prompts.py.
-        system_prompt = await asyncio.to_thread(self.build_sub_manage_prompt)
-
-        from ..utils import local_tz_line
-        messages: list[dict] = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"[{local_tz_line()}]\n{goal}"},
-        ]
-
-        sub_tools = self._get_sub_manage_tool_definitions()
-        allowed_manage_tools = {
-            (t.get("function", {}) if isinstance(t, dict) else {}).get("name")
-            for t in sub_tools
-        }
-
-        all_evidence: list[dict] = []
-        actions_taken: list[str] = []
-        result_text = ""
-        prev_tool_results: list[dict] = []
-        prev_call_sig = ""
-        dup_count = 0
-        max_sub_turns = 8
-
-        for _turn in range(1, max_sub_turns + 1):
-            try:
-                text, tool_calls, sig = await _llm_call(
-                    self, messages, sub_tools,
-                    loop="chat", chat_id=chat_id,
-                    prev_tool_results=prev_tool_results,
-                )
-            except Exception as e:
-                agent_error = classify_error(e, "sub_manage_llm")
-                logger.error("Sub-manage LLM error (%s): %s", agent_error.category.value, e)
-                if agent_error.category == ErrorCategory.CONTEXT_OVERFLOW:
-                    from .context_manager import ContextManager
-                    messages, _ = ContextManager().emergency_truncate(messages, 2)
-                    try:
-                        text, tool_calls, sig = await _llm_call(
-                            self, messages, sub_tools,
-                            loop="chat", chat_id=chat_id,
-                            prev_tool_results=prev_tool_results,
-                        )
-                    except Exception:
-                        result_text = f"Management error: {e}"
-                        break
-                else:
-                    result_text = f"Management error: {e}"
-                    break
-
-            # No tool calls → text IS the result
-            if not tool_calls:
-                result_text = text
-                break
-
-            # Duplicate detection
-            call_sig = _hash_tool_calls(tool_calls)
-            if call_sig == prev_call_sig:
-                dup_count += 1
-                if dup_count >= 2:
-                    logger.warning("Sub-manage: 3 identical rounds, breaking")
-                    result_text = text or "Management operation stalled."
-                    break
-            else:
-                dup_count = 0
-            prev_call_sig = call_sig
-
-            messages.append(_build_assistant_msg(text, tool_calls, sig))
-            tool_results: list[dict] = []
-
-            for tc in tool_calls:
-                tool_name = tc.get("name")
-                tc_id = tc.get("id", "")
-                if tool_name not in allowed_manage_tools:
-                    continue
-                arguments = _parse_arguments(tc.get("arguments", {}))
-
-                await self._emit({
-                    "type": "chat_tool_call", "tool": tool_name,
-                    "arguments": arguments, "chat_id": chat_id,
-                })
-                try:
-                    result = await asyncio.wait_for(
-                        self._execute_tool(tool_name, arguments),
-                        timeout=30.0,
-                    )
-                except asyncio.TimeoutError:
-                    result = {"success": False, "error": "Tool timed out."}
-                await self._emit({
-                    "type": "chat_tool_result", "tool": tool_name,
-                    "success": result.get("success", False),
-                    "result": result, "chat_id": chat_id,
-                })
-                tool_results.append({
-                    "id": tc_id, "tool": tool_name,
-                    "arguments": arguments, "result": result,
-                })
-                if result.get("success"):
-                    actions_taken.append(f"{tool_name}: {str(arguments)[:120]}")
-
-            all_evidence.extend(tool_results)
-            prev_tool_results = tool_results
-            for tr in tool_results:
-                messages.append(
-                    _build_tool_result_msg(tr["id"], tr["result"], tr["tool"])
-                )
-            # Same orphan-tool_use guard as the analysis sub-loop: skipped
-            # (non-whitelisted) calls must still get a tool result back.
-            _yield_missing_tool_results(messages)
-            result_text = text  # keep last text as fallback
-
-        if not result_text:
-            result_text = "Management operation completed."
-
-        return {
-            "success": True,
-            "result": result_text,
-            "actions_taken": actions_taken,
-            "evidence": all_evidence,
-        }
+        # Role "manage": the only role (besides the plan designer) whose sql
+        # tool may write the memory DB.
+        token = _tool_role.set("manage")
+        try:
+            return await _run_chat_manage_loop(self, goal, chat_id)
+        finally:
+            _tool_role.reset(token)
 
     # ==================================================================
     # Chat loop — handles a single user message from any gateway
@@ -1724,12 +2022,10 @@ class AgentLoopsMixin:
         ]
         user_msg_for_llm: dict
         if image_atts and self.llm.supports_vision():
-            import base64 as _b64
             blocks: list[dict] = [{"type": "text", "text": user_text}]
             for att in image_atts:
                 try:
-                    with open(att["path"], "rb") as f:
-                        b64 = _b64.b64encode(f.read()).decode()
+                    b64 = await asyncio.to_thread(_read_image_b64, att["path"])
                     mime = att.get("mime", "image/jpeg")
                     blocks.append({
                         "type": "image_url",
@@ -1751,9 +2047,12 @@ class AgentLoopsMixin:
             "content": f"[{ts_str}] {envelope.content}" + (" [image]" if image_atts else ""),
         }
 
+        # The stored window may start on an assistant turn (proactive report) or
+        # contain adjacent same-role turns; strict providers 400 on both.
+        llm_history = _normalize_history(history)
         chat_messages = [
             {"role": "system", "content": system_prompt},
-            *history,
+            *llm_history,
             user_msg_for_llm,
         ]
 
@@ -1785,13 +2084,20 @@ class AgentLoopsMixin:
         accumulated_summary = ""
         finished = False
         has_replied = False
-        reply_send_count = 0
+        # An analyze/manage result the user has not been told about yet. Set when
+        # a sub-agent returns, cleared when a reply is actually delivered, so a
+        # plain-text final answer after an acknowledgment is never dropped.
+        unanswered_result = False
+        reply_send_count = 0      # successfully delivered replies (limit 2)
+        reply_attempt_count = 0   # attempts, delivered or not (bounds blocked retries)
+        fabrication_retried = False
+        overflow_retried = False
         prev_call_sig = ""
         dup_count = 0
-        self._chat_fabrication_retried = False
         chat_budget = min(self.max_turns, settings.CHAT_MAX_TURNS)
 
         for turn in range(1, chat_budget + 1):
+            _check_cancelled(self)
             self._set_state("chat_thinking", loop="chat")
 
             try:
@@ -1802,6 +2108,31 @@ class AgentLoopsMixin:
                 )
             except Exception as e:
                 logger.error("LLM error (chat): %s", e, exc_info=True)
+                # Context overflow → emergency truncate + retry once (the same
+                # recovery the sub-agent loops have).
+                if (
+                    not overflow_retried
+                    and classify_error(e, "chat_llm").category == ErrorCategory.CONTEXT_OVERFLOW
+                ):
+                    overflow_retried = True
+                    from .context_manager import ContextManager
+                    before = len(chat_messages)
+                    chat_messages, _ = ContextManager().emergency_truncate(
+                        chat_messages, preamble_size,
+                    )
+                    shrunk = len(chat_messages) < before
+                    if not shrunk and llm_history:
+                        # Nothing in the turn body to drop: shed older history.
+                        llm_history = _normalize_history(llm_history[len(llm_history) // 2:])
+                        chat_messages = [
+                            chat_messages[0], *llm_history, *chat_messages[preamble_size - 1:],
+                        ]
+                        preamble_size = 2 + len(llm_history)
+                        shrunk = True
+                    if shrunk:
+                        _yield_missing_tool_results(chat_messages)
+                        logger.info("Chat: context overflow — truncated, retrying once")
+                        continue
                 _yield_missing_tool_results(chat_messages)
                 break
 
@@ -1812,12 +2143,19 @@ class AgentLoopsMixin:
                 if _contains_raw_tool_call(clean):
                     logger.warning("Chat turn %d: stripping leaked tool-call markup from auto-reply", turn)
                     clean = _strip_raw_tool_calls(clean)
-                if not has_replied and clean and clean not in ("(tools)", "(done)", "(no response)"):
-                    # LLM wrote text but didn't call reply_user — send it
+                if (
+                    (not has_replied or unanswered_result)
+                    and clean
+                    and clean not in ("(tools)", "(done)", "(no response)")
+                ):
+                    # LLM wrote text but didn't call reply_user — send it. Also
+                    # covers ack → analyze → plain-text final answer: the answer
+                    # is delivered because the result has not been reported yet.
                     logger.info("Chat turn %d: no tool calls, auto-replying with text", turn)
                     ar = await self._auto_reply(clean, chat_id, all_evidence, user_message=envelope.content, chat_history=history, channel=envelope.channel)
                     if ar["sent"]:
                         has_replied = True
+                        unanswered_result = False
                         reply_text = clean
                         finished = True
                         break
@@ -1825,8 +2163,8 @@ class AgentLoopsMixin:
                     # Give the agent one retry: feed back the verifier's
                     # specific detail so it can fix the exact issue (e.g.
                     # "fabricated step count without querying database").
-                    if not getattr(self, "_chat_fabrication_retried", False):
-                        self._chat_fabrication_retried = True
+                    if not fabrication_retried:
+                        fabrication_retried = True
                         block_detail = ar.get("error", "") or "(no detail)"
                         logger.info(
                             "Chat turn %d: auto-reply blocked, injecting retry feedback: %s",
@@ -1865,15 +2203,21 @@ class AgentLoopsMixin:
             reply_calls = [tc for tc in tool_calls if tc.get("name") == "reply_user"]
             if len(reply_calls) > 1:
                 merged_parts: list[str] = []
+                merged_args: dict[str, Any] = {}
                 for rtc in reply_calls:
                     args = _parse_arguments(rtc.get("arguments", {}))
                     msg = args.get("message", "")
                     if msg:
                         merged_parts.append(msg)
+                    # Keep the first non-empty attachment / reply-to target
+                    # instead of silently dropping them with the extra calls.
+                    for key in ("image_path", "reply_to_message_id"):
+                        if args.get(key) and not merged_args.get(key):
+                            merged_args[key] = args[key]
                 merged_tc = {
                     "name": "reply_user",
                     "id": reply_calls[0].get("id", ""),
-                    "arguments": {"message": "\n\n".join(merged_parts)},
+                    "arguments": {"message": "\n\n".join(merged_parts), **merged_args},
                 }
                 tool_calls = [tc for tc in tool_calls if tc.get("name") != "reply_user"] + [merged_tc]
 
@@ -1896,12 +2240,13 @@ class AgentLoopsMixin:
                 if dup_count >= 2:
                     logger.warning("Chat: 3 identical tool-call rounds, breaking loop")
                     _yield_missing_tool_results(chat_messages)
-                    if not has_replied:
+                    if not has_replied or unanswered_result:
                         clean = _strip_meta_markers(text)
                         if clean:
                             ar = await self._auto_reply(clean, chat_id, all_evidence, user_message=envelope.content, chat_history=history, channel=envelope.channel)
-                            has_replied = ar["sent"]
                             if ar["sent"]:
+                                has_replied = True
+                                unanswered_result = False
                                 reply_text = clean
                     break
             else:
@@ -1915,6 +2260,17 @@ class AgentLoopsMixin:
                 tool_name = tc.get("name")
                 tc_id = tc.get("id", "")
                 arguments = _parse_arguments(tc.get("arguments", {}))
+
+                if tool_name not in CHAT_ALLOWED_TOOLS:
+                    # The orchestrator is a pure dispatcher: hiding other tools
+                    # from its definitions is not enough, the LLM can still name
+                    # them. Reject at execution (result keeps call/result pairing).
+                    logger.warning("Chat: rejected tool %r (not available in this role)", tool_name)
+                    tool_results.append({
+                        "id": tc_id, "tool": tool_name, "arguments": arguments,
+                        "result": dict(TOOL_NOT_AVAILABLE_RESULT),
+                    })
+                    continue
 
                 if tool_name == "analyze":
                     # Delegate data analysis to sub-agent
@@ -1932,13 +2288,31 @@ class AgentLoopsMixin:
                             timeout=180.0,
                         )
                     except asyncio.TimeoutError:
-                        result = {"success": False, "findings": "Analysis timed out.", "evidence": []}
+                        result = {
+                            "success": False, "findings": "",
+                            "error": "Analysis timed out.", "evidence": [],
+                        }
                     except Exception as exc:
-                        result = {"success": False, "findings": str(exc), "evidence": []}
+                        result = {"success": False, "findings": "", "error": str(exc), "evidence": []}
+                    if not result.get("success", True):
+                        # Make the failure unmistakable so the orchestrator
+                        # tells the user instead of relaying it as data.
+                        result = {
+                            **result,
+                            "error": (
+                                f"Analysis failed: {result.get('error') or 'unknown error'}. "
+                                "No health data was analysed — tell the user honestly "
+                                "and suggest trying again."
+                            ),
+                        }
                     all_evidence.extend(result.get("evidence", []))
+                    unanswered_result = True
                     await self._emit({"type": "chat_tool_result", "tool": "analyze",
                                       "success": result.get("success", False),
-                                      "result": {"findings": result.get("findings", "")[:500]},
+                                      "result": {
+                                          "findings": (result.get("findings") or "")[:500],
+                                          **({"error": result["error"][:300]} if result.get("error") else {}),
+                                      },
                                       "chat_id": chat_id})
                     tool_results.append({"id": tc_id, "tool": "analyze", "result": result})
                     prev_chat_tool_results = tool_results
@@ -1954,10 +2328,18 @@ class AgentLoopsMixin:
                             timeout=120.0,
                         )
                     except asyncio.TimeoutError:
-                        result = {"success": False, "result": "Management operation timed out.", "actions_taken": [], "evidence": []}
+                        result = {
+                            "success": False, "error": "Management operation timed out.",
+                            "result": "Management operation timed out.",
+                            "actions_taken": [], "evidence": [],
+                        }
                     except Exception as exc:
-                        result = {"success": False, "result": str(exc), "actions_taken": [], "evidence": []}
+                        result = {
+                            "success": False, "error": str(exc), "result": str(exc),
+                            "actions_taken": [], "evidence": [],
+                        }
                     all_evidence.extend(result.get("evidence", []))
+                    unanswered_result = True
                     await self._emit({"type": "chat_tool_result", "tool": "manage",
                                       "success": result.get("success", False),
                                       "result": {"result": result.get("result", "")[:500]},
@@ -1989,7 +2371,9 @@ class AgentLoopsMixin:
                     elif msg:
                         # Strip echoed envelope headers the LLM may have copied
                         arguments["message"] = _strip_meta_markers(msg)
-                    # 2-send limit: 1st = interim ack, 2nd = final answer
+                    # 2-send limit: 1st = interim ack, 2nd = final answer. Only
+                    # *delivered* replies count — a reply blocked by the fact
+                    # verifier or a gateway failure must not eat the budget.
                     if reply_send_count >= 2:
                         tool_results.append({
                             "id": tc_id, "tool": "reply_user",
@@ -1997,7 +2381,17 @@ class AgentLoopsMixin:
                                        "message": "Already sent 2 messages. Wrap up."},
                         })
                         continue
-                    reply_send_count += 1
+                    if reply_attempt_count >= 4 and not has_replied:
+                        tool_results.append({
+                            "id": tc_id, "tool": "reply_user",
+                            "result": {
+                                "success": False,
+                                "error": "Too many failed reply attempts — nothing was "
+                                         "delivered. Stop retrying and finish.",
+                            },
+                        })
+                        continue
+                    reply_attempt_count += 1
                     arguments["chat_id"] = str(chat_id)
 
                 self._set_state(f"chat_executing:{tool_name}", loop="chat")
@@ -2036,6 +2430,8 @@ class AgentLoopsMixin:
                 # C2 fix: only mark has_replied after verifying tool success
                 if tool_name == "reply_user" and result.get("success"):
                     has_replied = True
+                    unanswered_result = False
+                    reply_send_count += 1
                     reply_text = arguments.get("message", "")
                     # Pair the image with this reply's text (None clears any
                     # image from an earlier send, keeping text↔image aligned).
@@ -2057,7 +2453,7 @@ class AgentLoopsMixin:
             try:
                 chat_messages, accumulated_summary = await _compress_context_if_needed(
                     chat_messages, preamble_size, self.context_window_size,
-                    original_user_content, self.llm, accumulated_summary,
+                    original_user_content, _ResilientProvider(self.llm), accumulated_summary,
                 )
             except Exception as exc:
                 logger.warning("Context compression error (chat): %s", exc)
@@ -2072,6 +2468,18 @@ class AgentLoopsMixin:
             )
             reply_text = "(auto-reply: processing failed)"
             finished = True
+        elif unanswered_result and not finished:
+            # Acknowledged, ran a sub-agent, then the loop ended (error / turn
+            # budget) before the result was reported — say so rather than leave
+            # the user hanging on "working on it".
+            logger.warning("Chat with %s ended with an unreported result, sending fallback", sender)
+            ar = await self._auto_reply(
+                "Sorry, I couldn't finish putting the result together. Please try again!",
+                chat_id, [], user_message=envelope.content,
+                chat_history=history, channel=envelope.channel,
+            )
+            if ar.get("sent"):
+                reply_text = "Sorry, I couldn't finish putting the result together. Please try again!"
 
         self._set_state("chat_complete", loop="chat")
         hist = self._chat_histories.setdefault(history_key, [])
@@ -2093,9 +2501,9 @@ class AgentLoopsMixin:
             else:
                 stored_reply = reply_text
             hist.append({"role": "assistant", "content": stored_reply})
-        if len(hist) > self._max_chat_history:
-            hist = hist[-self._max_chat_history:]
-            self._chat_histories[history_key] = hist
+        # Trim to the window without ever starting on an assistant turn.
+        hist = _trim_history(hist, self._max_chat_history)
+        self._chat_histories[history_key] = hist
         self._save_state()
         # Persist the turn(s) to the memory DB so the in-app chat can reload
         # history across restarts / new devices. Fire-and-forget so it never

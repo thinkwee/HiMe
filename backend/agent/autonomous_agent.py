@@ -15,6 +15,7 @@ Tools:
    scheduler in main.py, not by the agent itself)
 """
 import asyncio
+import json
 import logging
 import os
 import time
@@ -144,8 +145,14 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
             "cache_creation_tokens": 0,
         }
 
-        # Whether a report was pushed in the current analysis run
-        self.pushed_report_in_cycle = False
+        # Serialises iOS quick checks (two overlapping runs would each publish a
+        # report and fight over the agent state).
+        self._quick_lock = asyncio.Lock()
+
+        # State persistence is coalesced + written off the event loop (see
+        # ``_save_state``).
+        self._state_dirty = False
+        self._state_flush_task: asyncio.Task | None = None
 
         # Cancellation token — cascade cancel to all child operations on stop
         self._cancellation = CancellationToken()
@@ -155,6 +162,13 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
 
         # Restore persisted state
         self._restore_state()
+
+        # Build the chat-history MemoryManager (DDL / migrations) now, at
+        # construction, rather than lazily on the event loop mid-conversation.
+        try:
+            self._chat_memory()
+        except Exception as exc:
+            logger.warning("MemoryManager pre-init failed (will retry lazily): %s", exc)
 
         logger.info("AutonomousHealthAgent initialized for %s", user_id)
 
@@ -215,24 +229,69 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
             self._chat_state_metadata = metadata or {}
         self._save_state()
 
+    # Debounce window for state writes: ``_set_state`` fires several times per
+    # turn and every write fsyncs, so writes are coalesced into one per window.
+    _STATE_FLUSH_DELAY_S = 0.5
+
+    def _state_snapshot_json(self) -> str:
+        """Consistent JSON snapshot of the persisted state (taken on the loop)."""
+        state = {
+            "cycle_count": self.cycle_count,
+            "last_sleep_time": self.last_sleep_time,
+            "last_data_check_time": self.last_data_check_time,
+            "cycle_messages": self.cycle_messages,
+            "current_simulation_timestamp": self.current_simulation_timestamp,
+            "state": self.state,
+            "state_start_time": self.state_start_time,
+            "state_metadata": self.state_metadata,
+            "chat_histories": self._chat_histories,
+            "cumulative_tokens": self.cumulative_tokens,
+            "last_updated": ts_now(),
+        }
+        return json.dumps(state, indent=2, default=str)
+
     def _save_state(self) -> None:
+        """Persist agent state.
+
+        Inside a running event loop the write is coalesced (one per
+        ``_STATE_FLUSH_DELAY_S``) and its blocking file I/O + fsync runs in a
+        worker thread, so per-turn ``_set_state`` calls never stall the loop.
+        Outside a loop (sync callers, tests) it writes immediately.
+        """
         try:
-            state = {
-                "cycle_count": self.cycle_count,
-                "last_sleep_time": self.last_sleep_time,
-                "last_data_check_time": self.last_data_check_time,
-                "cycle_messages": self.cycle_messages,
-                "current_simulation_timestamp": self.current_simulation_timestamp,
-                "state": self.state,
-                "state_start_time": self.state_start_time,
-                "state_metadata": self.state_metadata,
-                "chat_histories": self._chat_histories,
-                "pushed_report_in_cycle": self.pushed_report_in_cycle,
-                "cumulative_tokens": self.cumulative_tokens,
-            }
-            self.state_repo.save_state(self.user_id, state)
+            asyncio.get_running_loop()
+        except RuntimeError:
+            self._write_state_now()
+            return
+        self._state_dirty = True
+        task = self._state_flush_task
+        if task is None or task.done():
+            self._state_flush_task = spawn_background(
+                self._flush_state_loop(), label="agent state flush",
+            )
+
+    def _write_state_now(self) -> None:
+        try:
+            self.state_repo.save_state_json(self.user_id, self._state_snapshot_json())
         except Exception as e:
             logger.error("Error saving state: %s", e)
+
+    async def _flush_state_loop(self) -> None:
+        """Write dirty state, at most once per debounce window."""
+        while self._state_dirty:
+            await asyncio.sleep(self._STATE_FLUSH_DELAY_S)
+            self._state_dirty = False
+            try:
+                snapshot = self._state_snapshot_json()
+                await asyncio.to_thread(self.state_repo.save_state_json, self.user_id, snapshot)
+            except Exception as e:
+                logger.error("Error saving state: %s", e)
+
+    async def flush_state(self) -> None:
+        """Write any pending state now (shutdown / tests)."""
+        self._state_dirty = False
+        snapshot = self._state_snapshot_json()
+        await asyncio.to_thread(self.state_repo.save_state_json, self.user_id, snapshot)
 
     def _restore_state(self) -> None:
         try:
@@ -272,7 +331,6 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
                     self._chat_state_start_time = self.state_start_time
                     self._chat_state_metadata = {}
                 self._chat_histories = state.get("chat_histories", {})
-                self.pushed_report_in_cycle = state.get("pushed_report_in_cycle", False)
                 logger.info(
                     "Restored agent state for %s: cycle %d, %d chat histories",
                     self.user_id, self.cycle_count, len(self._chat_histories),
@@ -314,6 +372,8 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
         the generator continuously drains _event_queue.
         """
         self.is_running = True
+        # A restarted agent must not inherit the previous run's /stop.
+        self._cancellation.reset()
 
         # Drain stale events
         while not self._event_queue.empty():
@@ -381,7 +441,20 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
                     if envelopes:
                         async def _process_chats(envs):
                             for env in envs:
-                                await self._handle_chat_message(env)
+                                # One bad envelope must not drop the rest of
+                                # the batch (they were already popped).
+                                try:
+                                    await self._handle_chat_message(env)
+                                except asyncio.CancelledError:
+                                    raise
+                                except Exception as exc:
+                                    logger.error(
+                                        "Chat message handling failed: %s", exc, exc_info=True,
+                                    )
+                                    await self._emit({
+                                        "type": "agent_error",
+                                        "error": f"chat message failed: {exc}",
+                                    })
                         active_task = asyncio.create_task(_process_chats(envelopes))
                         continue
 
@@ -413,31 +486,42 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
                     yield self._event_queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
+            try:
+                await self.flush_state()
+            except Exception as exc:
+                logger.debug("final state flush failed: %s", exc)
             yield {"type": "agent_stopped", "timestamp": ts_now()}
 
     # ==================================================================
     # Scheduled analysis — called by cron scheduler
     # ==================================================================
 
-    async def run_scheduled_analysis(self, goal: str) -> None:
+    async def run_scheduled_analysis(self, goal: str, task_id: int | str | None = None) -> None:
         """
         Queue an analysis task. Called by the cron scheduler or via chat command.
         The task will be processed in the main event loop.
+
+        ``task_id`` (the ``scheduled_tasks`` row id, when the caller knows it)
+        scopes the duplicate guard to that task. Without it the guard falls
+        back to the goal text, which also collapses two *different* tasks that
+        share the same goal.
         """
-        # Dedupe: reject the same goal if it was queued within the window.
+        # Dedupe: reject the same task (or, lacking an id, the same goal) if it
+        # was queued within the window.
+        dedupe_key = f"task:{task_id}" if task_id is not None else f"goal:{goal}"
         now_mono = time.monotonic()
         self._recent_scheduled_goals = {
             g: t for g, t in self._recent_scheduled_goals.items()
             if now_mono - t < self._scheduled_dedupe_window_s
         }
-        last_queued = self._recent_scheduled_goals.get(goal)
+        last_queued = self._recent_scheduled_goals.get(dedupe_key)
         if last_queued is not None and (now_mono - last_queued) < self._scheduled_dedupe_window_s:
             logger.warning(
                 "Dedupe: dropping scheduled goal queued %.1fs ago for %s: %s",
                 now_mono - last_queued, self.user_id, (goal or "")[:60],
             )
             return
-        self._recent_scheduled_goals[goal] = now_mono
+        self._recent_scheduled_goals[dedupe_key] = now_mono
 
         if self._analysis_queue.full():
             try:

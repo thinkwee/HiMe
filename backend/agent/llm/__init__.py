@@ -344,16 +344,50 @@ _RETRY_JITTER       = 0.25   # 25% jitter
 _MAX_CAPACITY_RETRIES = 3    # 529/overloaded before triggering fallback
 
 
-def _is_retryable(exc: Exception) -> bool:
+# Status codes are matched as whole numbers (``\b``) — a raw substring test
+# treated "requested 129529 tokens" as an HTTP 529 and sent a deterministic
+# context overflow down the capacity/fallback path.
+_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504, 529})
+_CAPACITY_STATUS = frozenset({503, 529})
+_RETRYABLE_KEYWORDS = (
+    "unavailable", "rate limit", "rate_limit", "too many requests", "quota",
+    "overloaded", "timeout", "timed out", "connection", "temporarily",
+)
+_CAPACITY_KEYWORDS = (
+    "overloaded", "capacity", "unavailable", "high demand",
+    "currently experiencing", "service_unavailable",
+)
+# Out of credit / hard quota: retrying cannot help, hand over to the fallback.
+_OUT_OF_CREDIT_KEYWORDS = (
+    "insufficient_quota", "credit balance is too low", "exceeded your current quota",
+)
+
+
+def _status_of(exc: Exception) -> int | None:
+    from ..errors import _extract_status_code
+
+    return _extract_status_code(exc)
+
+
+def _is_out_of_credit(exc: Exception) -> bool:
+    """402 Payment Required, OpenAI ``insufficient_quota`` (a 429 body that
+    retries can never cure) and Anthropic's low-credit 400."""
+    if _status_of(exc) == 402:
+        return True
     msg = str(exc).lower()
-    return any(
-        kw in msg
-        for kw in (
-            "503", "unavailable", "429", "rate", "quota", "overloaded",
-            "500", "502", "504", "timeout", "connection", "temporarily",
-            "529",
-        )
-    )
+    return any(kw in msg for kw in _OUT_OF_CREDIT_KEYWORDS)
+
+
+def _is_retryable(exc: Exception) -> bool:
+    from ..errors import is_context_overflow_message
+
+    msg = str(exc).lower()
+    status = _status_of(exc)
+    if status in _RETRYABLE_STATUS:
+        return True
+    if is_context_overflow_message(msg):
+        return False
+    return any(kw in msg for kw in _RETRYABLE_KEYWORDS)
 
 
 def _is_capacity_error(exc: Exception) -> bool:
@@ -365,32 +399,18 @@ def _is_capacity_error(exc: Exception) -> bool:
         ``503 UNAVAILABLE. {... "high demand" ...}`` with no status attr
       - Anthropic 529 ("Overloaded")
     """
-    msg = str(exc).lower()
-    status = getattr(exc, "status_code", None) or getattr(exc, "status", None)
-    if status in (529, 503):
+    if _status_of(exc) in _CAPACITY_STATUS:
         return True
-    return any(
-        kw in msg
-        for kw in (
-            "529",
-            "503",
-            "overloaded",
-            "capacity",
-            "unavailable",
-            "high demand",
-            "currently experiencing",
-            "service_unavailable",
-        )
-    )
+    msg = str(exc).lower()
+    return any(kw in msg for kw in _CAPACITY_KEYWORDS)
 
 
 def _is_rate_limit_error(exc: Exception) -> bool:
     """Check if the error is a rate limit (429)."""
-    msg = str(exc).lower()
-    status = getattr(exc, "status_code", None) or getattr(exc, "status", None)
-    if status == 429:
+    if _status_of(exc) == 429:
         return True
-    return any(kw in msg for kw in ("429", "rate limit", "rate_limit"))
+    msg = str(exc).lower()
+    return any(kw in msg for kw in ("rate limit", "rate_limit"))
 
 
 async def retry_async(
@@ -408,7 +428,7 @@ async def retry_async(
       - Rate-limit (429) vs capacity (529) distinction
       - Optional on_retry callback for logging/notification
     """
-    from ..errors import FallbackTriggered, _extract_retry_after, _extract_status_code
+    from ..errors import FallbackTriggered, _extract_retry_after
 
     last_exc: Exception | None = None
     capacity_retries = 0
@@ -418,11 +438,13 @@ async def retry_async(
             return await coro()
         except Exception as exc:
             last_exc = exc
-            # 402 Payment Required = out of credit; retrying cannot help, so
-            # hand the call to FALLBACK_LLM_PROVIDER straight away.
-            if _extract_status_code(exc) == 402:
-                logger.warning("LLM returned 402 (%s) — switching to fallback provider", exc)
-                raise FallbackTriggered("", "") from exc
+            # Out of credit (402 / insufficient_quota / "credit balance is too
+            # low"): retrying cannot help, so hand the call to
+            # FALLBACK_LLM_PROVIDER straight away.  The original error text is
+            # carried so it can be surfaced when no fallback is configured.
+            if _is_out_of_credit(exc):
+                logger.warning("LLM out of credit (%s) — switching to fallback provider", exc)
+                raise FallbackTriggered("", "", reason=str(exc)) from exc
             if not _is_retryable(exc) or attempt == max_retries - 1:
                 raise
 
@@ -430,7 +452,7 @@ async def retry_async(
             if _is_capacity_error(exc):
                 capacity_retries += 1
                 if capacity_retries >= _MAX_CAPACITY_RETRIES:
-                    raise FallbackTriggered("", "")
+                    raise FallbackTriggered("", "", reason=str(exc)) from exc
 
             # Exponential backoff with jitter
             base = _RETRY_BASE_DELAY * (2 ** attempt)

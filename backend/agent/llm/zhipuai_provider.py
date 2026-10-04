@@ -10,6 +10,7 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
+from ..errors import FallbackTriggered  # noqa: E402
 from . import (
     BaseLLMProvider,
     provider_write_log,
@@ -239,6 +240,22 @@ class ZhipuAIProvider(BaseLLMProvider):
                 response_texts=full_response_parts,
             )
 
+        except FallbackTriggered as exc:
+            # Capacity / out-of-credit exhaustion: let the agent loop switch to
+            # the fallback provider instead of turning it into an error chunk.
+            logger.warning("ZhipuAI fallback triggered: %s", exc)
+            provider_write_log(
+                provider="zhipuai",
+                model=self.model,
+                prompt_tokens=None,
+                completion_tokens=None,
+                duration_ms=int((time.perf_counter() - _t0) * 1000),
+                tools=tools,
+                messages=messages,
+                tool_calls_list=[],
+                response_texts=[f"ERROR: fallback — {exc}"],
+            )
+            raise
         except Exception as exc:
             logger.error("ZhipuAI API error: %s", exc, exc_info=True)
             provider_write_log(

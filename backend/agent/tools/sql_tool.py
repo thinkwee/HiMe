@@ -5,7 +5,9 @@ Database dispatch
 -----------------
 The ``database`` parameter selects the target:
 - ``health_data`` → read-only query against the streaming health SQLite DB.
-- ``memory``      → read-write query against the agent's memory SQLite DB.
+- ``memory``      → the agent's memory SQLite DB.  Read-write for the write
+  roles (sub_manage, plan designer), read-only for sub_analysis -- see
+  ``tools.base.tool_role``.
 
 Backward compatibility: the legacy ``prefix:SQL`` format (e.g.
 ``health_data:SELECT …``) and auto-detection from table names are both
@@ -27,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -34,12 +37,72 @@ from pathlib import Path
 import pandas as pd
 
 from ...agent.memory_manager import _ensure_schema
-from .base import BaseTool
+from .base import BaseTool, current_tool_role
 
 logger = logging.getLogger(__name__)
 
 # Maximum rows the agent can receive in a single query
 _MAX_ROWS = 50
+
+# SQLite authorizer action codes (https://sqlite.org/c3ref/c_alter_table.html).
+# Spelled out numerically instead of via ``sqlite3.SQLITE_*``: those module
+# constants only exist on Python >= 3.11, and CI also runs 3.10.  Code 33 is
+# SQLITE_RECURSIVE (WITH RECURSIVE), *not* VACUUM -- the previous deny-list
+# blocked recursive CTEs with a misleading "security violation".
+_A_CREATE_INDEX = 1
+_A_CREATE_TABLE = 2
+_A_DELETE = 9
+_A_DROP_TABLE = 11
+_A_INSERT = 18
+_A_PRAGMA = 19
+_A_READ = 20
+_A_SELECT = 21
+_A_TRANSACTION = 22
+_A_UPDATE = 23
+_A_ATTACH = 24
+_A_DETACH = 25
+_A_ALTER_TABLE = 26
+_A_FUNCTION = 31
+_A_SAVEPOINT = 32
+_A_RECURSIVE = 33
+
+# Actions a pure reader may perform. Everything else (writes, DDL, ATTACH,
+# DETACH, PRAGMA ...) is denied -- an allow-list can't miss a newly added code.
+_READ_ACTIONS = frozenset({
+    _A_READ, _A_SELECT, _A_FUNCTION, _A_RECURSIVE, _A_TRANSACTION, _A_SAVEPOINT,
+})
+
+# PRAGMAs that only report schema information; safe for every role.
+_SAFE_READ_PRAGMAS = frozenset({
+    "table_info", "table_xinfo", "table_list", "index_list", "index_info",
+    "index_xinfo", "foreign_key_list",
+})
+
+# Tables the framework itself depends on -- never droppable / alterable by the
+# agent even in a write role.
+_CORE_TABLES = frozenset({
+    "reports", "activity_log", "scheduled_tasks", "personalised_pages",
+    "trigger_rules", "message_evidence", "chat_history", "onboarding_survey",
+})
+
+# Other DDL actions (CREATE/DROP of TEMP objects, triggers, views, vtables):
+# they also precede the sqlite_master update that belongs to their statement.
+_OTHER_DDL_ACTIONS = frozenset({3, 4, 5, 6, 7, 8, 10, 12, 13, 14, 15, 16, 17, 29, 30})
+
+# Roles that may write to the memory DB (see ``tools.base.tool_role``).
+# ``None`` = no role set (direct programmatic use); every agent loop sets one.
+_MEMORY_WRITE_ROLES = frozenset({None, "plan", "manage"})
+
+_DDL_KEYWORDS = frozenset({"CREATE", "DROP", "ALTER"})
+
+_LEADING_NOISE_RE = re.compile(r"^(?:\s+|--[^\n]*(?:\n|$)|/\*.*?\*/)*", re.DOTALL)
+
+
+def _first_keyword(sql: str) -> str:
+    """First SQL keyword of *sql*, upper-cased, skipping comments/whitespace."""
+    rest = sql[_LEADING_NOISE_RE.match(sql).end():]
+    m = re.match(r"[A-Za-z]+", rest)
+    return m.group(0).upper() if m else ""
 
 
 def _df_to_compact(df: pd.DataFrame, limit: int) -> dict:
@@ -125,7 +188,10 @@ class SQLTool(BaseTool):
     # ------------------------------------------------------------------
 
     # Known memory-only tables for auto-detection fallback
-    _MEMORY_TABLES = {"reports", "activity_log", "scheduled_tasks", "personalised_pages"}
+    _MEMORY_TABLES = {
+        "reports", "activity_log", "scheduled_tasks", "personalised_pages",
+        "trigger_rules", "chat_history", "message_evidence", "onboarding_survey",
+    }
 
     async def execute(
         self,
@@ -172,7 +238,8 @@ class SQLTool(BaseTool):
         if db_name == "health_data":
             coro = asyncio.to_thread(self._query_health_data, sql, actual_limit)
         elif db_name == "memory":
-            coro = asyncio.to_thread(self._query_memory, sql, actual_limit)
+            writable = current_tool_role() in _MEMORY_WRITE_ROLES
+            coro = asyncio.to_thread(self._query_memory, sql, actual_limit, writable)
         else:
             return {
                 "success": False,
@@ -214,25 +281,56 @@ class SQLTool(BaseTool):
 
     @staticmethod
     def _readonly_authorizer(action: int, arg1, arg2, db_name, trigger_name) -> int:
-        """
-        SQLite3 authorizer that denies any mutation operation.
+        """SQLite3 authorizer that only lets pure reads through.
 
-        This runs at the driver level — before query parsing — so it cannot
-        be circumvented by SQL injection or multi-statement tricks.
+        Runs at the driver level -- before query parsing -- so it cannot be
+        circumvented by SQL injection or multi-statement tricks.
         """
-        # Action codes that mutate state
-        _DENIED = {
-            1, 2, 3, 4,        # CREATE TABLE/INDEX/VIEW/TRIGGER
-            9,                 # DELETE
-            11, 12, 13, 14,    # DROP TABLE/INDEX/VIEW/TRIGGER
-            18,                # INSERT
-            23,                # UPDATE
-            24, 25,            # ATTACH / DETACH
-            26,                # ALTER TABLE
-            27,                # REINDEX
-            33,                # VACUUM
-        }
-        return sqlite3.SQLITE_DENY if action in _DENIED else sqlite3.SQLITE_OK
+        if action in _READ_ACTIONS:
+            return sqlite3.SQLITE_OK
+        if action == _A_PRAGMA and str(arg1 or "").lower() in _SAFE_READ_PRAGMAS:
+            return sqlite3.SQLITE_OK
+        return sqlite3.SQLITE_DENY
+
+    @staticmethod
+    def _memory_writer_authorizer_factory(ddl_statement: bool = False):
+        """Build an authorizer for write roles on the memory DB.
+
+        Ordinary reads/DML/DDL are fine, but even a writer may never attach
+        another database file, change PRAGMAs, load extensions, touch SQLite's
+        own catalogue (``sqlite_master`` ...) or drop/alter a framework table.
+
+        SQLite reports the *internal* catalogue update of a ``CREATE TABLE`` as
+        an INSERT on ``sqlite_master`` (before the CREATE action itself), so
+        catalogue writes are only tolerated when the statement is DDL
+        (``ddl_statement``); a bare ``INSERT INTO sqlite_master`` is denied.
+        """
+        ddl_actions = {_A_CREATE_TABLE, _A_CREATE_INDEX, _A_DROP_TABLE, _A_ALTER_TABLE}
+
+        def _authorize(action: int, arg1, arg2, db_name, trigger_name) -> int:
+            if action in (_A_ATTACH, _A_DETACH):
+                return sqlite3.SQLITE_DENY
+            if action == _A_PRAGMA:
+                ok = str(arg1 or "").lower() in _SAFE_READ_PRAGMAS
+                return sqlite3.SQLITE_OK if ok else sqlite3.SQLITE_DENY
+            if action == _A_FUNCTION and str(arg2 or "").lower() == "load_extension":
+                return sqlite3.SQLITE_DENY
+            if action in ddl_actions or action in _OTHER_DDL_ACTIONS:
+                table = str((arg2 if action == _A_CREATE_INDEX else arg1) or "").lower()
+                if table.startswith("sqlite_"):
+                    return sqlite3.SQLITE_DENY
+                if action in (_A_DROP_TABLE, _A_ALTER_TABLE) and table in _CORE_TABLES:
+                    return sqlite3.SQLITE_DENY
+                return sqlite3.SQLITE_OK
+            if action in (_A_INSERT, _A_UPDATE, _A_DELETE):
+                table = str(arg1 or "").lower()
+                if table.startswith("sqlite_") and not (
+                    ddl_statement and not trigger_name and "master" in table
+                ):
+                    return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+
+        return _authorize
 
     def _query_health_data(self, sql: str, limit: int) -> dict:
         """Synchronous read-only query against the health data SQLite DB."""
@@ -263,25 +361,61 @@ class SQLTool(BaseTool):
                 conn.close()
 
     # ------------------------------------------------------------------
-    # Memory (read-write)
+    # Memory (read-only for analysis roles, read-write for write roles)
     # ------------------------------------------------------------------
 
-    def _query_memory(self, sql: str, limit: int) -> dict:
-        """Synchronous read-write query against the agent memory SQLite DB."""
+    def _query_memory(self, sql: str, limit: int, writable: bool = True) -> dict:
+        """Synchronous query against the agent memory SQLite DB.
+
+        ``writable=False`` (sub_analysis: cron / trigger / quick / chat
+        analyze) opens the file in SQLite read-only URI mode *and* installs
+        the read-only authorizer, so a read-only role cannot mutate memory no
+        matter how the statement is phrased.
+        """
+        keyword = _first_keyword(sql)
+        is_read = keyword in ("SELECT", "WITH", "PRAGMA")
+        if not writable and not is_read:
+            return {
+                "success": False,
+                "error": (
+                    "The memory database is READ-ONLY in this role. Only SELECT "
+                    "(or WITH) queries are allowed; persistent changes go through "
+                    "the chat manage() path."
+                ),
+            }
+        if keyword in ("VACUUM", "ATTACH", "DETACH"):
+            # VACUUM [INTO] never reaches the authorizer, so gate it here.
+            return {"success": False, "error": f"{keyword} is not allowed on the memory database."}
+        conn = None
         try:
-            with sqlite3.connect(self.memory_db_file, timeout=30) as conn:
+            if writable:
+                conn = sqlite3.connect(self.memory_db_file, timeout=30)
                 _ensure_schema(conn)
-                sql_upper = sql.upper().strip()
-                if sql_upper.startswith("SELECT") or sql_upper.startswith("WITH"):
-                    df = pd.read_sql(sql, conn)
-                    return {"success": True, **_df_to_compact(df, limit)}
-                else:
-                    cur = conn.execute(sql)
-                    conn.commit()
-                    return {
-                        "success":       True,
-                        "rows_affected": cur.rowcount,
-                        "message":       "Query executed successfully.",
-                    }
+                conn.set_authorizer(self._memory_writer_authorizer_factory(keyword in _DDL_KEYWORDS))
+            else:
+                uri = f"file:{self.memory_db_file}?mode=ro"
+                conn = sqlite3.connect(uri, uri=True, timeout=30)
+                conn.set_authorizer(self._readonly_authorizer)
+            if is_read:
+                df = pd.read_sql(sql, conn)
+                return {"success": True, **_df_to_compact(df, limit)}
+            with conn:
+                cur = conn.execute(sql)
+            return {
+                "success":       True,
+                "rows_affected": cur.rowcount,
+                "message":       "Query executed successfully.",
+            }
         except Exception as exc:
-            return {"success": False, "error": str(exc)}
+            err = str(exc)
+            if "not authorized" in err.lower():
+                err = (
+                    "Not allowed on the memory database (ATTACH / DETACH / PRAGMA "
+                    "writes / SQLite internals / dropping framework tables are blocked)."
+                    if writable else
+                    "The memory database is READ-ONLY in this role."
+                )
+            return {"success": False, "error": err}
+        finally:
+            if conn is not None:
+                conn.close()

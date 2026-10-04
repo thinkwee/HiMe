@@ -34,6 +34,7 @@ from ...config import settings
 from ...messaging.registry import GatewayRegistry
 from ...utils import ts_now
 from .base import BaseTool
+from .paths import IMAGE_EXTS, ChartPathError, resolve_chart_path
 
 try:
     import sqlite3
@@ -50,22 +51,23 @@ logger = logging.getLogger(__name__)
 # stored at rest with the rest of the report. Remote (http) and already-inline
 # (data:) srcs are left untouched.
 _IMG_RE = re.compile(r"!\[([^\]]*)\]\(\s*([^)\s]+)\s*\)")
-_IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+_IMG_EXTS = IMAGE_EXTS
 _MAX_IMG_BYTES = 2_000_000      # per chart
 _MAX_EMBEDDED = 8               # charts per report
 
 
 def _file_to_data_uri(src: str) -> str | None:
     """Return a ``data:`` URI for a local image file, or None if it's not a
-    safe, in-bounds image. Guards on extension + size so a stray non-image path
-    can never be slurped into a report."""
+    safe, in-bounds image. ``resolve_chart_path`` guards on symlink-resolved
+    location (temp dir only), extension, magic bytes and size, so a stray
+    non-image path -- or ``/etc/passwd`` -- can never be slurped into a report.
+    """
     try:
-        path = Path(src).expanduser()
-        if path.suffix.lower() not in _IMG_EXTS or not path.is_file():
-            return None
-        if path.stat().st_size > _MAX_IMG_BYTES:
-            logger.warning("push_report: chart %s exceeds %d bytes — skipping", src, _MAX_IMG_BYTES)
-            return None
+        path = resolve_chart_path(src, max_bytes=_MAX_IMG_BYTES)
+    except ChartPathError as exc:
+        logger.warning("push_report: skipping chart %s: %s", src, exc)
+        return None
+    try:
         mime = mimetypes.guess_type(str(path))[0] or "image/png"
         b64 = base64.b64encode(path.read_bytes()).decode("ascii")
         return f"data:{mime};base64,{b64}"
@@ -132,6 +134,7 @@ class PushReportTool(BaseTool):
         self._gateway_registry = gateway_registry
         self._fact_verifier = fact_verifier       # FactVerifier for evidence tracking
         self._llm_provider = None                 # Set by agent for LLM semantic verification
+        self._memory = None                       # lazily-built MemoryManager (chat-history persist)
         # Accumulates tool results from the current analysis loop
         self._current_tool_results: list[dict[str, Any]] = []
 
@@ -182,7 +185,8 @@ class PushReportTool(BaseTool):
         # Inline chart files as self-contained data URIs so the report renders
         # 图文并茂 in the dashboard / iOS app. Only touches ``content`` — the
         # short ``im_digest`` sent to IM channels stays text-only.
-        content = _embed_local_charts(content, image_paths)
+        # File reads + base64 happen in a worker thread, off the event loop.
+        content = await asyncio.to_thread(_embed_local_charts, content, image_paths)
         # Default missing time range to now
         if not time_range_start:
             time_range_start = ts_now()
@@ -355,7 +359,14 @@ class PushReportTool(BaseTool):
             from ...ios_gateway.gateway import extract_message_hash
             from ..memory_manager import MemoryManager
             msg_hash = extract_message_hash(reply_markup)
-            mem = MemoryManager(self.memory_db_file.parent, self.user_id)
+            mem = self._memory
+            if mem is None:
+                # Construction runs DDL / migrations -- keep it off the loop,
+                # and build it once.
+                mem = await asyncio.to_thread(
+                    MemoryManager, self.memory_db_file.parent, self.user_id,
+                )
+                self._memory = mem
             await mem.persist_chat_turn(
                 f"ios:{self.user_id}", "assistant", message,
                 message_hash=msg_hash, report_id=report_id,
