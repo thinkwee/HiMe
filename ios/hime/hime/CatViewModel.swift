@@ -9,7 +9,7 @@ import WidgetKit
 // HimeWidgets target. They're separate compile units; only the wire
 // format must match.
 
-struct HimeWidgetSnapshot: Codable {
+struct HimeWidgetSnapshot: Codable, Equatable {
     var catStateRaw: String
     var catMessage: String
     var agentRunning: Bool
@@ -19,7 +19,7 @@ struct HimeWidgetSnapshot: Codable {
     var latestReportLevel: String?
 }
 
-struct HimeWidgetMetric: Codable {
+struct HimeWidgetMetric: Codable, Equatable {
     let name: String
     let value: String
     let unit: String
@@ -53,17 +53,38 @@ enum HimeWidgetStore {
         return snap
     }
 
-    static func write(_ snap: HimeWidgetSnapshot) {
+    /// Minimum spacing between budget-spending timeline reloads for changes
+    /// that only touch the numeric metrics (they drift on every 30 s poll).
+    private static let minReloadInterval: TimeInterval = 15 * 60
+    private static var lastReload: Date = .distantPast
+
+    static func write(_ snap: HimeWidgetSnapshot, reload: Bool = true) {
         guard let url = fileURL else { return }
         guard let data = try? JSONEncoder().encode(snap) else { return }
         try? data.write(to: url, options: .atomic)
+        guard reload else { return }
+        lastReload = Date()
         WidgetCenter.shared.reloadAllTimelines()
     }
 
     static func update(_ mutate: (inout HimeWidgetSnapshot) -> Void) {
         var s = read()
+        let before = s
         mutate(&s)
-        write(s)
+        // Callers publish on every poll / animation tick even when nothing
+        // changed; WidgetKit caps how often timelines may reload, and burning
+        // the budget on no-ops makes the widgets stop updating entirely.
+        guard s != before else { return }
+
+        // The file is always written, so whenever the widget does refresh it
+        // reads fresh values. Reload immediately only for what a user would
+        // notice (cat state/message, agent status, latest report); pure
+        // metric drift waits for the throttle window.
+        var visibleChange = s
+        visibleChange.metrics = before.metrics
+        let primaryChanged = visibleChange != before
+        let staleEnough = Date().timeIntervalSince(lastReload) >= minReloadInterval
+        write(s, reload: primaryChanged || staleEnough)
     }
 }
 
@@ -169,9 +190,6 @@ class CatViewModel: ObservableObject {
     @Published var showPurrBubble: Bool = false
     @Published var syncGlow: CGFloat = 0
     @Published var breathingScale: CGFloat = 1.0
-    @Published var chatLabel: String = UserDefaults.standard.string(forKey: "chatLabel") ?? "Chat"
-    @Published var chatPlatform: String = UserDefaults.standard.string(forKey: "chatPlatform") ?? "none"
-    @Published var showNoChatAlert: Bool = false
     @Published var glowPhase: CGFloat = 0.95
 
     /// Incremented each tick to trigger view re-render
@@ -291,6 +309,18 @@ class CatViewModel: ObservableObject {
     // ══════════════════════════════════════
     // ── ANIMATION TICK (30fps) ──
     // ══════════════════════════════════════
+
+    /// Run the 60 Hz animation timer only while the cat screen is visible and
+    /// the app is active — it used to tick forever, even from other tabs and
+    /// while backgrounded, burning CPU and battery on an invisible canvas.
+    func setAnimationActive(_ active: Bool) {
+        if active {
+            if animTimer == nil { startAnimTimer() }
+        } else {
+            animTimer?.invalidate()
+            animTimer = nil
+        }
+    }
 
     private func startAnimTimer() {
         animTimer?.invalidate()
@@ -2262,85 +2292,6 @@ class CatViewModel: ObservableObject {
                 guard let self else { return }
                 await self.checkAgentStatus()
             }
-        }
-    }
-
-    /// Open the configured chat platform. Intentionally does NOT try to
-    /// deep-link into a specific chat: `lark://im/chat?chatId=…` isn't a
-    /// real Feishu deep link, and `tg://openmessage?chat_id=…` silently
-    /// fails for group chats. Both used to leave the user staring at an
-    /// unresponsive button. Now we just open the app (or its web landing
-    /// page if the app isn't installed) and let the user pick the chat.
-    func openChat() {
-        Task {
-            let base = ServerConfig.load().apiBaseURL
-            guard let infoURL = URL(string: "\(base)/api/agent/chat-info") else { return }
-
-            var platform = self.chatPlatform
-            var label = self.chatLabel
-            var primaryURL = ""
-            if let (data, _) = try? await URLSession.shared.data(for: APIClient.request(infoURL)),
-               let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                platform = j["platform"] as? String ?? platform
-                label = j["label"] as? String ?? label
-                primaryURL = j["url"] as? String ?? ""
-                UserDefaults.standard.set(label, forKey: "chatLabel")
-                UserDefaults.standard.set(platform, forKey: "chatPlatform")
-            }
-
-            await MainActor.run {
-                self.chatLabel = label
-                self.chatPlatform = platform
-
-                guard platform != "none" else {
-                    self.showNoChatAlert = true
-                    return
-                }
-
-                guard let target = URL(string: primaryURL) else {
-                    self.showNoChatAlert = true
-                    return
-                }
-
-                UIApplication.shared.open(target, options: [:]) { opened in
-                    guard !opened else { return }
-                    // Scheme URL (e.g. `lark://`) only fails when the app
-                    // isn't installed. Fall back to the public web landing
-                    // page so the tap still goes somewhere useful.
-                    let fallback: URL? = {
-                        switch platform {
-                        case "feishu":   return URL(string: "https://www.feishu.cn/")
-                        case "telegram": return URL(string: "https://telegram.org/")
-                        default:         return nil
-                        }
-                    }()
-                    if let f = fallback {
-                        UIApplication.shared.open(f)
-                    }
-                }
-            }
-        }
-    }
-
-    /// Refresh the chat label/platform from the backend without opening
-    /// anything.  Called on view appear so the button reflects the active
-    /// gateway before the user taps it.
-    func refreshChatInfo() {
-        Task {
-            let base = ServerConfig.load().apiBaseURL
-            guard let url = URL(string: "\(base)/api/agent/chat-info") else { return }
-            do {
-                let (data, _) = try await URLSession.shared.data(for: APIClient.request(url))
-                guard let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-                let label = j["label"] as? String ?? "Chat"
-                let platform = j["platform"] as? String ?? "none"
-                UserDefaults.standard.set(label, forKey: "chatLabel")
-                UserDefaults.standard.set(platform, forKey: "chatPlatform")
-                await MainActor.run {
-                    self.chatLabel = label
-                    self.chatPlatform = platform
-                }
-            } catch {}
         }
     }
 

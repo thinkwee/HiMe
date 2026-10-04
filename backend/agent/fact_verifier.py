@@ -329,7 +329,9 @@ class FactVerifier:
                     verification_status = "no_evidence_needed"
                     verification_detail = "Fabrication check skipped, defaulting to allow."
 
-            msg_hash = self.store_evidence(
+            # Blocking SQLite write -- keep it off the event loop.
+            msg_hash = await asyncio.to_thread(
+                self.store_evidence,
                 message_text, tool_results,
                 verification_status=verification_status,
                 verification_detail=verification_detail,
@@ -375,7 +377,8 @@ class FactVerifier:
                 logger.debug("LLM verification skipped: %s", exc)
                 verification_detail += " (LLM verification skipped)"
 
-        msg_hash = self.store_evidence(
+        msg_hash = await asyncio.to_thread(
+            self.store_evidence,
             message_text, selected_evidence,
             verification_status=verification_status,
             verification_detail=verification_detail,

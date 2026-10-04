@@ -1,13 +1,90 @@
+import contextvars
+import copy
 import json
 import logging
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Per-flow tool state
+# ---------------------------------------------------------------------------
+# Tools are singletons shared by every flow the agent runs (chat, cron, quick
+# analysis, plan designer ...), and those flows can overlap at await points.
+# State that belongs to *one* flow (evidence trail, envelope, emitter ...) is
+# therefore stored in ContextVars: each asyncio Task sees its own value, and
+# child tasks (``asyncio.wait_for`` wrappers) inherit a copy.
+
+class _FlowVar:
+    """Descriptor storing an attribute in a per-instance ``ContextVar``."""
+
+    def __init__(self, default: Any = None) -> None:
+        self._default = default
+        self._name = ""
+
+    def __set_name__(self, owner: type, name: str) -> None:
+        self._name = name
+
+    def _var(self, obj: Any) -> contextvars.ContextVar:
+        key = f"_cv_{self._name}"
+        var = obj.__dict__.get(key)
+        if var is None:
+            var = contextvars.ContextVar(f"{type(obj).__name__}.{self._name}", default=self._default)
+            obj.__dict__[key] = var
+        return var
+
+    def __get__(self, obj: Any, owner: type | None = None) -> Any:
+        if obj is None:
+            return self._default
+        return self._var(obj).get()
+
+    def __set__(self, obj: Any, value: Any) -> None:
+        self._var(obj).set(value)
+
+
+# Role of the LLM sub-agent currently executing tools ("analysis", "plan",
+# "manage", "chat"); ``None`` outside any agent loop.  Role-aware tools (sql)
+# use it to decide what they may do -- e.g. sub_analysis can only *read* memory.
+_tool_role: contextvars.ContextVar[str | None] = contextvars.ContextVar("tool_role", default=None)
+
+
+def current_tool_role() -> str | None:
+    """Role of the flow executing the current tool call (None = unrestricted)."""
+    return _tool_role.get()
+
+
+@contextmanager
+def tool_role(role: str | None) -> Iterator[None]:
+    """Run a block with *role* as the current tool role (restored on exit)."""
+    token = _tool_role.set(role)
+    try:
+        yield
+    finally:
+        _tool_role.reset(token)
+
+
+# tools.json is static; parse it once instead of once per get_definition().
+_TOOL_DEFS_PATH = Path(__file__).parent / "tools.json"
+_tool_defs_cache: dict[str, Any] | None = None
+
+
+def load_tool_definitions() -> dict[str, Any]:
+    """All tool definitions from ``tools.json`` (parsed once, then cached)."""
+    global _tool_defs_cache
+    if _tool_defs_cache is None:
+        try:
+            with open(_TOOL_DEFS_PATH, encoding="utf-8") as f:
+                _tool_defs_cache = json.load(f)
+        except Exception:
+            return {}
+    return _tool_defs_cache
 
 
 class BaseTool(ABC):
@@ -22,9 +99,11 @@ class BaseTool(ABC):
     # Subclasses that support evidence should set these attributes
     _fact_verifier: Any = None
     _llm_provider: Any = None
-    _current_tool_results: list[dict[str, Any]] = []
-    _current_user_message: str = ""  # user's original message for fabrication context
-    _event_emitter: Any = None  # async callable: agent's _emit, injected per call
+    # Per-flow (ContextVar-backed) -- see _FlowVar.
+    _current_tool_results: list[dict[str, Any]] = _FlowVar([])
+    _current_user_message: str = _FlowVar("")  # user's original message for fabrication context
+    _current_chat_history: list = _FlowVar([])
+    _event_emitter: Any = _FlowVar(None)  # async callable: agent's _emit, injected per call
 
     # --- Input validation (optional, subclass sets this) ---
     input_schema: type[BaseModel] | None = None
@@ -102,16 +181,8 @@ class BaseTool(ABC):
         return "\n".join(errors)
 
     def _get_definition_from_json(self, tool_name: str) -> dict[str, Any]:
-        """Load tool definition from the centralized JSON file."""
-        json_path = Path(__file__).parent / "tools.json"
-        if not json_path.exists():
-            return {}
-        try:
-            with open(json_path, encoding="utf-8") as f:
-                data = json.load(f)
-            return data.get(tool_name, {})
-        except Exception:
-            return {}
+        """Load tool definition from the centralized (cached) JSON file."""
+        return copy.deepcopy(load_tool_definitions().get(tool_name, {}))
 
     async def _verify_and_build_markup(self, message_text: str) -> dict:
         """Verify message and build the "Show Evidence" reply markup.

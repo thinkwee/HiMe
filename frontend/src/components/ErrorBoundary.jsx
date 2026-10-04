@@ -14,6 +14,8 @@ export default class ErrorBoundary extends Component {
 
   render() {
     if (this.state.hasError) {
+      // Optional local fallback (e.g. a single chart card) instead of the full-screen error.
+      if (this.props.fallback !== undefined) return this.props.fallback
       const t = i18n.t.bind(i18n)
       return (
         <div className="flex items-center justify-center h-screen bg-gray-50">

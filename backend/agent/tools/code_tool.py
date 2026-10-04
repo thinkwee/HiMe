@@ -9,7 +9,9 @@ re-importing or re-querying.
 On first use the shell is bootstrapped with:
   pd, np, datetime, timedelta, timezone, sqlite3, scipy, statsmodels, sklearn
   health_db   — SQLite connection to health data (read-only)
-  memory_db   — SQLite connection to agent memory (read-write)
+  memory_db   — SQLite connection to agent memory (READ-ONLY: the code tool
+                is a sub_analysis tool, and memory writes go through the
+                manage -> sub_manage path)
   df          — empty DataFrame placeholder
 
 Last-expression display is enabled: if the last line of a cell is an
@@ -30,6 +32,12 @@ from typing import Any
 from .base import BaseTool
 
 logger = logging.getLogger(__name__)
+
+# ``sys.stdout`` / ``sys.stderr`` are process-wide, so capturing a cell's output
+# means swapping them for the duration of the run.  This lock keeps two code
+# cells (e.g. a timed-out one still finishing in its worker thread and the
+# next) from interleaving swaps, and the swap is always undone in ``finally``.
+_STDIO_LOCK = threading.Lock()
 
 
 class CodeTool(BaseTool):
@@ -158,10 +166,13 @@ class CodeTool(BaseTool):
                 shell.user_ns["health_db"] = _sq.connect(
                     f"file:{health_db_path}?mode=ro", uri=True, check_same_thread=False
                 )
+                # The code tool only exists in read-only roles (sub_analysis), so
+                # memory is opened read-only as well: writes (DROP, UPDATE,
+                # ATTACH ...) must flow through manage -> sub_manage.
                 shell.user_ns["memory_db"] = _sq.connect(
-                    str(self.memory_db_file), check_same_thread=False
+                    f"file:{self.memory_db_file}?mode=ro", uri=True, check_same_thread=False
                 )
-                logger.info("Code tool: health_db (read-only) and memory_db injected")
+                logger.info("Code tool: health_db and memory_db injected (both read-only)")
             except Exception as exc:
                 logger.warning("Code tool: failed to inject DB connections: %s", exc)
 
@@ -403,15 +414,16 @@ class CodeTool(BaseTool):
             # Capture both stdout and stderr
             stdout_buf = io.StringIO()
             stderr_buf = io.StringIO()
-            old_stdout = sys.stdout
-            old_stderr = sys.stderr
-            sys.stdout = stdout_buf
-            sys.stderr = stderr_buf
-            try:
-                result = self._shell.run_cell(code, store_history=True)
-            finally:
-                sys.stdout = old_stdout
-                sys.stderr = old_stderr
+            with _STDIO_LOCK:
+                old_stdout = sys.stdout
+                old_stderr = sys.stderr
+                sys.stdout = stdout_buf
+                sys.stderr = stderr_buf
+                try:
+                    result = self._shell.run_cell(code, store_history=True)
+                finally:
+                    sys.stdout = old_stdout
+                    sys.stderr = old_stderr
 
             output = stdout_buf.getvalue().rstrip()
             errors = stderr_buf.getvalue().rstrip()

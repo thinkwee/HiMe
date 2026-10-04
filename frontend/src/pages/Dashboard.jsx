@@ -1,22 +1,30 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import StatisticsPanel from '../components/StatisticsPanel'
 import { api } from '../lib/api'
 import { useApp } from '../context/AppContext'
 
-export default function Dashboard() {
+export default function Dashboard({ active = true }) {
   const { t } = useTranslation()
   const {
     streaming,
     reconnectStream,
   } = useApp()
 
-  const {
-    isStreaming,
-    streamData,
-    historicalData,
+  const { isStreaming, liveHistoryWindow } = streaming
+
+  // While the dashboard is hidden (another route is active) keep showing the
+  // last visible snapshot: StatisticsPanel is memoised on its props, so live
+  // batches don't trigger chart re-renders nobody can see. On return the
+  // snapshot catches up in one step.
+  const live = {
+    streamData: streaming.streamData,
+    historicalData: streaming.historicalData,
     liveHistoryWindow,
-  } = streaming
+  }
+  const [snapshot, setSnapshot] = useState(live)
+  if (active && Object.keys(live).some((k) => snapshot[k] !== live[k])) setSnapshot(live)
+  const view = active ? live : snapshot
 
   const [featureMetadata, setFeatureMetadata] = useState({})
 
@@ -28,12 +36,12 @@ export default function Dashboard() {
   }, [])
 
   /** Switch time window: reconnects the stream with the new window. */
-  const setLiveHistoryWindow = (v) => {
+  const setLiveHistoryWindow = useCallback((v) => {
     const newWindow = typeof v === 'function' ? v(liveHistoryWindow) : v
     if (newWindow !== liveHistoryWindow) {
       reconnectStream(newWindow)
     }
-  }
+  }, [liveHistoryWindow, reconnectStream])
 
   return (
     <div className="space-y-6">
@@ -58,12 +66,11 @@ export default function Dashboard() {
       {/* Data Overview - unified 4-card row with time window + stats */}
       <div className="w-full">
         <StatisticsPanel
-          data={streamData}
-          historicalData={historicalData}
+          data={view.streamData}
+          historicalData={view.historicalData}
           featureMetadata={featureMetadata}
-          liveHistoryWindow={liveHistoryWindow}
+          liveHistoryWindow={view.liveHistoryWindow}
           setLiveHistoryWindow={setLiveHistoryWindow}
-          isStreaming={isStreaming}
         />
       </div>
     </div>

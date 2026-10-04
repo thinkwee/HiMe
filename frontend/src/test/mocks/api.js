@@ -171,6 +171,7 @@ export const api = {
   // Data source
   getDataSource: vi.fn().mockResolvedValue({ success: true, data_source: 'live_healthkit' }),
   reloadDataReader: vi.fn().mockResolvedValue({ success: true }),
+  getDataCount: vi.fn().mockResolvedValue({ success: true, count: 0 }),
 
   // Participants & features
   getParticipants: vi.fn().mockResolvedValue({ success: true, users: ['LiveUser'] }),
@@ -198,6 +199,10 @@ export const api = {
   createScheduledTask: vi.fn().mockResolvedValue({ success: true }),
   updateScheduledTask: vi.fn().mockResolvedValue({ success: true }),
   triggerAnalysis: vi.fn().mockResolvedValue({ success: true }),
+  getTriggerRules: vi.fn().mockResolvedValue({ success: true, rules: [] }),
+  createTriggerRule: vi.fn().mockResolvedValue({ success: true }),
+  updateTriggerRule: vi.fn().mockResolvedValue({ success: true }),
+  fetchChatImage: vi.fn().mockResolvedValue({ success: true, blob: new Blob(['x'], { type: 'image/png' }) }),
 
   // WebSocket connections — return a mock WebSocket-like object
   connectDataStream: vi.fn(() => {
@@ -213,6 +218,14 @@ export const api = {
   listPrompts: vi.fn().mockResolvedValue({ success: true, prompts: ['soul', 'job', 'experience', 'user'] }),
   fetchPrompt: vi.fn().mockResolvedValue({ success: true, content: '# Test Prompt' }),
   savePrompt: vi.fn().mockResolvedValue({ success: true }),
+
+  // Skills
+  listSkills: vi.fn().mockResolvedValue({ success: true, skills: [] }),
+  fetchSkill: vi.fn().mockResolvedValue({ success: true, name: 'x', description: '', body: '' }),
+  createSkill: vi.fn().mockResolvedValue({ success: true }),
+  updateSkill: vi.fn().mockResolvedValue({ success: true }),
+  deleteSkill: vi.fn().mockResolvedValue({ success: true }),
+  setSkillState: vi.fn().mockResolvedValue({ success: true }),
 
   // Personalised Pages
   listPersonalisedPages: vi.fn().mockResolvedValue({ success: true, apps: [] }),

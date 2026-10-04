@@ -75,8 +75,12 @@ struct DashboardView: View {
         }
         .refreshable {
             HealthKitManager.shared.forceFetch()
-            viewModel.fetchAll()
-            tasksVM.fetchAll()
+            // Await the fetches so the pull-to-refresh spinner lasts until the
+            // data has actually reloaded.
+            async let overview: () = viewModel.refreshAll()
+            async let tasks: () = tasksVM.fetchTasks()
+            async let rules: () = tasksVM.fetchRules()
+            _ = await (overview, tasks, rules)
         }
     }
 }
@@ -103,6 +107,13 @@ private struct AgentStatusCard: View {
         if s.contains("sleep") { return .indigo }
         if s.contains("quick") { return .pink }
         return .secondary
+    }
+
+    /// Record counts: raw below 1,000, then "1.2K" / "3.4M".
+    private func formatRecords(_ n: Int) -> String {
+        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
+        if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1_000) }
+        return "\(n)"
     }
 
     private func formatTokens(_ n: Int) -> String {
@@ -143,7 +154,7 @@ private struct AgentStatusCard: View {
             HStack(spacing: 0) {
                 StatCell(label: "Cycles", value: "\(viewModel.analysisCycles)")
                 Divider().frame(height: 28)
-                StatCell(label: "Records", value: viewModel.totalRecords > 0 ? "\(viewModel.totalRecords / 1000)K" : "0")
+                StatCell(label: "Records", value: formatRecords(viewModel.totalRecords))
                 Divider().frame(height: 28)
                 StatCell(label: "Last Analysis",
                          value: viewModel.lastAnalysisTime != nil ? formatRelativeTime(viewModel.lastAnalysisTime!) : "Never")

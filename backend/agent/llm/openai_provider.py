@@ -42,9 +42,17 @@ from . import (
 logger = logging.getLogger(__name__)
 
 
+# The first chunk of a response legitimately takes much longer than the gaps
+# between later chunks: slow prefill on a long prompt and hidden reasoning both
+# happen before anything is streamed.  Give it at least this long (or the
+# configured stall timeout, whichever is larger).
+_FIRST_CHUNK_MIN_TIMEOUT = 300.0
+
+
 async def _stall_guarded(stream, timeout: float, model: str):
     """Iterate *stream*, raising ``FallbackTriggered`` if no chunk arrives
-    within *timeout* seconds.
+    within *timeout* seconds (the first chunk gets
+    ``max(timeout, _FIRST_CHUNK_MIN_TIMEOUT)``).
 
     httpx's ``read`` timeout alone cannot catch a queued request: DeepSeek
     answers 200 immediately and then sends SSE ``: keep-alive`` comments
@@ -55,12 +63,15 @@ async def _stall_guarded(stream, timeout: float, model: str):
     from ..errors import FallbackTriggered
 
     it = stream.__aiter__()
+    first = True
     while True:
+        budget = max(timeout, _FIRST_CHUNK_MIN_TIMEOUT) if first else timeout
         try:
             if timeout > 0:
-                chunk = await asyncio.wait_for(it.__anext__(), timeout)
+                chunk = await asyncio.wait_for(it.__anext__(), budget)
             else:
                 chunk = await it.__anext__()
+            first = False
         except StopAsyncIteration:
             return
         except asyncio.TimeoutError:
@@ -70,10 +81,26 @@ async def _stall_guarded(stream, timeout: float, model: str):
                 pass
             logger.warning(
                 "LLM stream stalled: %s sent no chunk for %.0fs — aborting",
-                model, timeout,
+                model, budget,
             )
-            raise FallbackTriggered("", model)
+            raise FallbackTriggered("", model, reason=f"no chunk for {budget:.0f}s")
         yield chunk
+
+
+# Keys the agent loop attaches to messages for *other* providers (Gemini's
+# functionResponse name, Anthropic/Gemini thinking signatures).  Strict
+# OpenAI-compatible backends reject unknown fields with HTTP 400.
+_INTERNAL_MESSAGE_KEYS = ("signature", "_tool_name")
+
+
+def _wire_messages(messages: list[dict]) -> list[dict]:
+    """Return *messages* without internal, non-standard keys (copy-on-write)."""
+    out: list[dict] = []
+    for m in messages:
+        if any(k in m for k in _INTERNAL_MESSAGE_KEYS):
+            m = {k: v for k, v in m.items() if k not in _INTERNAL_MESSAGE_KEYS}
+        out.append(m)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +169,7 @@ class OpenAIProvider(BaseLLMProvider):
         try:
             kwargs: dict[str, Any] = {
                 "model": self.model,
-                "messages": messages,
+                "messages": _wire_messages(messages),
                 "temperature": temperature,
                 "stream": True,  # always stream at API level for consistent handling
                 "stream_options": {"include_usage": True},

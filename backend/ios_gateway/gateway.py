@@ -12,6 +12,7 @@ to a closed app go out over APNs.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -70,7 +71,7 @@ class IOSGateway(BaseGateway):
         self.allowed_chat_ids = {user_id}
         self.sender = None  # no external sender handle
         self._apns = apns_sender
-        self._last_apns_ts = 0.0
+        self._last_apns_ts: float | None = None  # monotonic; None = never sent
         # Set by send_photo to the durable image id of the most recent photo so
         # the chat loop can persist it on the assistant's chat_history turn
         # (enables history replay, not just live delivery). reply_user reads it
@@ -116,8 +117,14 @@ class IOSGateway(BaseGateway):
             logger.warning("IOSGateway[user=%s]: emit failed: %s", self.user_id, e)
             return False
 
-    async def _maybe_push_apns(self, body: str, data: dict) -> None:
-        """Send an APNs alert iff the app has no live stream connection."""
+    async def _maybe_push_apns(
+        self, body: str, data: dict, time_sensitive: bool = False,
+    ) -> None:
+        """Send an APNs alert iff the app has no live stream connection.
+
+        ``time_sensitive`` is reserved for proactive alerts (report pushes);
+        ordinary chat replies go out at the default interruption level.
+        """
         if ios_connections.is_online(self.user_id):
             return  # delivered live over the WebSocket
         if self._apns is None or not getattr(self._apns, "enabled", False):
@@ -127,18 +134,27 @@ class IOSGateway(BaseGateway):
                 self.user_id,
             )
             return
-        # Coalesce rapid alerts (multi-reply turn) into one banner.
+        # Coalesce rapid alerts (multi-reply turn) into one banner. ``None``
+        # (not 0.0) means "never sent": time.monotonic() can be smaller than
+        # the window shortly after boot, which would wrongly suppress the
+        # first push.
         now = time.monotonic()
-        if now - self._last_apns_ts < _APNS_COALESCE_S:
+        last = self._last_apns_ts
+        if last is not None and now - last < _APNS_COALESCE_S:
             return
+        # Claim the window before awaiting so two concurrent replies can't
+        # both pass the check; release it if the send fails so one failure
+        # doesn't suppress the whole burst.
+        self._last_apns_ts = now
         try:
-            await self._apns.send(self.user_id, title=_APP_NAME, body=body, data=data)
+            extra = {"time_sensitive": True} if time_sensitive else {}
+            await self._apns.send(
+                self.user_id, title=_APP_NAME, body=body, data=data, **extra,
+            )
         except Exception as e:  # pragma: no cover — network/credential errors
             logger.warning("IOSGateway[user=%s]: APNs send failed: %s", self.user_id, e)
-        else:
-            # Only start the coalescing window on a send that actually went out —
-            # otherwise one failure silently suppresses the whole burst.
-            self._last_apns_ts = now
+            if self._last_apns_ts == now:
+                self._last_apns_ts = last
 
     # ------------------------------------------------------------------
     # Outbound messaging
@@ -170,6 +186,8 @@ class IOSGateway(BaseGateway):
         await self._maybe_push_apns(
             body=(text or "")[:120],
             data={"chat_id": target, "message_hash": msg_hash},
+            # A proactive report push carries its report id; plain replies don't.
+            time_sensitive=report_id is not None,
         )
         # Report the real outcome: _emit_to_stream returns False when there is no
         # active agent (e.g. mid supervisor-restart). Returning True regardless
@@ -192,7 +210,10 @@ class IOSGateway(BaseGateway):
         self.last_image_id = None
         try:
             if photo_path and os.path.exists(photo_path):
-                image_id = image_store.register(self.user_id, photo_path)
+                # mkdir + reap + copyfile: blocking FS work, keep off the loop.
+                image_id = await asyncio.to_thread(
+                    image_store.register, self.user_id, photo_path,
+                )
                 self.last_image_id = image_id
         except Exception as e:  # pragma: no cover — defensive
             logger.warning("IOSGateway[user=%s]: image register failed: %s", self.user_id, e)

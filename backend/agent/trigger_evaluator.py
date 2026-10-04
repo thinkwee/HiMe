@@ -15,6 +15,13 @@ Supported conditions:
                             (when std=0, uses absolute: latest < avg - threshold)
   - delta_gt              : |latest - previous| > threshold
   - absent                : no data for feature_type in last window_minutes
+                            (can only be detected by a *periodic* sweep -- see
+                            ``evaluate_periodic`` -- never after an ingest batch,
+                            because a batch containing the feature proves it is
+                            present)
+
+Simple ``gt/lt/gte/lte`` rules ignore samples older than the rule's window, so
+a stale reading from days ago cannot re-fire a rule once its cooldown expires.
 
 Cooldown: each rule has a cooldown_minutes field. After triggering, the rule
 won't fire again until the cooldown has elapsed.
@@ -41,6 +48,19 @@ _WINDOW_CONDITIONS = {"avg_gt", "avg_lt", "spike", "drop", "delta_gt", "absent"}
 _ALL_CONDITIONS = _SIMPLE_CONDITIONS | _WINDOW_CONDITIONS
 
 
+def _is_stale(timestamp: Any, window_minutes: Any) -> bool:
+    """True when *timestamp* is older than *window_minutes* (unparseable -> False)."""
+    try:
+        window = float(window_minutes) if window_minutes else 60.0
+        text = str(timestamp).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - dt) > timedelta(minutes=window)
+    except (ValueError, TypeError):
+        return False
+
+
 class TriggerEvaluator:
     """Evaluate trigger rules against health data and queue analysis tasks."""
 
@@ -56,6 +76,9 @@ class TriggerEvaluator:
         self._last_eval_time: float = 0.0
         # Minimum seconds between full evaluations (prevents spam on rapid ingestion)
         self._min_eval_interval: float = 10.0
+        # Features from batches skipped by the throttle, evaluated next time.
+        self._pending_features: set[str] = set()
+        self._pending_all: bool = False
 
     async def evaluate_after_ingest(
         self,
@@ -72,20 +95,71 @@ class TriggerEvaluator:
 
         Returns:
             List of triggered rule dicts (for logging/testing).
+
+        Batches that arrive inside the throttle window are not lost: their
+        features are remembered and evaluated together with the next batch (or
+        the next ``evaluate_periodic`` sweep).
         """
         now = time.monotonic()
         if now - self._last_eval_time < self._min_eval_interval:
+            if ingested_features:
+                self._pending_features |= set(ingested_features)
+            else:
+                self._pending_all = True
             return []
         self._last_eval_time = now
+
+        features: set | None
+        if ingested_features and not self._pending_all:
+            features = set(ingested_features) | self._pending_features
+        else:
+            features = None  # unknown / "everything" -> evaluate every rule
+        self._pending_features = set()
+        self._pending_all = False
 
         rules = await asyncio.to_thread(self._load_active_rules)
         if not rules:
             return []
 
-        # Filter to only rules that match ingested features (if known)
-        if ingested_features:
-            rules = [r for r in rules if r["feature_type"] in ingested_features]
+        # ``absent`` can never be true right after a batch that contains the
+        # feature -- it is the periodic sweep's job.
+        rules = [r for r in rules if r["condition"] != "absent"]
+        if features:
+            rules = [r for r in rules if r["feature_type"] in features]
 
+        return await self._fire_rules(rules, agent_queue)
+
+    async def evaluate_periodic(
+        self, agent_queue: asyncio.Queue | None = None,
+    ) -> list[dict[str, Any]]:
+        """Periodic sweep, meant to be called every minute or so (e.g. from the
+        cron scheduler tick).
+
+        Evaluates (a) every ``absent`` rule -- the only way "no data for N
+        minutes" can ever be detected, since nothing is ingested when data is
+        missing -- and (b) rules for features whose batch was skipped by the
+        ingest throttle and has not been picked up since.
+        """
+        pending = set(self._pending_features)
+        pending_all = self._pending_all
+        self._pending_features = set()
+        self._pending_all = False
+
+        rules = await asyncio.to_thread(self._load_active_rules)
+        if not rules:
+            return []
+        selected = [
+            r for r in rules
+            if r["condition"] == "absent"
+            or pending_all
+            or r["feature_type"] in pending
+        ]
+        return await self._fire_rules(selected, agent_queue)
+
+    async def _fire_rules(
+        self, rules: list[dict[str, Any]], agent_queue: asyncio.Queue | None,
+    ) -> list[dict[str, Any]]:
+        """Evaluate *rules*; queue an analysis goal for each that fires."""
         triggered: list[dict[str, Any]] = []
         for rule in rules:
             if self._is_on_cooldown(rule):
@@ -93,7 +167,7 @@ class TriggerEvaluator:
             try:
                 fired = await asyncio.to_thread(self._evaluate_rule, rule)
             except Exception as exc:
-                logger.debug("Trigger rule %d eval error: %s", rule["id"], exc)
+                logger.warning("Trigger rule %s eval error: %s", rule.get("id"), exc)
                 continue
 
             if fired:
@@ -109,7 +183,7 @@ class TriggerEvaluator:
                 )
                 if agent_queue is not None:
                     # Never block the ingest callback on a full (maxsize=50)
-                    # queue — a stalled agent would otherwise back-pressure
+                    # queue -- a stalled agent would otherwise back-pressure
                     # data ingestion indefinitely. Drop instead.
                     try:
                         agent_queue.put_nowait(goal)
@@ -135,7 +209,7 @@ class TriggerEvaluator:
                 ).fetchall()
                 return [dict(r) for r in rows]
         except Exception as exc:
-            logger.debug("Failed to load trigger rules: %s", exc)
+            logger.warning("Failed to load trigger rules: %s", exc)
             return []
 
     # ------------------------------------------------------------------
@@ -185,7 +259,14 @@ class TriggerEvaluator:
 
             latest_value = latest_row[0]
 
-            # Simple threshold conditions
+            # Simple threshold conditions only look at readings inside the
+            # rule's window: an old sample must not keep (re)firing the rule.
+            if condition in _SIMPLE_CONDITIONS and _is_stale(latest_row[1], window_min):
+                return False
+
+            if latest_value is None:
+                return False
+
             if condition == "gt":
                 return latest_value > threshold
             elif condition == "lt":
@@ -249,7 +330,7 @@ class TriggerEvaluator:
                 )
                 conn.commit()
         except Exception as exc:
-            logger.debug("Failed to mark trigger rule %d: %s", rule_id, exc)
+            logger.warning("Failed to mark trigger rule %d: %s", rule_id, exc)
 
 
 def insert_default_trigger_rules(memory_db_file: Path) -> None:

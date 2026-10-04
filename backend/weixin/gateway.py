@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from ..messaging.base import BaseGateway, MessageChannel, MessageEnvelope
-from .qr_login import load_bot_token
+from .qr_login import load_bot_record, resolve_base_url
 from .sender import WeixinSender
 from .transport import WeixinPoller
 
@@ -57,7 +57,10 @@ class WeixinGateway(BaseGateway):
             )
         )
         self._token_path = token_path
-        self._bot_token = load_bot_token(token_path)
+        record = load_bot_record(token_path)
+        self._bot_token = record.get("bot_token") or None
+        self._base_url = resolve_base_url(record.get("baseurl"))
+        scanner_id = str(record.get("ilink_user_id") or "").strip()
 
         # ``default_chat_id`` on this gateway is a WeChat user ID
         # (e.g. ``xxx@im.wechat``). Kept under the BaseGateway field name so
@@ -72,11 +75,29 @@ class WeixinGateway(BaseGateway):
             if self.default_chat_id:
                 allowed.add(self.default_chat_id)
             allowed_user_ids = allowed
-        # On WeChat the bot is bound to whoever scanned the QR — there is
-        # no shareable bot URL like Telegram. An empty allowlist therefore
-        # means "trust whoever can talk to this bot" (i.e. the scanner),
-        # which is the desired UX. This deliberately differs from
-        # Telegram, where the gateway defaults to deny-all on empty.
+        # Default-deny, like the other IM gateways. With no explicit
+        # allowlist the only user authorised is the one who scanned the QR
+        # (``ilink_user_id`` saved at login). Installs whose token file
+        # predates that field keep working (allow-all) but log a warning
+        # telling the operator to pin the allowlist.
+        self._allow_all_legacy = False
+        if not allowed_user_ids:
+            if scanner_id:
+                allowed_user_ids = {scanner_id}
+                logger.info(
+                    "WeixinGateway: WEIXIN_ALLOWED_USER_IDS empty — authorising "
+                    "only the QR scanner (%s)", scanner_id,
+                )
+            else:
+                self._allow_all_legacy = True
+                logger.warning(
+                    "WeixinGateway: no WEIXIN_ALLOWED_USER_IDS and the token "
+                    "file at %s has no scanner id (ilink_user_id) — accepting "
+                    "messages from ANY WeChat user who can reach this bot. "
+                    "Set WEIXIN_ALLOWED_USER_IDS (or re-run "
+                    "`python -m backend.weixin.qr_login`) to lock it down.",
+                    token_path,
+                )
         self.allowed_chat_ids = allowed_user_ids
 
         # Built lazily in ``start()`` once a bot_token is confirmed present
@@ -100,12 +121,15 @@ class WeixinGateway(BaseGateway):
         self._poller = WeixinPoller(
             bot_token=self._bot_token,
             on_message=self._handle_message,
-            allowed_user_ids=self.allowed_chat_ids or None,
+            # ``None`` disables the whitelist; only the legacy fallback does so.
+            allowed_user_ids=(None if self._allow_all_legacy else self.allowed_chat_ids),
+            base_url=self._base_url,
         )
         self.sender = WeixinSender(
             bot_token=self._bot_token,
             default_user_id=self.default_chat_id,
             get_context_token=self._poller.latest_context_token,
+            base_url=self._base_url,
         )
         await self.sender.start()
         await self._poller.start()

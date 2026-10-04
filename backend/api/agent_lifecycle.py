@@ -6,7 +6,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,8 +19,9 @@ from ..agent import MemoryManager, create_provider
 from ..agent.autonomous_agent import AutonomousHealthAgent
 from ..agent.data_store import DataStore
 from ..config import settings
-from ..utils import ts_fmt
+from ..utils import atomic_write_json, ts_fmt
 from .agent_state import (
+    _ID_RE,
     _RATE_LIMIT_CHAT_MAX_CALLS,
     ChatMessageRequest,
     QuickAnalysisResponse,
@@ -151,6 +154,22 @@ async def _start_agent_background(
         _agent_info = await _start_agent_internal(body, _progress, event_queue=event_queue)
 
         async with startup_lock:
+            # POST /stop during startup removes the placeholder. If it is gone
+            # (or replaced by a newer startup) we must NOT resurrect the agent:
+            # tear down what we just built instead of registering it.
+            _current = active_agents.get(body.user_id)
+            if _current is None or _current.get("event_queue") is not event_queue:
+                logger.info(
+                    "Startup for %s was cancelled (stopped while starting) — "
+                    "discarding the new agent", body.user_id,
+                )
+                await _teardown_agent_info(_agent_info)
+                _enqueue_event(event_queue, {
+                    "type": "agent_stopped",
+                    "user_id": body.user_id,
+                    "timestamp": ts_now(),
+                })
+                return
             # The frontend connects the monitor WS during startup to watch
             # progress; that connect lazily attaches an EventHub + fan-out pump
             # to the *placeholder* dict (keyed on the same event_queue). If we
@@ -185,9 +204,12 @@ async def _start_agent_background(
             "error": str(exc),
             "timestamp": ts_now(),
         })
-        # Clean up the placeholder
+        # Clean up the placeholder — but only OUR placeholder: after a /stop a
+        # newer /start may have registered its own under the same user id.
         async with startup_lock:
-            active_agents.pop(body.user_id, None)
+            _cur = active_agents.get(body.user_id)
+            if _cur is not None and _cur.get("event_queue") is event_queue:
+                active_agents.pop(body.user_id, None)
 
 
 async def _start_agent_internal(
@@ -209,18 +231,21 @@ async def _start_agent_internal(
     elif body.llm_provider == "azure_openai":
         kwargs["azure_endpoint"] = settings.AZURE_OPENAI_ENDPOINT
         kwargs["api_version"]    = settings.AZURE_OPENAI_API_VERSION
-    llm = create_provider(body.llm_provider, model=body.model, api_key=api_key, **kwargs)
+    # Provider SDK imports / client construction can take seconds — keep them
+    # (and the SQLite-opening constructors below) off the event loop.
+    llm = await asyncio.to_thread(
+        lambda: create_provider(body.llm_provider, model=body.model, api_key=api_key, **kwargs)
+    )
 
     # 2. Data store (wearable health data, stored under data/data_stores)
     _step(2, 7, "Initialising health data store")
-    data_store = DataStore(
-        db_path=settings.DATA_STORE_PATH,
-        user_id=body.user_id,
+    data_store = await asyncio.to_thread(
+        DataStore, db_path=settings.DATA_STORE_PATH, user_id=body.user_id,
     )
 
     # 3. Memory manager (schema owner)
     _step(3, 7, "Initialising memory")
-    memory = MemoryManager(settings.MEMORY_DB_PATH, body.user_id)
+    memory = await asyncio.to_thread(MemoryManager, settings.MEMORY_DB_PATH, body.user_id)
 
     # 4. Resolve messaging gateway registry (Telegram / Feishu / …)
     telegram_sender = None
@@ -242,30 +267,35 @@ async def _start_agent_internal(
     _step(4, 7, "Building agent and tools")
     from ..agent.skills.registry import SkillRegistry
     from ..agent.tools.registry import ToolRegistry
-    skill_registry = SkillRegistry(roots=AutonomousHealthAgent._resolve_skill_roots())
-    registry = ToolRegistry.with_default_tools(
-        data_store, settings.MEMORY_DB_PATH, body.user_id,
-        telegram_sender=telegram_sender,
-        default_chat_id=default_chat_id,
-        gateway_registry=gateway_registry,
-        skill_registry=skill_registry,
-    )
-    agent = AutonomousHealthAgent(
-        user_id=body.user_id,
-        llm_provider=llm,
-        data_store=data_store,
-        memory_db_path=settings.MEMORY_DB_PATH,
-        tool_registry=registry,
-    )
+
+    def _build_agent() -> AutonomousHealthAgent:
+        skill_registry = SkillRegistry(roots=AutonomousHealthAgent._resolve_skill_roots())
+        registry = ToolRegistry.with_default_tools(
+            data_store, settings.MEMORY_DB_PATH, body.user_id,
+            telegram_sender=telegram_sender,
+            default_chat_id=default_chat_id,
+            gateway_registry=gateway_registry,
+            skill_registry=skill_registry,
+        )
+        return AutonomousHealthAgent(
+            user_id=body.user_id,
+            llm_provider=llm,
+            data_store=data_store,
+            memory_db_path=settings.MEMORY_DB_PATH,
+            tool_registry=registry,
+        )
+
+    agent = await asyncio.to_thread(_build_agent)
 
     # 6. Data ingestion stream (Check if system-level ingestion is already running)
     _step(5, 7, "Setting up data ingestion")
-    if body.user_id in system_ingest_tasks:
+    existing_ingest = system_ingest_tasks.get(body.user_id)
+    if existing_ingest is not None and not existing_ingest.done():
         logger.info("Reusing existing system-level ingestion task for %s", body.user_id)
-        ingest_task = system_ingest_tasks[body.user_id]
+        ingest_task = existing_ingest
     else:
+        # A dead task must not be "reused": start a fresh (self-registering) one.
         ingest_task = await _build_ingest_task(body, data_store)
-        system_ingest_tasks[body.user_id] = ingest_task
 
     # 7. Default scheduled tasks (first launch)
     _step(6, 7, "Configuring scheduled tasks")
@@ -308,183 +338,249 @@ async def _start_agent_internal(
 
 
 async def _build_ingest_task(body: StartAgentRequest, data_store: DataStore) -> asyncio.Task:
-    """Build the live data-ingestion background task."""
-    from pathlib import Path as _Path
+    """Build the live data-ingestion background task (self-restarting).
 
-    data_path = (_Path(__file__).parent.parent.parent / "ios" / "Server").resolve()
-
+    The task is registered in ``system_ingest_tasks`` and carries a done
+    callback: if it ever dies unexpectedly it is dropped from the registry and
+    relaunched after a short delay, so one bad batch can't silence ingestion
+    for the rest of the process lifetime.
+    """
     from ..data_readers.watch_db_reader import WatchDBReader
-    reader = WatchDBReader(data_path)
-    return asyncio.create_task(
-        _live_ingest_loop(reader, data_store, body.user_id),
-        name=f"ingest-{body.user_id}",
+
+    data_path = (Path(__file__).parent.parent.parent / "ios" / "Server").resolve()
+    reader = await asyncio.to_thread(WatchDBReader, data_path)
+    return _spawn_ingest_task(reader, data_store, body.user_id)
+
+
+_INGEST_RESTART_DELAY_S = 5.0
+
+
+def _spawn_ingest_task(reader, data_store: DataStore, user_id: str) -> asyncio.Task:
+    """Create + register the ingest task and attach the restart callback."""
+    task = asyncio.create_task(
+        _live_ingest_loop(reader, data_store, user_id),
+        name=f"ingest-{user_id}",
     )
+    system_ingest_tasks[user_id] = task
+
+    def _on_done(t: asyncio.Task) -> None:
+        if system_ingest_tasks.get(user_id) is not t:
+            return  # replaced or deliberately removed (shutdown)
+        if t.cancelled():
+            return
+        system_ingest_tasks.pop(user_id, None)
+        exc = t.exception()
+        logger.error("Live ingest task for %s died (%r) — restarting in %.0fs",
+                     user_id, exc, _INGEST_RESTART_DELAY_S)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+
+        def _restart() -> None:
+            if user_id not in system_ingest_tasks:
+                data_store.is_ingesting = False
+                _spawn_ingest_task(reader, data_store, user_id)
+
+        loop.call_later(_INGEST_RESTART_DELAY_S, _restart)
+
+    task.add_done_callback(_on_done)
+    return task
+
+
+_INGEST_POLL_INTERVAL_S = 5.0
+_TRIGGER_SWEEP_INTERVAL_S = 60.0  # absent rules + throttled-feature catch-up
+_INGEST_MAX_BACKOFF_S = 60.0
+_INGEST_PAGE_SIZE = 100000  # matches the reader's default row limit
+# Epoch values above this are milliseconds (1e11 s is year 5138).
+_MS_EPOCH_THRESHOLD = 1e11
+_MAX_VALID_EPOCH = 4102444800.0  # 2100-01-01
+
+
+def _coerce_epoch(ts: object) -> float | None:
+    """Normalise a raw watch.db timestamp to epoch seconds, or None if bad."""
+    try:
+        v = float(ts)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(v):
+        return None
+    if v > _MS_EPOCH_THRESHOLD:
+        v /= 1000.0
+    if v <= 0 or v > _MAX_VALID_EPOCH:
+        return None
+    return v
+
+
+def _build_records(samples: list, pid: str) -> list:
+    """Convert raw watch.db rows to DataStore ingest format.
+
+    Rows with an unusable timestamp/value are skipped individually (and
+    counted in one log line) so a single corrupt row never blocks the batch.
+    """
+    records = []
+    skipped = 0
+    for s in samples:
+        try:
+            epoch = _coerce_epoch(s.get("ts"))
+            value = s.get("value")
+            if epoch is None or value is None or not s.get("feature_type"):
+                skipped += 1
+                continue
+            if isinstance(value, float) and not math.isfinite(value):
+                skipped += 1
+                continue
+            dt = datetime.fromtimestamp(epoch, tz=timezone.utc)
+            records.append({
+                "date": ts_fmt(dt),
+                "value": value,
+                "feature_type": s["feature_type"],
+                "pid": pid,
+            })
+        except Exception:
+            skipped += 1
+    if skipped:
+        logger.warning("Live ingest: skipped %d malformed row(s) out of %d", skipped, len(samples))
+    return records
+
+
+async def _ingest_cycle(reader, data_store: DataStore, user_id: str, hwm: dict,
+                        trigger_eval, evaluate_triggers: bool = True) -> int:
+    """Run one poll+ingest pass. Returns the number of source rows consumed.
+
+    ``hwm`` (``{"id": int, "ua": float}``) is only advanced after the batch is
+    durably saved, so a failed write is retried on the next pass instead of
+    silently dropping rows. Raises on DB errors (the caller backs off).
+    """
+    # Detect a recreated watch.db (ids restart below our high-water mark).
+    max_id = await asyncio.to_thread(reader.get_max_id)
+    if max_id is not None and max_id < hwm["id"]:
+        logger.warning(
+            "watch.db max id %d < stored HWM %d for %s — database was recreated; "
+            "resetting high-water marks", max_id, hwm["id"], user_id,
+        )
+        hwm["id"] = 0
+        hwm["ua"] = 0.0
+        await asyncio.to_thread(data_store.save_ingestion_id, 0)
+        await asyncio.to_thread(data_store.save_last_updated_at, 0.0)
+
+    # New rows (id-based) + in-place updates (updated_at-based).
+    new_samples = await asyncio.to_thread(reader.get_all_samples_since_id, hwm["id"])
+    updated_samples = await asyncio.to_thread(reader.get_samples_updated_since, hwm["ua"])
+
+    new_id = hwm["id"]
+    new_ua = hwm["ua"]
+    for s in new_samples:
+        try:
+            new_id = max(new_id, int(s["id"]))
+            new_ua = max(new_ua, float(s.get("updated_at") or 0.0))
+        except (TypeError, ValueError, KeyError):
+            continue
+    seen_ids = {s.get("id") for s in new_samples}
+    extra = [s for s in updated_samples if s.get("id") not in seen_ids]
+    for s in updated_samples:
+        try:
+            new_ua = max(new_ua, float(s.get("updated_at") or 0.0))
+        except (TypeError, ValueError):
+            continue
+
+    consumed = len(new_samples) + len(extra)
+    if not consumed:
+        return 0
+
+    all_records = _build_records(new_samples, user_id) + _build_records(extra, user_id)
+    if all_records:
+        batch = {
+            "data": all_records,
+            "data_timestamp": max(r["date"] for r in all_records),
+            "num_records": len(all_records),
+            "is_live": True,
+        }
+        await asyncio.to_thread(data_store.ingest_batch, batch)
+    await asyncio.to_thread(data_store.save_ingestion_id, new_id)
+    await asyncio.to_thread(data_store.save_last_updated_at, new_ua)
+    hwm["id"], hwm["ua"] = new_id, new_ua
+    logger.info("Live ingest: %d records synced (%d new, %d updated) hwm_id=%d ua=%.0f",
+                len(all_records), len(new_samples), len(extra), new_id, new_ua)
+
+    if all_records and evaluate_triggers:
+        try:
+            triggered = await trigger_eval.evaluate_after_ingest(
+                agent_queue=_get_agent_analysis_queue(user_id),
+                ingested_features={r["feature_type"] for r in all_records},
+            )
+            if triggered:
+                logger.info("Triggers fired: %s", [t["name"] for t in triggered])
+        except Exception as exc:
+            logger.debug("Trigger evaluation error: %s", exc)
+    return consumed
+
+
+async def _periodic_trigger_sweep(trigger_eval, user_id: str) -> None:
+    """Evaluate rules that per-batch evaluation can't reach: ``absent`` rules
+    (nothing is ingested while data is missing) and features whose batch was
+    skipped by the evaluator's throttle. Only runs while an agent can take the
+    resulting analysis task."""
+    queue = _get_agent_analysis_queue(user_id)
+    if queue is None:
+        return
+    try:
+        triggered = await trigger_eval.evaluate_periodic(queue)
+        if triggered:
+            logger.info("Periodic triggers fired: %s", [t["name"] for t in triggered])
+    except Exception as exc:
+        logger.warning("Periodic trigger sweep failed for %s: %s", user_id, exc)
 
 
 async def _live_ingest_loop(reader, data_store: DataStore, user_id: str) -> None:
     """
     Continuously poll the live watch.db and forward ALL samples into the DataStore.
-    Performs full historical sync on startup, then lossless incremental polling.
-    After each batch, evaluates trigger rules and queues analysis if conditions are met.
+    The first pass is the historical back-fill (no trigger evaluation); then
+    lossless incremental polling. Every pass is individually guarded: any error
+    is logged and retried with exponential back-off — the loop only ends on
+    cancellation.
     """
     from ..agent.trigger_evaluator import TriggerEvaluator
 
-    # 1. Initialize high-water marks from existing data in the store
-    last_id = data_store.get_last_ingested_id()
-    last_updated_at = data_store.get_last_updated_at()
-
-    # Trigger evaluator — checks rules against newly ingested data
+    hwm = {
+        "id": await asyncio.to_thread(data_store.get_last_ingested_id),
+        "ua": await asyncio.to_thread(data_store.get_last_updated_at),
+    }
     trigger_eval = TriggerEvaluator(
         memory_db_path=settings.MEMORY_DB_PATH,
         user_id=user_id,
         health_db_path=data_store.db_file,
     )
-
-    poll_interval = 5  # seconds
     logger.info("Live ingest loop started for %s. ID HWM: %d, updated_at HWM: %.0f",
-                user_id, last_id, last_updated_at)
+                user_id, hwm["id"], hwm["ua"])
     data_store.is_ingesting = True
 
-    def _build_records(samples: list, pid: str) -> list:
-        """Convert raw watch.db rows to DataStore ingest format."""
-        records = []
-        for s in samples:
-            ts = s["ts"]
-            dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-            records.append({
-                "date": ts_fmt(dt),
-                "value": s["value"],
-                "feature_type": s["feature_type"],
-                "pid": pid,
-            })
-        return records
-
-    # --- PHASE 1: Historical Sync (id-based, catches all rows) ---
-    try:
-        logger.info("Starting historical back-fill for %s...", user_id)
-        all_samples = await asyncio.to_thread(reader.get_all_samples_since_id, last_id)
-        if all_samples:
-            new_records = _build_records(all_samples, user_id)
-            max_id = max(s["id"] for s in all_samples)
-            max_ts = max(s["ts"] for s in all_samples)
-
-            batch = {
-                "data": new_records,
-                "data_timestamp": ts_fmt(datetime.fromtimestamp(max_ts, tz=timezone.utc)),
-                "num_records": len(new_records),
-                "is_live": True,
-            }
-            await asyncio.to_thread(data_store.ingest_batch, batch)
-            await asyncio.to_thread(data_store.save_ingestion_id, max_id)
-            last_id = max_id
-
-            # Seed updated_at HWM from the backfill if not set yet
-            for s in all_samples:
-                ua = s.get("updated_at", 0.0) or 0.0
-                if ua > last_updated_at:
-                    last_updated_at = ua
-            if last_updated_at > 0:
-                await asyncio.to_thread(data_store.save_last_updated_at, last_updated_at)
-
-            logger.info("Historical back-fill complete: %d records for %s (id=%d, ua=%.0f)",
-                        len(new_records), user_id, max_id, last_updated_at)
-    except Exception as exc:
-        logger.error("Historical back-fill error for %s: %s — skipping to incremental polling",
-                      user_id, exc, exc_info=True)
-        last_id = data_store.get_last_ingested_id()
-        last_updated_at = data_store.get_last_updated_at()
-
-    # --- PHASE 2: Incremental Polling (dual: id for new rows + updated_at for changed rows) ---
+    backoff = _INGEST_POLL_INTERVAL_S
+    first = True
+    last_sweep = time.monotonic()
     try:
         while data_store.is_ingesting:
-            all_records: list = []
-            ingested_features: set = set()
-
-            # 2a. New rows (id-based, catches brand-new inserts)
+            if not first and time.monotonic() - last_sweep >= _TRIGGER_SWEEP_INTERVAL_S:
+                last_sweep = time.monotonic()
+                await _periodic_trigger_sweep(trigger_eval, user_id)
             try:
-                new_samples = await asyncio.to_thread(reader.get_all_samples_since_id, last_id)
-            except Exception as exc:
-                logger.warning("Live ingest poll (new) error: %s", exc)
-                new_samples = []
-
-            if new_samples:
-                records = _build_records(new_samples, user_id)
-                all_records.extend(records)
-                max_id_in_batch = max(s["id"] for s in new_samples)
-                last_id = max_id_in_batch
-                # Track updated_at from new rows too
-                for s in new_samples:
-                    ua = s.get("updated_at", 0.0) or 0.0
-                    if ua > last_updated_at:
-                        last_updated_at = ua
-
-            # 2b. Updated rows (updated_at-based, catches in-place value changes)
-            try:
-                updated_samples = await asyncio.to_thread(
-                    reader.get_samples_updated_since, last_updated_at
+                consumed = await _ingest_cycle(
+                    reader, data_store, user_id, hwm, trigger_eval,
+                    evaluate_triggers=not first,
                 )
+                first = False
+                backoff = _INGEST_POLL_INTERVAL_S
+                if consumed >= _INGEST_PAGE_SIZE:
+                    continue  # full page — more backlog waiting, don't sleep
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:
-                logger.warning("Live ingest poll (updated) error: %s", exc)
-                updated_samples = []
-
-            if updated_samples:
-                # Filter out rows already captured by the id-based poll above
-                new_ids = {s["id"] for s in new_samples} if new_samples else set()
-                extra = [s for s in updated_samples if s["id"] not in new_ids]
-                if extra:
-                    records = _build_records(extra, user_id)
-                    all_records.extend(records)
-                # Advance updated_at HWM
-                max_ua = max(s["updated_at"] for s in updated_samples)
-                if max_ua > last_updated_at:
-                    last_updated_at = max_ua
-
-            # Ingest combined batch
-            if all_records:
-                ingested_features = {r["feature_type"] for r in all_records}
-                max_ts_in_batch = 0.0
-                for r in all_records:
-                    try:
-                        rdt = datetime.fromisoformat(r["date"])
-                        rts = rdt.replace(tzinfo=timezone.utc).timestamp()
-                        if rts > max_ts_in_batch:
-                            max_ts_in_batch = rts
-                    except Exception:
-                        pass
-
-                batch = {
-                    "data": all_records,
-                    "data_timestamp": ts_fmt(datetime.fromtimestamp(max_ts_in_batch, tz=timezone.utc)) if max_ts_in_batch > 0 else None,
-                    "num_records": len(all_records),
-                    "is_live": True,
-                }
-
-                await asyncio.to_thread(data_store.ingest_batch, batch)
-                await asyncio.to_thread(data_store.save_ingestion_id, last_id)
-                await asyncio.to_thread(data_store.save_last_updated_at, last_updated_at)
-                logger.info("Live ingest: %d records synced (%d new, %d updated) hwm_id=%d ua=%.0f",
-                            len(all_records),
-                            len(new_samples) if new_samples else 0,
-                            len(all_records) - (len(new_samples) if new_samples else 0),
-                            last_id, last_updated_at)
-
-                # Evaluate trigger rules against newly ingested data
-                agent_queue = _get_agent_analysis_queue(user_id)
-                try:
-                    triggered = await trigger_eval.evaluate_after_ingest(
-                        agent_queue=agent_queue,
-                        ingested_features=ingested_features,
-                    )
-                    if triggered:
-                        logger.info(
-                            "Triggers fired: %s",
-                            [t["name"] for t in triggered],
-                        )
-                except Exception as exc:
-                    logger.debug("Trigger evaluation error: %s", exc)
-
-            await asyncio.sleep(poll_interval)
-
+                logger.error("Live ingest cycle failed for %s: %s — retrying in %.0fs",
+                             user_id, exc, backoff, exc_info=True)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, _INGEST_MAX_BACKOFF_S)
+                continue
+            await asyncio.sleep(_INGEST_POLL_INTERVAL_S)
     except asyncio.CancelledError:
         pass
     finally:
@@ -603,6 +699,37 @@ def _log_event(event: dict) -> None:
 # POST /stop
 # ---------------------------------------------------------------------------
 
+async def _cancel_and_wait(task: asyncio.Task, timeout: float = 5.0) -> None:
+    """Cancel *task* and wait (bounded) for it to finish.
+
+    Swallows the task's OWN ``CancelledError`` (expected) but re-raises it when
+    the *caller* is the one being cancelled — otherwise a cancelled request
+    handler would keep running as if nothing happened.
+    """
+    task.cancel()
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+    except asyncio.TimeoutError:
+        pass
+    except asyncio.CancelledError:
+        if not task.done():
+            raise  # we were cancelled, not the awaited task
+
+
+async def _teardown_agent_info(info: dict) -> None:
+    """Stop an agent registry entry: agent loop, supervisor and fan-out pump.
+
+    The ingest task is deliberately left running (system-level, independent of
+    the agent lifecycle).
+    """
+    if info.get("agent"):
+        info["agent"].stop()
+    for key in ("task", "fanout_task"):
+        t: asyncio.Task | None = info.get(key)
+        if t is not None:
+            await _cancel_and_wait(t)
+
+
 @lifecycle_router.post("/stop")
 async def stop_autonomous_agent(request: Request, user_id: str = Query("LiveUser")):
     """Stop the running agent. Defaults to LiveUser (single-user mode)."""
@@ -614,25 +741,13 @@ async def stop_autonomous_agent(request: Request, user_id: str = Query("LiveUser
             raise HTTPException(status_code=404, detail=f"No agent running for '{user_id}'")
 
         try:
-            if info.get("agent"):
-                info["agent"].stop()
-
-            for key in ("task", "fanout_task"):  # removed ingest_task from auto-cancel
-                t: asyncio.Task | None = info.get(key)
-                if t is None:
-                    continue
-                t.cancel()
-                try:
-                    await asyncio.wait_for(asyncio.shield(t), timeout=5.0)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
-                    pass
-
+            await _teardown_agent_info(info)
             logger.info("Stopped autonomous agent for %s (Ingestion continues)", user_id)
             return {"success": True, "user_id": user_id}
 
         except Exception as exc:
             logger.error("Error stopping agent: %s", exc, exc_info=True)
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise HTTPException(status_code=500, detail="Failed to stop the agent.") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -680,12 +795,16 @@ async def get_agent_status(user_id: str | None = None):
 # POST /quick-analysis
 # ---------------------------------------------------------------------------
 
+_QUICK_ANALYSIS_MAX_CALLS = 10  # per minute per IP — each call is a full LLM run
+
+
 @lifecycle_router.post("/quick-analysis")
-async def quick_analysis():
+async def quick_analysis(request: Request):
     """
     Trigger a rapid health status analysis (max 3 tool calls, 30s timeout).
     Returns {state: CatState, message: str} for iOS cat animation.
     """
+    _check_rate_limit(_client_ip(request), "quick-analysis", _QUICK_ANALYSIS_MAX_CALLS)
     item = next(iter(active_agents.items()), None)
     if not item:
         return QuickAnalysisResponse(state="neutral", message="Agent not running. Start the agent first.")
@@ -742,6 +861,11 @@ def _last_config_start_request() -> StartAgentRequest:
     return body
 
 
+async def _alast_config_start_request() -> StartAgentRequest:
+    """Off-loop variant of :func:`_last_config_start_request` (file read)."""
+    return await asyncio.to_thread(_last_config_start_request)
+
+
 async def _ensure_agent_started() -> str:
     """Ensure the agent is running or starting. Returns the state.
 
@@ -766,7 +890,7 @@ async def _ensure_agent_started() -> str:
             "_starting": True,
         }
     asyncio.create_task(
-        _start_agent_background(_last_config_start_request(), event_queue),
+        _start_agent_background(await _alast_config_start_request(), event_queue),
         name=f"agent-startup-{_LIVE_USER}",
     )
     return "starting"
@@ -881,7 +1005,8 @@ async def try_restore_agent() -> None:
                 return json.load(f)
         cfg = await asyncio.to_thread(_read_restore_config)
         pid = cfg.get("user_id")
-        if not pid:
+        if not pid or not isinstance(pid, str) or not _ID_RE.match(pid):
+            logger.warning("[Startup] Agent restore skipped (invalid user_id in saved config)")
             return
         body = StartAgentRequest(
             user_id=pid,
@@ -907,26 +1032,16 @@ async def restart_agent(user_id: str) -> bool:
         info = active_agents.pop(user_id, None)
         if not info:
             return False
-        if info.get("agent"):
-            info["agent"].stop()
         # Cancel the fan-out pump as well as the supervisor (mirrors /stop).
         # A surviving pump would keep draining the OLD event_queue while every
         # connected monitor stays subscribed to the OLD hub — the new
         # supervisor's events would then never reach them.
-        for key in ("task", "fanout_task"):
-            t: asyncio.Task | None = info.get(key)
-            if t is None:
-                continue
-            t.cancel()
-            try:
-                await asyncio.wait_for(asyncio.shield(t), timeout=5.0)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                pass
+        await _teardown_agent_info(info)
 
         # Start again directly from the saved config. Going through
         # try_restore_agent() would make /restart a no-op stop whenever
         # AUTO_RESTORE_AGENT is false (the default).
-        body = _last_config_start_request()
+        body = await _alast_config_start_request()
         body.user_id = user_id
         try:
             new_info = await _start_agent_internal(body)
@@ -998,33 +1113,32 @@ async def shutdown_agents() -> None:
 async def _save_last_config(body: StartAgentRequest) -> None:
     cfg_path = settings.AGENT_LAST_CONFIG_PATH
     try:
-        def _write_config():
-            cfg_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(cfg_path, "w") as f:
-                json.dump(
-                    {
-                        "user_id":  body.user_id,
-                        "llm_provider":    body.llm_provider,
-                        "model":           body.model or "",
-                        "granularity":     body.granularity,
-                        "speed_multiplier": body.speed_multiplier,
-                    },
-                    f,
-                    indent=2,
-                )
-        await asyncio.to_thread(_write_config)
+        await asyncio.to_thread(
+            atomic_write_json,
+            cfg_path,
+            {
+                "user_id":  body.user_id,
+                "llm_provider":    body.llm_provider,
+                "model":           body.model or "",
+                "granularity":     body.granularity,
+                "speed_multiplier": body.speed_multiplier,
+            },
+        )
     except Exception as exc:
         logger.debug("Failed to save agent config: %s", exc)
 
 
 async def start_system_ingestion(user_id: str = "LiveUser") -> None:
     """Start data ingestion for a user without starting the agent."""
-    if user_id in system_ingest_tasks:
+    existing = system_ingest_tasks.get(user_id)
+    if existing is not None and not existing.done():
         return
+    if existing is not None:
+        logger.warning("Previous ingestion task for %s is dead — restarting it", user_id)
+        system_ingest_tasks.pop(user_id, None)
 
-    data_store = DataStore(
-        db_path=settings.DATA_STORE_PATH,
-        user_id=user_id,
+    data_store = await asyncio.to_thread(
+        DataStore, db_path=settings.DATA_STORE_PATH, user_id=user_id,
     )
 
     # Create a dummy request body for _build_ingest_task
@@ -1035,8 +1149,7 @@ async def start_system_ingestion(user_id: str = "LiveUser") -> None:
     )
 
     logger.info("Starting system-level background ingestion for %s", user_id)
-    task = await _build_ingest_task(body, data_store)
-    system_ingest_tasks[user_id] = task
+    await _build_ingest_task(body, data_store)
 
 
 async def stop_all_ingestions() -> None:

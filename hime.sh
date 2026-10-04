@@ -38,6 +38,16 @@ _load_env_file() {
         [[ -z $line ]] && continue
         [[ $line != *=* ]] && continue
         key="${line%%=*}"
+        # Tolerate `export KEY=...` and stray whitespace around the key, then
+        # SKIP anything that isn't a valid shell identifier: `export` would
+        # abort the whole script under `set -e` on e.g. `my-key=1` or `=x`.
+        key="${key#"${key%%[![:space:]]*}"}"
+        key="${key#export }"
+        key="${key%"${key##*[![:space:]]}"}"
+        if [[ ! $key =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+            echo "hime.sh: ignoring invalid line in $file: ${line:0:40}" >&2
+            continue
+        fi
         value="${line#*=}"
         value="${value#"${value%%[![:space:]]*}"}" # trim leading whitespace
         case "$value" in
@@ -179,32 +189,92 @@ cmd_stop() {
     ok "All services stopped."
 }
 
+# Physical path of this checkout (the logical $PROJECT_ROOT may go through a
+# symlink while /proc/<pid>/cwd always reports the resolved one).
+PROJECT_ROOT_REAL="$(cd "$PROJECT_ROOT" && pwd -P)"
+
+# Working directory of a PID (Linux /proc, macOS lsof); empty when unknown.
+_pid_cwd() {
+    local pid="$1" cwd=""
+    if [ -d "/proc/$pid" ]; then
+        cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null || true)"
+    elif command -v lsof >/dev/null 2>&1; then
+        cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n1 || true)"
+    fi
+    echo "$cwd"
+}
+
+# True when PID belongs to THIS checkout: its command line references a path
+# under it, or its working directory is inside it. Keeps `stop` from killing
+# another checkout's stack (e.g. a sibling HiMe_serve) that merely matches a
+# process name or sits on the same default port.
+_pid_in_project() {
+    local pid="$1" cmd cwd root
+    cmd="$(ps -o command= -p "$pid" 2>/dev/null || true)"
+    cwd="$(_pid_cwd "$pid")"
+    for root in "$PROJECT_ROOT" "$PROJECT_ROOT_REAL"; do
+        case "$cmd" in *"$root/"*) return 0 ;; esac
+        case "$cwd" in "$root"|"$root"/*) return 0 ;; esac
+    done
+    return 1
+}
+
+# SIGTERM, wait up to ~5s for a clean exit (SQLite WAL checkpoints, agent
+# state flush), then SIGKILL whatever is left.
+_terminate_pids() {
+    [ "$#" -gt 0 ] || return 0
+    local -a pids=("$@") alive=()
+    local pid i
+    kill -TERM "${pids[@]}" 2>/dev/null || true
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        alive=()
+        for pid in "${pids[@]}"; do
+            if kill -0 "$pid" 2>/dev/null; then alive+=("$pid"); fi
+        done
+        [ "${#alive[@]}" -eq 0 ] && return 0
+        sleep 0.5
+    done
+    warn "Still running after SIGTERM, force-killing: ${alive[*]}"
+    kill -KILL "${alive[@]}" 2>/dev/null || true
+}
+
 _native_kill_processes() {
-    # Port-based kill (Backend: 8000, Frontend: 5173, Watch: 8765)
-    # Use -sTCP:LISTEN to only kill processes *listening* on these ports,
-    # not reverse-proxy clients (e.g. cloudflared) that connect to them.
-    local port pid pids
-    for port in 8000 5173 8765; do
-        pids=$(lsof -t -i:$port -sTCP:LISTEN 2>/dev/null || true)
-        if [ -n "$pids" ]; then
-            for pid in $pids; do
-                kill -9 "$pid" 2>/dev/null || true
+    local -a pids=()
+    local port pid pat p dup
+
+    # Port owners (Backend: 8000, Frontend: 5173, Watch: 8765). -sTCP:LISTEN so
+    # reverse-proxy clients (e.g. cloudflared) connected to them are spared.
+    if command -v lsof >/dev/null 2>&1; then
+        for port in 8000 5173 8765; do
+            for pid in $(lsof -t -i:"$port" -sTCP:LISTEN 2>/dev/null || true); do
+                if _pid_in_project "$pid"; then
+                    pids+=("$pid")
+                else
+                    warn "Port $port is held by PID $pid, which is not part of this checkout — leaving it alone."
+                fi
             done
-        fi
+        done
+    fi
+
+    # Process-name safety net, ALWAYS filtered to this checkout (see
+    # _pid_in_project), so generic patterns are safe here.
+    for pat in "backend.main" "ios/Server/server.py" "vite" "npm run dev" "multiprocessing"; do
+        for pid in $(pgrep -f "$pat" 2>/dev/null || true); do
+            if [ "$pid" = "$$" ] || [ "$pid" = "$PPID" ]; then continue; fi
+            if _pid_in_project "$pid"; then pids+=("$pid"); fi
+        done
     done
 
-    # Process-name kill (safety net). Patterns are either anchored to this
-    # project root or to a HiMe-specific entry point. Bare patterns like
-    # "uvicorn", "vite" or "multiprocessing.*" are deliberately NOT used:
-    # they would SIGKILL unrelated dev servers and Python jobs elsewhere on
-    # the machine (the vite child process carries the project path, so
-    # "${PROJECT_ROOT}/frontend" already covers the frontend).
-    pkill -9 -f "${PROJECT_ROOT}/backend" 2>/dev/null || true
-    pkill -9 -f "python3 -m backend.main" 2>/dev/null || true
-    pkill -9 -f "python.*backend.main"    2>/dev/null || true
-    pkill -9 -f "${PROJECT_ROOT}/frontend" 2>/dev/null || true
-    pkill -9 -f "${PROJECT_ROOT}/ios/Server/server.py" 2>/dev/null || true
-    pkill -9 -f "ios/Server/server.py"            2>/dev/null || true
+    # De-duplicate.
+    local -a uniq=()
+    for p in ${pids[@]+"${pids[@]}"}; do
+        dup=false
+        for pid in ${uniq[@]+"${uniq[@]}"}; do
+            [ "$pid" = "$p" ] && dup=true
+        done
+        $dup || uniq+=("$p")
+    done
+    _terminate_pids ${uniq[@]+"${uniq[@]}"}
 }
 
 # ══════════════════════════════════════════════════════════════════
@@ -254,6 +324,47 @@ _docker_start() {
     ok "Use './hime.sh logs' to follow or './hime.sh status' to check."
 }
 
+# First-run only: a freshly copied .env has an empty API_AUTH_TOKEN, which
+# would leave an API bound to 0.0.0.0 open to the whole LAN. Generate one (same
+# idea as setup.sh) and tell the user where to enter it. Existing .env files
+# are never touched, so already-paired iOS apps keep working.
+_gen_token() {
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex 32
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 -c 'import secrets; print(secrets.token_hex(32))'
+    else
+        head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
+    fi
+}
+
+# Set KEY=VALUE in FILE without sed (no escaping pitfalls): the value travels
+# through the environment, so awk never interprets it.
+_set_env_value() {
+    local key="$1" value="$2" file="$3" tmp
+    tmp="$(mktemp "${file}.XXXXXX")"
+    HIME_NEW_VALUE="$value" awk -v key="$key" '
+        BEGIN { v = ENVIRON["HIME_NEW_VALUE"]; done = 0 }
+        index($0, key "=") == 1 && !done { print key "=" v; done = 1; next }
+        { print }
+        END { if (!done) print key "=" v }
+    ' "$file" > "$tmp" && mv "$tmp" "$file"
+}
+
+_first_run_api_token() {
+    local tok
+    tok="$(_gen_token)" || tok=""
+    if [ -z "$tok" ]; then
+        warn "Could not generate an API token. Set API_AUTH_TOKEN in .env yourself —"
+        warn "without it the API is open to every device that can reach port 8000."
+        return 0
+    fi
+    _set_env_value API_AUTH_TOKEN "$tok" .env
+    ok "Generated API_AUTH_TOKEN (saved in .env):"
+    echo "    $tok"
+    warn "Paste it into the dashboard when it asks, and into the iOS app (Settings -> Auth Token)."
+}
+
 _native_start() {
     local detached=true
     local _start_pids=()
@@ -267,9 +378,7 @@ _native_start() {
         for pid in ${_start_pids[@]+"${_start_pids[@]}"}; do
             kill "$pid" 2>/dev/null || true
         done
-        pkill -9 -f "python3 -m backend.main" 2>/dev/null || true
-        pkill -9 -f "${PROJECT_ROOT}/frontend" 2>/dev/null || true
-        pkill -9 -f "ios/Server/server.py" 2>/dev/null || true
+        _native_kill_processes
     }
     trap _cleanup_on_fail EXIT
 
@@ -284,6 +393,7 @@ _native_start() {
         if [ -f ".env.example" ]; then
             warn ".env not found, creating from .env.example..."
             cp .env.example .env
+            _first_run_api_token
             warn "Edit .env to add your API keys!"
         else
             fail ".env missing and no .env.example found."
@@ -354,19 +464,19 @@ _native_start() {
     done
     ok "Backend running — http://localhost:8000  (PID $BACKEND_PID)"
 
-    # ── Sync auth token to frontend ─────────────────────────────
-    # So users only need to set API_AUTH_TOKEN in .env once.
-    # Uses sed to update in-place, preserving other settings (e.g. VITE_ALLOWED_HOSTS).
+    # ── Frontend auth token ─────────────────────────────────────
+    # The dashboard asks for the API token at runtime (AuthTokenPrompt) and
+    # keeps it in the browser — it is deliberately NOT written into
+    # frontend/.env.local any more: Vite inlines VITE_* values into the JS it
+    # serves, so anyone who could load the dev server (port 5173, bound to the
+    # LAN) would receive the token. Drop a line left behind by older versions.
     local fe_env="frontend/.env.local"
+    if [ -f "$fe_env" ] && grep -q '^VITE_API_AUTH_TOKEN=' "$fe_env"; then
+        sed -i.bak '/^VITE_API_AUTH_TOKEN=/d' "$fe_env" && rm -f "$fe_env.bak"
+        info "Removed VITE_API_AUTH_TOKEN from $fe_env (the dashboard prompts for it instead)."
+    fi
     if [ -n "${API_AUTH_TOKEN:-}" ]; then
-        if [ -f "$fe_env" ] && grep -q '^VITE_API_AUTH_TOKEN=' "$fe_env"; then
-            sed -i.bak "s|^VITE_API_AUTH_TOKEN=.*|VITE_API_AUTH_TOKEN=${API_AUTH_TOKEN}|" "$fe_env" && rm -f "$fe_env.bak"
-        else
-            echo "VITE_API_AUTH_TOKEN=${API_AUTH_TOKEN}" >> "$fe_env"
-        fi
-    else
-        # Remove stale token line if API_AUTH_TOKEN was cleared
-        [ -f "$fe_env" ] && sed -i.bak '/^VITE_API_AUTH_TOKEN=/d' "$fe_env" && rm -f "$fe_env.bak"
+        info "API auth is ON — paste API_AUTH_TOKEN from .env into the dashboard when it asks."
     fi
 
     # ── Start frontend ───────────────────────────────────────────
@@ -427,14 +537,9 @@ _native_start() {
 _cleanup_start() {
     echo ""
     info "Stopping services..."
-    local bpid="$1" fpid="$2" tpid="$3" wpid="$4"
-    [ -n "$tpid" ] && kill -9 "$tpid" 2>/dev/null || true
-    for pid in $fpid $bpid $wpid; do
-        [ -n "$pid" ] && { pkill -9 -P "$pid" 2>/dev/null || true; kill -9 "$pid" 2>/dev/null || true; }
-    done
-    pkill -9 -f "python3 -m backend.main" 2>/dev/null || true
-    pkill -9 -f "${PROJECT_ROOT}/frontend" 2>/dev/null || true
-    pkill -9 -f "ios/Server/server.py" 2>/dev/null || true
+    local tpid="${3:-}"
+    [ -n "$tpid" ] && kill "$tpid" 2>/dev/null || true
+    _native_kill_processes
     ok "All services stopped."
     exit 0
 }
@@ -483,16 +588,17 @@ _native_restart() {
     cmd_stop
     sleep 2
 
-    # Double-check port 8000 before starting again
-    local pids
-    pids=$(lsof -t -i:8000 2>/dev/null || true)
-    if [ -n "$pids" ]; then
-        warn "Port 8000 still occupied, force-killing..."
-        local pid
-        for pid in $pids; do
-            kill -9 "$pid" 2>/dev/null || true
-        done
-        sleep 1
+    # Double-check port 8000 before starting again (our own stragglers only —
+    # a foreign owner is reported by _require_ports_free in _native_start).
+    local pids pid
+    local -a mine=()
+    pids=$(lsof -t -i:8000 -sTCP:LISTEN 2>/dev/null || true)
+    for pid in $pids; do
+        if _pid_in_project "$pid"; then mine+=("$pid"); fi
+    done
+    if [ "${#mine[@]}" -gt 0 ]; then
+        warn "Port 8000 still occupied, terminating..."
+        _terminate_pids "${mine[@]}"
     fi
 
     if [ "$clean" = true ]; then
@@ -508,6 +614,49 @@ _native_restart() {
 # ══════════════════════════════════════════════════════════════════
 # reset [--yes] — delete agent memory + ingested data
 # ══════════════════════════════════════════════════════════════════
+# Delete the entries directly inside DIR that match the extra `find` args
+# (default: everything). Files written by the Docker containers are often
+# root-owned, and a plain `rm -rf` then dies mid-reset under `set -e`, leaving
+# a half-reset tree. On failure retry as root through a throwaway container,
+# else stop with an actionable message.
+_find_delete() {
+    local dir="$1"; shift
+    [ -d "$dir" ] || return 0
+    if find "$dir" -mindepth 1 -maxdepth 1 "$@" -exec rm -rf {} + 2>/dev/null; then
+        return 0
+    fi
+    if _docker_usable; then
+        warn "Permission denied in $dir — retrying as root via a throwaway container..."
+        if docker run --rm -v "$(cd "$dir" && pwd -P)":/target alpine \
+                find /target -mindepth 1 -maxdepth 1 "$@" -exec rm -rf {} + ; then
+            return 0
+        fi
+    fi
+    fail "Cannot delete files in $dir (permission denied). Docker-created files are often root-owned; run: sudo chown -R \"$(id -un)\" $dir   then retry."
+}
+
+_docker_usable() {
+    command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
+}
+
+# Fail BEFORE deleting anything when a target dir isn't writable and there is
+# no Docker to fall back on (so we never leave a half-reset tree behind).
+_preflight_deletable() {
+    local d bad=""
+    for d in "$@"; do
+        [ -d "$d" ] || continue
+        if [ -n "$(find "$d" -type d ! -writable -print -quit 2>/dev/null)" ]; then
+            bad="$bad $d"
+        fi
+    done
+    [ -z "$bad" ] && return 0
+    if _docker_usable; then
+        info "Some directories are not writable by you (${bad# }); will fall back to a root container for those."
+        return 0
+    fi
+    fail "Not writable:${bad}. Docker-created files are often root-owned; run: sudo chown -R \"$(id -un)\"${bad}   then retry. (Nothing was deleted.)"
+}
+
 cmd_reset() {
     local skip_confirm=false
     for arg in "$@"; do
@@ -526,12 +675,15 @@ cmd_reset() {
         echo "  - All System Logs"
         echo "  - Your learned User Profile (prompts/user.md)"
         echo "  - Docker named volumes (watch-data: raw WatchExporter DB)"
+        echo "  - APNs device tokens (memory/device_tokens.db) and Telegram/WeChat"
+        echo "    poller cursors — the iOS app must re-register for push afterwards"
         echo ""
         echo -en "${YELLOW}Are you absolutely sure? (y/N) ${NC}"
         read -r -n 1 reply
         echo
         [[ ! "$reply" =~ ^[Yy]$ ]] && { echo "Aborted."; exit 0; }
     fi
+    _preflight_deletable memory data/data_stores data/personalised_pages logs ios/Server
 
     # 1. Stop all services AND remove Docker named volumes.
     #    `cmd_stop` alone runs `docker compose down`, which leaves named
@@ -556,7 +708,7 @@ cmd_reset() {
 
     # 2. Agent memory & configuration
     info "Clearing agent memory (memory/)..."
-    rm -rf memory/*
+    _find_delete memory
     mkdir -p memory/agent_states
 
     # Clean legacy root DBs if present
@@ -565,32 +717,32 @@ cmd_reset() {
 
     # 3. Ingested data
     info "Clearing health data stores (data/data_stores/)..."
-    rm -rf data/data_stores/*
+    _find_delete data/data_stores
     mkdir -p data/data_stores
 
     # Also clear the host-side Live source (native mode writes here; in
     # docker mode the real watch.db lives in the hime_watch-data volume
     # handled above).
     info "Clearing Live Watch database (ios/Server/watch.db)..."
-    rm -f ios/Server/watch.db* 2>/dev/null || true
+    _find_delete ios/Server -name 'watch.db*' ! -type d
 
     # Clear any legacy or miscellaneous memory DBs
-    rm -rf data/memory_dbs/* 2>/dev/null || true
+    _find_delete data/memory_dbs || true
 
     ok "Data stores cleared."
 
     # 4. Agent-created apps (preserve _shared UI library)
     info "Clearing personalised pages (data/personalised_pages/)..."
-    find data/personalised_pages -mindepth 1 -maxdepth 1 ! -name '_shared' -exec rm -rf {} +
+    _find_delete data/personalised_pages ! -name '_shared'
     mkdir -p data/personalised_pages/_shared
     ok "Personalised pages cleared."
 
     # 5. Logs
     info "Clearing logs..."
-    rm -rf logs/*
+    _find_delete logs
     mkdir -p logs
     # Legacy logs dir
-    rm -rf data/agent_logs/* 2>/dev/null || true
+    _find_delete data/agent_logs || true
     ok "Logs cleared."
 
     # 6. User Profile
@@ -639,38 +791,42 @@ cmd_forget() {
         echo "  - Live Watch Database (ios/Server/watch.db)"
         echo "  - Your learned User Profile (prompts/user.md)"
         echo "  - Agent's learned experience (prompts/experience.md)"
+        echo "  - APNs device tokens and Telegram/WeChat poller cursors (memory/)"
         echo ""
         echo -en "${YELLOW}Are you sure you want the agent to forget? (y/N) ${NC}"
         read -r -n 1 reply
         echo
         [[ ! "$reply" =~ ^[Yy]$ ]] && { echo "Aborted."; exit 0; }
     fi
+    _preflight_deletable memory data/personalised_pages logs
 
     # 1. Stop all services
     cmd_stop
 
     # 2. Agent memory (History only)
     info "Clearing agent conversation states (memory/agent_states/)..."
-    rm -rf memory/agent_states/*
+    _find_delete memory/agent_states
     mkdir -p memory/agent_states
-    
+    # Keep the "plumbing" that is not conversation memory: iOS push tokens
+    # (forgetting them silently ends push until the app is reopened) and the
+    # Telegram/WeChat long-poll cursors (dropping them replays old updates).
+
     info "Clearing agent activity logs and reports (memory/*.db)..."
-    rm -f memory/*.db 2>/dev/null || true
-    
-    # Also clear session/app state to ensure a fresh session
-    rm -f memory/*.json 2>/dev/null || true
-    
+    # Also clears session/app state (*.json) to ensure a fresh session.
+    _find_delete memory -type f \( -name '*.db' -o -name '*.db-wal' -o -name '*.db-shm' -o -name '*.json' \) \
+        ! -name 'device_tokens.db*' ! -name 'telegram_poller_state.json' ! -name 'weixin_poller_state.json'
+
     # Clean root level legacy DBs if present
     rm -f memory.db memory_db health_db 2>/dev/null || true
 
     # 3. Agent-created apps
     info "Clearing personalised pages (data/personalised_pages/)..."
-    find data/personalised_pages -mindepth 1 -maxdepth 1 ! -name '_shared' -exec rm -rf {} +
+    _find_delete data/personalised_pages ! -name '_shared'
     mkdir -p data/personalised_pages/_shared
 
     # 4. Logs
     info "Clearing server logs..."
-    rm -rf logs/*
+    _find_delete logs
     mkdir -p logs
     
     ok "Agent selective amnesia complete."

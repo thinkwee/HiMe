@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api.js'
 import { parseBackendDate } from '../lib/utils'
+import { useOnActivate } from '../lib/hooks'
 import {
   Database,
   Wrench,
@@ -17,7 +18,7 @@ import {
 } from 'lucide-react'
 import React from 'react'
 
-export default function MemoryAndTools() {
+export default function MemoryAndTools({ active = true }) {
   const { t } = useTranslation()
   const [memoryStats, setMemoryStats] = useState(null)
   const [tools, setTools] = useState([])
@@ -55,6 +56,42 @@ export default function MemoryAndTools() {
     }
   }
 
+  /** Load the rows of `tableName` into the expanded panel. */
+  const inspectTable = async (tableName) => {
+    setInspectLoading(true)
+    setTableData([])
+    setError(null)
+    try {
+      const res = await api.inspectMemoryTable(tableName)
+      // A slower earlier request must not overwrite the table the user is
+      // looking at now.
+      if (expandedTableRef.current !== tableName) return
+      if (res.success) {
+        setTableData(Array.isArray(res.rows) ? res.rows : [])
+      } else {
+        setError(res.error || t('knowledge.failed_inspect', { name: tableName }))
+      }
+    } catch (err) {
+      console.error('Failed to inspect table:', err)
+      if (expandedTableRef.current !== tableName) return
+      setError(err.message || t('knowledge.failed_inspect', { name: tableName }))
+    } finally {
+      if (expandedTableRef.current === tableName) setInspectLoading(false)
+    }
+  }
+
+  // The page stays mounted while hidden, so refetch when its route becomes
+  // active again (the agent writes to memory in the background).
+  useOnActivate(active, () => {
+    fetchData()
+    if (expandedTableRef.current) inspectTable(expandedTableRef.current)
+  })
+
+  const handleRefresh = () => {
+    fetchData()
+    if (expandedTableRef.current) inspectTable(expandedTableRef.current)
+  }
+
   // Load once on mount. Not memoized into the dependency array on purpose:
   // fetchData closes over `t`, so a language switch would re-run it and flash
   // the loading skeleton over data that is already correct.
@@ -78,26 +115,7 @@ export default function MemoryAndTools() {
 
     setExpandedTable(tableName)
     expandedTableRef.current = tableName
-    setInspectLoading(true)
-    setTableData([])
-    setError(null)
-    try {
-      const res = await api.inspectMemoryTable(tableName)
-      // A slower earlier request must not overwrite the table the user is
-      // looking at now.
-      if (expandedTableRef.current !== tableName) return
-      if (res.success) {
-        setTableData(Array.isArray(res.rows) ? res.rows : [])
-      } else {
-        setError(res.error || t('knowledge.failed_inspect', { name: tableName }))
-      }
-    } catch (err) {
-      console.error('Failed to inspect table:', err)
-      if (expandedTableRef.current !== tableName) return
-      setError(err.message || t('knowledge.failed_inspect', { name: tableName }))
-    } finally {
-      if (expandedTableRef.current === tableName) setInspectLoading(false)
-    }
+    await inspectTable(tableName)
   }
 
   return (
@@ -106,8 +124,21 @@ export default function MemoryAndTools() {
       <div className="flex items-center justify-between gap-4">
         <h2 className="text-3xl font-black text-gray-900 tracking-tight">{t('knowledge.title')}</h2>
 
+        <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={handleRefresh}
+          disabled={loading}
+          aria-label={t('common.refresh')}
+          title={t('common.refresh')}
+          className="p-2 rounded-xl border border-gray-200 bg-white text-gray-500 hover:text-gray-800 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+        >
+          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+        </button>
         <div className="flex items-center space-x-2 bg-gray-100 p-1 rounded-xl border border-gray-200">
           <button
+            type="button"
+            aria-pressed={activeTab === 'memory'}
             onClick={() => setActiveTab('memory')}
             className={`px-5 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-2 ${activeTab === 'memory' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:bg-gray-50'
               }`}
@@ -115,6 +146,8 @@ export default function MemoryAndTools() {
             <Database className="w-3.5 h-3.5" /> {t('knowledge.tab_memory')}
           </button>
           <button
+            type="button"
+            aria-pressed={activeTab === 'tools'}
             onClick={() => setActiveTab('tools')}
             className={`px-5 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-2 ${activeTab === 'tools' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:bg-gray-50'
               }`}
@@ -122,11 +155,13 @@ export default function MemoryAndTools() {
             <Wrench className="w-3.5 h-3.5" /> {t('knowledge.tab_tools')}
           </button>
         </div>
+        </div>
       </div>
 
       {error && (
-        <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700 font-medium">
-          {error}
+        <div role="alert" className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700 font-medium flex items-center gap-3">
+          <span className="flex-1 break-words">{error}</span>
+          <button type="button" onClick={handleRefresh} className="underline font-semibold">{t('common.retry')}</button>
         </div>
       )}
 
@@ -236,6 +271,8 @@ export default function MemoryAndTools() {
                               </td>
                               <td className="px-6 py-4">
                                 <button
+                                  type="button"
+                                  aria-expanded={isExpanded}
                                   onClick={() => toggleExpand(name)}
                                   className={`flex items-center gap-1.5 text-xs font-black transition-all ${isExpanded ? 'text-primary-700' : 'text-primary-600'
                                     }`}
@@ -324,23 +361,6 @@ export default function MemoryAndTools() {
           )}
         </div>
       </div>
-
-      <style>{`
-        .custom-scrollbar::-webkit-scrollbar {
-          width: 6px;
-          height: 6px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-track {
-          background: transparent;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-          background: #e5e7eb;
-          border-radius: 10px;
-        }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-          background: #d1d5db;
-        }
-      `}</style>
     </div>
   )
 }

@@ -119,7 +119,7 @@ describe('ReportsView', () => {
   // Error handling — API failure
   // ------------------------------------------------------------------ //
 
-  it('shows empty state on API error', async () => {
+  it('shows an error banner (not an empty state) on API error', async () => {
     api.queryAgentMemory.mockImplementation((queryType) => {
       if (queryType === 'reports') {
         return Promise.reject(new Error('Network error'))
@@ -130,15 +130,18 @@ describe('ReportsView', () => {
     renderReports()
 
     await waitFor(() => {
-      expect(screen.getByText('No reports found')).toBeInTheDocument()
+      expect(screen.getByRole('alert')).toHaveTextContent(/Couldn't load reports/)
     })
+    expect(screen.queryByText('No reports found')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
   })
 
   // ------------------------------------------------------------------ //
   // Error handling — success: false
   // ------------------------------------------------------------------ //
 
-  it('shows empty state when API returns success: false', async () => {
+  it('shows the server error and recovers on Retry when API returns success: false', async () => {
+    const user = userEvent.setup()
     api.queryAgentMemory.mockImplementation((queryType) => {
       if (queryType === 'reports') {
         return Promise.resolve({ success: false, error: 'Agent not running' })
@@ -149,8 +152,16 @@ describe('ReportsView', () => {
     renderReports()
 
     await waitFor(() => {
-      expect(screen.getByText('No reports found')).toBeInTheDocument()
+      expect(screen.getByRole('alert')).toHaveTextContent('Agent not running')
     })
+
+    // Retry succeeds this time: the banner goes away and the empty state shows.
+    api.queryAgentMemory.mockImplementation(() => Promise.resolve({ success: true, data: [] }))
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    })
+    expect(screen.getByText('No reports found')).toBeInTheDocument()
   })
 
   // ------------------------------------------------------------------ //

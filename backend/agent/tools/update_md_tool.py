@@ -19,6 +19,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import threading
+from pathlib import Path
 from typing import Any
 
 from ..prompt_loader import PROMPTS_DIR as _PROMPTS_DIR  # repo-anchored, not CWD-relative
@@ -75,6 +78,51 @@ def _split_header_body(existing: str, marker: str, default_header: str) -> tuple
     return default_header.rstrip(), existing.strip()
 
 
+_md_lock = threading.Lock()
+
+
+def _apply_update(
+    path: Path, marker: str, default_header: str, op: str,
+    content: str | None, old_string: str | None, new_string: str | None,
+) -> dict[str, Any] | str:
+    """Apply one edit; return the new body, or an error result dict."""
+    with _md_lock:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        existing = path.read_text("utf-8") if path.exists() else default_header
+        header, body = _split_header_body(existing, marker, default_header)
+
+        if op == "append":
+            if not content or not content.strip():
+                return {"success": False, "error": "op=append requires non-empty content."}
+            new_body = (body.rstrip() + "\n\n" + content.strip()).lstrip("\n")
+        elif op == "replace":
+            if content is None:
+                return {"success": False, "error": "op=replace requires content (use empty string to clear)."}
+            new_body = content.strip()
+        else:  # op == "edit"
+            if not old_string:
+                return {"success": False, "error": "op=edit requires old_string."}
+            if new_string is None:
+                return {"success": False, "error": "op=edit requires new_string (use empty string to delete)."}
+            if old_string not in body:
+                return {
+                    "success": False,
+                    "error": "old_string not found in editable body. Read the current content in your system prompt and pass an exact match.",
+                }
+            if body.count(old_string) > 1:
+                return {
+                    "success": False,
+                    "error": "old_string matches multiple locations. Include more surrounding context so it is unique.",
+                }
+            new_body = body.replace(old_string, new_string, 1)
+
+        new_text = header.rstrip() + "\n\n" + new_body.strip() + "\n"
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(new_text, "utf-8")
+        os.replace(tmp, path)
+        return new_body
+
+
 class UpdateMdTool(BaseTool):
     """Edit the editable body of ``prompts/user.md`` or ``prompts/experience.md``."""
 
@@ -104,45 +152,18 @@ class UpdateMdTool(BaseTool):
         try:
             path = _PROMPTS_DIR / file
             cfg = _FILE_CONFIG[file]
-            marker = cfg["marker"]
-            default_header = cfg["default_header"]
 
-            path.parent.mkdir(parents=True, exist_ok=True)
-
-            if path.exists():
-                existing = await asyncio.to_thread(path.read_text, "utf-8")
-            else:
-                existing = default_header
-
-            header, body = _split_header_body(existing, marker, default_header)
-
-            if op == "append":
-                if not content or not content.strip():
-                    return {"success": False, "error": "op=append requires non-empty content."}
-                new_body = (body.rstrip() + "\n\n" + content.strip()).lstrip("\n")
-            elif op == "replace":
-                if content is None:
-                    return {"success": False, "error": "op=replace requires content (use empty string to clear)."}
-                new_body = content.strip()
-            else:  # op == "edit"
-                if not old_string:
-                    return {"success": False, "error": "op=edit requires old_string."}
-                if new_string is None:
-                    return {"success": False, "error": "op=edit requires new_string (use empty string to delete)."}
-                if old_string not in body:
-                    return {
-                        "success": False,
-                        "error": "old_string not found in editable body. Read the current content in your system prompt and pass an exact match.",
-                    }
-                if body.count(old_string) > 1:
-                    return {
-                        "success": False,
-                        "error": "old_string matches multiple locations. Include more surrounding context so it is unique.",
-                    }
-                new_body = body.replace(old_string, new_string, 1)
-
-            new_text = header.rstrip() + "\n\n" + new_body.strip() + "\n"
-            await asyncio.to_thread(path.write_text, new_text, "utf-8")
+            # The whole read-modify-write runs in one worker thread under a
+            # lock, and the write is temp-file + os.replace: two concurrent
+            # appends can't lose each other's text, and a crash mid-write can't
+            # leave a truncated prompt file.
+            outcome = await asyncio.to_thread(
+                _apply_update, path, cfg["marker"], cfg["default_header"],
+                op, content, old_string, new_string,
+            )
+            if isinstance(outcome, dict):
+                return outcome
+            new_body = outcome
 
             logger.info("update_md: op=%s file=%s new_body_chars=%d", op, file, len(new_body))
             return {

@@ -13,17 +13,19 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import math
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query
+import numpy as np
+import pandas as pd
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
 from ..data_readers import BaseDataReader, create_reader
 from ..utils import dataframe_to_json_safe
+from .agent_state import require_valid_ids
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/data", tags=["data"])
+router = APIRouter(prefix="/api/data", tags=["data"], dependencies=[Depends(require_valid_ids)])
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +65,8 @@ async def reload_reader():
         await asyncio.to_thread(_ensure_reader)
         return {"success": True, "data_source": "live"}
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.error("Data reader reload failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to reload data reader.") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -85,8 +88,8 @@ async def list_users(datasets: list[str] | None = Query(None)):
             "data_source":  "live",
         }
     except Exception as exc:
-        logger.error("Error listing users: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.error("Error listing users: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to list users.") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -129,8 +132,8 @@ async def get_user_features(
             "data_source":  "live",
         }
     except Exception as exc:
-        logger.error("Error fetching features for %s: %s", pid, exc)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.error("Error fetching features for %s: %s", pid, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to fetch features.") from exc
 
 
 @router.get("/inspect/{pid}")
@@ -177,7 +180,7 @@ async def inspect_user_data(
 
     except Exception as exc:
         logger.error("Error inspecting data for %s/%s: %s", pid, feature_type, exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail="Failed to inspect data.") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -222,8 +225,8 @@ async def get_feature_metadata():
         }
         return {"success": True, "features": features, "data_source": "live"}
     except Exception as exc:
-        logger.error("Error loading feature metadata: %s", exc)
-        return {"success": False, "features": {}, "error": str(exc)}
+        logger.error("Error loading feature metadata: %s", exc, exc_info=True)
+        return {"success": False, "features": {}, "error": "Failed to load feature metadata."}
 
 
 # ---------------------------------------------------------------------------
@@ -243,8 +246,8 @@ async def get_storage_count():
         total = await asyncio.to_thread(reader.get_total_sample_count)
         return {"success": True, "count": int(total)}
     except Exception as exc:
-        logger.error("Storage count error: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.error("Storage count error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to count samples.") from exc
 
 
 @router.get("/dashboard")
@@ -261,22 +264,23 @@ async def get_dashboard_data(minutes: int = Query(1440, ge=10, le=43200)):
 
         async def _load_feature(ft: str):
             try:
-                df = await asyncio.to_thread(
-                    lambda _ft=ft: reader.load_feature_data(
+                def _load_points(_ft: str = ft) -> list[dict]:
+                    df = reader.load_feature_data(
                         ["LiveUser"], _ft, minutes=minutes, limit=_MAX_POINTS_PER_FEATURE
                     )
-                )
-                if df.empty:
-                    return ft, []
-                points = []
-                for _, row in df.iterrows():
-                    ts = float(row["ts"])
-                    v = float(row["value"])
-                    # NaN/Inf readings aren't plottable and break JSON
-                    # serialization (stdlib json.dumps rejects them) — skip.
-                    if math.isfinite(ts) and math.isfinite(v):
-                        points.append({"ts": ts, "v": v})
-                return ft, points
+                    if df.empty:
+                        return []
+                    # Vectorised (no per-row iterrows). NaN/Inf readings aren't
+                    # plottable and break JSON serialization — drop them.
+                    ts = pd.to_numeric(df["ts"], errors="coerce").to_numpy(dtype=float)
+                    v = pd.to_numeric(df["value"], errors="coerce").to_numpy(dtype=float)
+                    keep = np.isfinite(ts) & np.isfinite(v)
+                    return [
+                        {"ts": t, "v": x}
+                        for t, x in zip(ts[keep].tolist(), v[keep].tolist(), strict=True)
+                    ]
+
+                return ft, await asyncio.to_thread(_load_points)
             except Exception:
                 return ft, []
 
@@ -284,8 +288,8 @@ async def get_dashboard_data(minutes: int = Query(1440, ge=10, le=43200)):
         result: dict = {ft: pts for ft, pts in results if pts}
         return {"success": True, "features": result, "count": len(result)}
     except Exception as exc:
-        logger.error("Dashboard data error: %s", exc)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.error("Dashboard data error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to load dashboard data.") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -301,7 +305,8 @@ async def _init_or_raise() -> BaseDataReader:
     try:
         return await asyncio.to_thread(_ensure_reader)
     except Exception as exc:
+        logger.error("Data reader initialisation failed: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Data reader initialisation failed: {exc}",
+            detail="Data reader initialisation failed.",
         ) from exc

@@ -22,9 +22,12 @@ struct MarkdownView: View {
     var foreground: Color = .primary
 
     var body: some View {
+        // Parsed once per distinct text (see `MarkdownParser.cachedParse`), not
+        // on every render — body re-runs on any ancestor invalidation.
+        let blocks = MarkdownParser.cachedParse(text)
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(MarkdownParser.parse(text).enumerated()), id: \.offset) { _, block in
-                block.view(foreground: foreground)
+            ForEach(blocks.indices, id: \.self) { i in
+                blocks[i].view(foreground: foreground)
             }
         }
     }
@@ -60,7 +63,8 @@ enum MarkdownBlock {
 
         case let .bullets(items):
             VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                ForEach(items.indices, id: \.self) { i in
+                    let item = items[i]
                     HStack(alignment: .firstTextBaseline, spacing: 7) {
                         Text("•").foregroundColor(foreground.opacity(0.55))
                         inlineMarkdown(item)
@@ -74,7 +78,8 @@ enum MarkdownBlock {
 
         case let .ordered(items):
             VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(items.enumerated()), id: \.offset) { _, pair in
+                ForEach(items.indices, id: \.self) { i in
+                    let pair = items[i]
                     HStack(alignment: .firstTextBaseline, spacing: 7) {
                         Text("\(pair.marker).")
                             .monospacedDigit()
@@ -114,7 +119,8 @@ enum MarkdownBlock {
             ScrollView(.horizontal, showsIndicators: false) {
                 Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
                     GridRow {
-                        ForEach(Array(headers.enumerated()), id: \.offset) { _, h in
+                        ForEach(headers.indices, id: \.self) { i in
+                            let h = headers[i]
                             inlineMarkdown(h)
                                 .font(.footnote.weight(.semibold))
                                 .foregroundColor(foreground)
@@ -122,9 +128,11 @@ enum MarkdownBlock {
                         }
                     }
                     Divider().gridCellColumns(max(headers.count, 1))
-                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    ForEach(rows.indices, id: \.self) { r in
+                        let row = rows[r]
                         GridRow {
-                            ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
+                            ForEach(row.indices, id: \.self) { c in
+                                let cell = row[c]
                                 inlineMarkdown(cell)
                                     .font(.footnote)
                                     .foregroundColor(foreground.opacity(0.9))
@@ -184,6 +192,28 @@ func inlineMarkdown(_ s: String) -> Text {
 // MARK: - Parser
 
 enum MarkdownParser {
+    /// Reference box so parsed blocks (an enum array) can live in an NSCache.
+    private final class Parsed {
+        let blocks: [MarkdownBlock]
+        init(_ blocks: [MarkdownBlock]) { self.blocks = blocks }
+    }
+
+    private static let cache: NSCache<NSString, Parsed> = {
+        let c = NSCache<NSString, Parsed>()
+        c.countLimit = 300
+        return c
+    }()
+
+    /// `parse` memoised by the exact source text. A streamed message that grows
+    /// simply misses the cache for each new text; finished messages hit it.
+    static func cachedParse(_ text: String) -> [MarkdownBlock] {
+        let key = text as NSString
+        if let hit = cache.object(forKey: key) { return hit.blocks }
+        let blocks = parse(text)
+        cache.setObject(Parsed(blocks), forKey: key)
+        return blocks
+    }
+
     static func parse(_ text: String) -> [MarkdownBlock] {
         var blocks: [MarkdownBlock] = []
         let lines = text.components(separatedBy: "\n")
@@ -386,12 +416,24 @@ enum MarkdownParser {
 
 /// Renders a Markdown image. Charts embedded in reports arrive as self-contained
 /// `data:` URIs (decoded locally); a server path falls back to an authed fetch.
+/// Absolute http(s) URLs are loaded WITHOUT credentials unless they point at the
+/// configured API host. Decoded images are cached so row recycling is free.
 private struct MarkdownImageView: View {
     let alt: String
     let src: String
     @State private var image: UIImage?
     @State private var failed = false
     @State private var showFullScreen = false
+
+    init(alt: String, src: String) {
+        self.alt = alt
+        self.src = src
+        _image = State(initialValue: ChatImageCache.image(for: Self.cacheKey(src)))
+    }
+
+    private static func cacheKey(_ src: String) -> String {
+        src.hasPrefix("data:") ? "md-data:\(src.count):\(src.hashValue)" : "md:\(src)"
+    }
 
     var body: some View {
         Group {
@@ -431,18 +473,24 @@ private struct MarkdownImageView: View {
     }
 
     private func load() async {
-        if src.hasPrefix("data:") {
-            guard let comma = src.firstIndex(of: ","),
-                  let data = Data(base64Encoded: String(src[src.index(after: comma)...])),
-                  let ui = UIImage(data: data) else { failed = true; return }
-            image = ui
+        let key = Self.cacheKey(src)
+        if let cached = ChatImageCache.image(for: key) {
+            image = cached
             return
         }
-        let urlString = src.hasPrefix("http") ? src : "\(ServerConfig.load().apiBaseURL)\(src)"
-        guard let url = URL(string: urlString) else { failed = true; return }
-        if let (data, _) = try? await URLSession.shared.data(for: APIClient.request(url)),
-           let ui = UIImage(data: data) {
-            image = ui
+        let loaded: UIImage?
+        if src.hasPrefix("data:") {
+            loaded = await ChatImageCache.decodeDataURI(src)
+        } else {
+            let urlString = src.hasPrefix("http") ? src : "\(ServerConfig.load().apiBaseURL)\(src)"
+            guard let url = URL(string: urlString) else { failed = true; return }
+            // Only the API server may see the bearer token; any other absolute
+            // URL (agent-authored markdown) is fetched anonymously.
+            loaded = await ChatImageCache.fetch(url, authed: ChatImageCache.isAPIHost(url))
+        }
+        if let loaded {
+            ChatImageCache.store(loaded, for: key)
+            image = loaded
         } else {
             failed = true
         }

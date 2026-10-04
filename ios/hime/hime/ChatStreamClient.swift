@@ -10,18 +10,47 @@
 //  (offline). The app closes this socket when it backgrounds, so presence is
 //  an accurate online signal.
 //
+//  The client owns its own liveness: while a connection is wanted (between
+//  `connect()` and `disconnect()`) it reconnects with exponential backoff on
+//  any receive/ping failure, server close, server `error` frame, heartbeat
+//  silence, or network-path change. Heartbeat contract with the backend: every
+//  20s we send a text frame `{"type":"ping"}` and the server answers
+//  `{"type":"pong"}`; if nothing at all arrives for 45s the socket is dead.
+//
 
 import Foundation
+import Network
 
 @MainActor
 final class ChatStreamClient: NSObject {
     private var task: URLSessionWebSocketTask?
     private var session: URLSession?
-    private var pingTimer: Timer?
-    private var isConnected = false
+    private var tickTimer: Timer?
+    private var reconnectTask: Task<Void, Never>?
+    private var pathMonitor: NWPathMonitor?
+    private var lastPathKey: String?
+
+    /// True between `connect()` and `disconnect()` — i.e. the view wants a live socket.
+    private var wantsConnection = false
+    /// True once the current socket has delivered a real (non-error) message.
+    private var isOpen = false
+    /// Bumped whenever a socket is created or dropped, so callbacks from a
+    /// stale socket (late receive failure, old ping completion) are ignored.
+    private var generation = 0
+    private var backoff: TimeInterval = ChatStreamClient.minBackoff
+    private var lastReceive = Date()
+    private var lastPing = Date.distantPast
+
+    private static let minBackoff: TimeInterval = 1
+    private static let maxBackoff: TimeInterval = 30
+    private static let pingInterval: TimeInterval = 20
+    private static let silenceLimit: TimeInterval = 45
+    private static let tickInterval: TimeInterval = 5
 
     /// Called on the main actor for every decoded agent event.
     var onEvent: (([String: Any]) -> Void)?
+    /// Called on the main actor each time a (re)connection is confirmed live.
+    var onConnected: (() -> Void)?
 
     /// Map the API base URL (http→ws, https→wss) and append the stream path.
     private func streamURL() -> URL? {
@@ -40,8 +69,40 @@ final class ChatStreamClient: NSObject {
         return comps?.url
     }
 
+    // MARK: - Public lifecycle
+
     func connect() {
-        guard !isConnected, let url = streamURL() else { return }
+        wantsConnection = true
+        startPathMonitor()
+        if task != nil {
+            // Already connected or connecting. A socket that went silent while
+            // the app was suspended is replaced instead of trusted.
+            if Date().timeIntervalSince(lastReceive) > Self.silenceLimit { reconnectNow() }
+            return
+        }
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        open()
+    }
+
+    func disconnect() {
+        wantsConnection = false
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        pathMonitor?.cancel()
+        pathMonitor = nil
+        lastPathKey = nil
+        isOpen = false
+        backoff = Self.minBackoff
+        dropSocket()
+    }
+
+    // MARK: - Socket management
+
+    private func open() {
+        guard wantsConnection, task == nil, let url = streamURL() else { return }
+        generation += 1
+        let gen = generation
         let cfg = URLSessionConfiguration.default
         cfg.timeoutIntervalForRequest = 60
         let session = URLSession(configuration: cfg)
@@ -57,58 +118,167 @@ final class ChatStreamClient: NSObject {
         let task = session.webSocketTask(with: req)
         self.session = session
         self.task = task
-        isConnected = true
+        isOpen = false
+        lastReceive = Date()
+        lastPing = .distantPast
         task.resume()
-        receiveLoop()
-        startPing()
+        receiveLoop(gen)
+        startTimer(gen)
+        sendPing(gen)
     }
 
-    func disconnect() {
-        isConnected = false
-        pingTimer?.invalidate()
-        pingTimer = nil
+    /// Tear down the current socket, timer and session. Bumps `generation` so
+    /// any in-flight callback from the old socket is ignored.
+    private func dropSocket() {
+        generation += 1
+        tickTimer?.invalidate()
+        tickTimer = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         session?.invalidateAndCancel()
         session = nil
     }
 
-    private func startPing() {
-        pingTimer?.invalidate()
-        pingTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            Task { @MainActor in self.task?.sendPing { _ in } }
+    /// The current socket is unusable — drop it and retry with backoff.
+    private func socketFailed(_ gen: Int) {
+        guard gen == generation else { return }
+        isOpen = false
+        dropSocket()
+        scheduleReconnect()
+    }
+
+    private func scheduleReconnect() {
+        guard wantsConnection, reconnectTask == nil else { return }
+        let delay = backoff
+        backoff = min(backoff * 2, Self.maxBackoff)
+        reconnectTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled, let self else { return }
+            self.reconnectTask = nil
+            self.open()
         }
     }
 
-    private func receiveLoop() {
-        task?.receive { [weak self] result in
+    /// Replace the socket immediately (network change / stale after resume).
+    private func reconnectNow() {
+        guard wantsConnection else { return }
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        isOpen = false
+        backoff = Self.minBackoff
+        dropSocket()
+        open()
+    }
+
+    private func markOpen(_ gen: Int) {
+        guard gen == generation, !isOpen else { return }
+        isOpen = true
+        backoff = Self.minBackoff
+        onConnected?()
+    }
+
+    // MARK: - Heartbeat
+
+    private func startTimer(_ gen: Int) {
+        tickTimer?.invalidate()
+        tickTimer = Timer.scheduledTimer(withTimeInterval: Self.tickInterval, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor in self.tick(gen) }
+        }
+    }
+
+    private func tick(_ gen: Int) {
+        guard gen == generation else { return }
+        let now = Date()
+        if now.timeIntervalSince(lastReceive) > Self.silenceLimit {
+            socketFailed(gen)
+            return
+        }
+        if now.timeIntervalSince(lastPing) >= Self.pingInterval { sendPing(gen) }
+    }
+
+    /// Text-frame ping (answered by the server's `pong`) plus a protocol-level
+    /// ping; a failure of either means the socket is gone.
+    private func sendPing(_ gen: Int) {
+        guard gen == generation, let task else { return }
+        lastPing = Date()
+        task.send(.string("{\"type\":\"ping\"}")) { [weak self] error in
+            guard error != nil, let self else { return }
+            Task { @MainActor in self.socketFailed(gen) }
+        }
+        task.sendPing { [weak self] error in
+            guard error != nil, let self else { return }
+            Task { @MainActor in self.socketFailed(gen) }
+        }
+    }
+
+    // MARK: - Receive
+
+    private func receiveLoop(_ gen: Int) {
+        guard gen == generation, let task else { return }
+        task.receive { [weak self] result in
             guard let self else { return }
             Task { @MainActor in
-                guard self.isConnected else { return }
+                guard gen == self.generation else { return }
                 switch result {
                 case .failure:
-                    // Socket dropped — let the view model reconnect on next appear/foreground.
-                    self.isConnected = false
+                    self.socketFailed(gen)
                 case .success(let message):
+                    self.lastReceive = Date()
+                    var text: String?
                     switch message {
-                    case .string(let text):
-                        self.handle(text)
-                    case .data(let data):
-                        if let s = String(data: data, encoding: .utf8) { self.handle(s) }
-                    @unknown default:
-                        break
+                    case .string(let s): text = s
+                    case .data(let d): text = String(data: d, encoding: .utf8)
+                    @unknown default: break
                     }
-                    self.receiveLoop()
+                    if let text, self.handle(text) { self.markOpen(gen) }
+                    // After a server `error` frame the socket was failed and
+                    // `generation` bumped, so this is a no-op.
+                    self.receiveLoop(gen)
                 }
             }
         }
     }
 
-    private func handle(_ text: String) {
+    /// Decode one frame and forward it. Returns false when the frame was a
+    /// server `error` (the socket is failed and a reconnect scheduled).
+    private func handle(_ text: String) -> Bool {
+        // Cheap prefilter: pong / periodic status snapshots carry nothing the
+        // chat UI needs, so skip the JSON decode for them.
+        let head = text.prefix(48)
+        if head.contains("\"pong\"") || head.contains("\"status_update\"") { return true }
         guard let data = text.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return }
+        else { return true }
+        // Only an `error` before the socket is confirmed live is a connection
+        // failure (e.g. an old server rejecting the stream). Once open, `error`
+        // also carries ordinary LLM/agent errors, which must not drop the socket.
+        if (obj["type"] as? String) == "error", !isOpen {
+            socketFailed(generation)
+            return false
+        }
         onEvent?(obj)
+        return true
+    }
+
+    // MARK: - Network path
+
+    /// Force a fresh socket when the network changes (Wi-Fi ↔ cellular, coming
+    /// back online) — a TCP connection on the old path never reports failure.
+    private func startPathMonitor() {
+        guard pathMonitor == nil else { return }
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            let satisfied = path.status == .satisfied
+            let key = "\(satisfied)-" + path.availableInterfaces.map { "\($0.type)" }.joined(separator: ",")
+            Task { @MainActor in
+                guard let self else { return }
+                let changed = self.lastPathKey != nil && self.lastPathKey != key
+                self.lastPathKey = key
+                if changed && satisfied { self.reconnectNow() }
+            }
+        }
+        monitor.start(queue: DispatchQueue(label: "hime.chat.path"))
+        pathMonitor = monitor
     }
 }

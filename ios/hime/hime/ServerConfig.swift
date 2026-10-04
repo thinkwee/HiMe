@@ -72,7 +72,11 @@ struct ServerConfig {
         if host.hasSuffix(".local") { return true }
         // Bare IPv4 dotted-decimal.
         let parts = host.split(separator: ".")
-        return parts.count == 4 && parts.allSatisfy { $0.allSatisfy(\.isNumber) }
+        if parts.count == 4 && parts.allSatisfy({ $0.allSatisfy(\.isNumber) }) { return true }
+        // Bare single-label hostnames ("homelab", "nas") only resolve on a LAN
+        // (mDNS / router DNS); there is no public "watch.homelab" to tunnel to.
+        // IPv6 literals contain ':' and are not single-label names.
+        return !host.isEmpty && !host.contains(".") && !host.contains(":")
     }
 
     /// WebSocket URL for the Watch Exporter data sync.
@@ -154,8 +158,10 @@ struct ServerConfig {
         }
     }
 
-    /// Re-POST a stashed survey once a token is available. No-op if nothing is
-    /// pending, there is still no token, or a flush is already in progress.
+    /// Re-POST a stashed survey. No-op if nothing is pending or a flush is
+    /// already in progress. Works without a token too (local servers run with
+    /// auth disabled); a 401 from an auth-enabled server simply restores the
+    /// stash so the next launch / Settings token-save retries.
     ///
     /// Idempotency: the stash is claimed (removed) BEFORE the POST so a
     /// concurrent flush sees nothing and can't double-submit; on any failure
@@ -163,8 +169,7 @@ struct ServerConfig {
     @MainActor
     static func flushPendingSurvey() async {
         guard !isFlushingSurvey else { return }
-        guard !authToken.isEmpty,
-              let data = UserDefaults.standard.data(forKey: pendingSurveyKey) else { return }
+        guard let data = UserDefaults.standard.data(forKey: pendingSurveyKey) else { return }
         isFlushingSurvey = true
         defer { isFlushingSurvey = false }
 
@@ -196,7 +201,14 @@ struct ServerConfig {
         let raw = UserDefaults.standard.string(forKey: key)
             ?? migrateLegacy()
             ?? defaultAddress
-        return ServerConfig(baseAddress: raw)
+        return ServerConfig(baseAddress: normalized(raw))
+    }
+
+    /// Trim whitespace; an empty address falls back to the default instead of
+    /// producing nonsense URLs like "wss://watch.".
+    static func normalized(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? defaultAddress : trimmed
     }
 
     /// Save to UserDefaults.

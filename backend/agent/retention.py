@@ -10,6 +10,8 @@ module implements a daily sweep that deletes rows older than
 * Per-user memory DBs     (``memory/*.db``)                   → ``reports``,
                                                                  ``message_evidence``,
                                                                  ``activity_log``
+* Per-user media files    (``data/data_stores/<uid>/uploads`` and
+                           ``.../chat_images``)               → files by mtime
 
 The loop follows the HIME "robustness with fallbacks" principle: a failure
 pruning one table or one DB must never abort the rest of the sweep. Each
@@ -36,6 +38,10 @@ RETENTION_SWEEP_INTERVAL_SECONDS: int = 24 * 60 * 60
 
 # Per-memory-DB tables with ISO-8601 ``created_at`` columns.
 _MEMORY_TABLES: tuple[str, ...] = ("reports", "message_evidence", "activity_log")
+
+
+# Per-user subdirectories of DATA_STORE_PATH that hold user/agent media files.
+_MEDIA_SUBDIRS: tuple[str, ...] = ("uploads", "chat_images")
 
 
 def _repo_root() -> Path:
@@ -173,6 +179,36 @@ async def _prune_memory_dbs(cutoff_iso: str) -> dict[str, int]:
     return results
 
 
+def _prune_media_files(store_dir: Path, cutoff_epoch: float) -> dict[str, int]:
+    """Delete media files older than the cutoff from every user's media dirs.
+
+    Inbound chat images (``uploads/``) and persisted agent charts
+    (``chat_images/``) are plain files that no DB sweep would ever reap.
+    Blocking — call via ``asyncio.to_thread``. Never raises.
+    """
+    results: dict[str, int] = {}
+    if not store_dir.is_dir():
+        return results
+    for user_dir in sorted(p for p in store_dir.iterdir() if p.is_dir()):
+        for sub in _MEDIA_SUBDIRS:
+            media_dir = user_dir / sub
+            if not media_dir.is_dir():
+                continue
+            deleted = 0
+            try:
+                for f in media_dir.iterdir():
+                    try:
+                        if f.is_file() and f.stat().st_mtime < cutoff_epoch:
+                            f.unlink()
+                            deleted += 1
+                    except OSError as e:
+                        logger.warning("retention: could not remove %s: %s", f, e)
+            except OSError as e:
+                logger.warning("retention: cannot scan %s: %s", media_dir, e)
+            results[f"{user_dir.name}/{sub}"] = deleted
+    return results
+
+
 async def prune_expired_data(retention_days: int) -> dict[str, int]:
     """
     Run one retention sweep across every relevant SQLite database.
@@ -214,6 +250,13 @@ async def prune_expired_data(retention_days: int) -> dict[str, int]:
         results.update(await _prune_memory_dbs(cutoff_iso))
     except Exception as e:  # pragma: no cover — defensive
         logger.error("retention: memory sweep failed: %s", e, exc_info=True)
+
+    try:
+        results.update(await asyncio.to_thread(
+            _prune_media_files, Path(settings.DATA_STORE_PATH), cutoff_epoch,
+        ))
+    except Exception as e:  # pragma: no cover — defensive
+        logger.error("retention: media sweep failed: %s", e, exc_info=True)
 
     total = sum(results.values())
     logger.info(

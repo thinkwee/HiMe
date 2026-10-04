@@ -1,6 +1,7 @@
+import { memo } from 'react'
 import { BrowserRouter, NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import {
-  Activity, BarChart3, Bot, FileText, Database, HardDrive, MessageSquare, AppWindow, Sparkles
+  Activity, AlertTriangle, Bot, FileText, Database, HardDrive, MessageSquare, AppWindow, Sparkles, X
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
@@ -35,6 +36,18 @@ const NAV_ITEMS = [
 // Prevents WebSocket/stream/state loss when switching pages.
 // -----------------------------------------------------------------------
 
+// Pages are memoised so a re-render of the shell (it reads live stream state
+// for the sidebar indicator) doesn't cascade into every mounted page. Each
+// page gets an `active` prop so it can refetch on activation and pause its
+// timers while hidden.
+const DashboardPage = memo(Dashboard)
+const AgentPage = memo(AutonomousAgentMonitor)
+const ReportsPage = memo(ReportsView)
+const PromptsPage = memo(PromptEditor)
+const SkillsPage = memo(Skills)
+const KnowledgePage = memo(KnowledgeBase)
+const PagesPage = memo(PersonalisedPages)
+
 function PersistentViews() {
   const location = useLocation()
   const path = location.pathname
@@ -42,27 +55,65 @@ function PersistentViews() {
   return (
     <>
       <div className={path === '/' ? 'block' : 'hidden'}>
-        <Dashboard />
+        <DashboardPage active={path === '/'} />
       </div>
       <div className={path === '/agent' ? 'block' : 'hidden'}>
-        <AutonomousAgentMonitor />
+        <AgentPage active={path === '/agent'} />
       </div>
       <div className={path === '/reports' ? 'block' : 'hidden'}>
-        <ReportsView />
+        <ReportsPage active={path === '/reports'} />
       </div>
       <div className={path === '/prompts' ? 'block' : 'hidden'}>
-        <PromptEditor />
+        <PromptsPage active={path === '/prompts'} />
       </div>
       <div className={path === '/skills' ? 'block' : 'hidden'}>
-        <Skills />
+        <SkillsPage active={path === '/skills'} />
       </div>
       <div className={path === '/knowledge' ? 'block' : 'hidden'}>
-        <KnowledgeBase />
+        <KnowledgePage active={path === '/knowledge'} />
       </div>
       <div className={path === '/pages' ? 'block' : 'hidden'}>
-        <PersonalisedPages />
+        <PagesPage active={path === '/pages'} />
       </div>
     </>
+  )
+}
+
+// -----------------------------------------------------------------------
+// Banners — surface failures that used to be silent
+// -----------------------------------------------------------------------
+
+function ErrorBanners() {
+  const { globalError, streaming, dispatch, reload } = useApp()
+  const { t } = useTranslation()
+  const streamError = streaming?.streamError
+  if (!globalError && !streamError) return null
+  return (
+    <div className="space-y-2 mb-4" data-testid="error-banners">
+      {globalError && (
+        <div role="alert" className="flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
+          <span className="flex-1 break-words">{t('app.global_error', { error: globalError })}</span>
+          <button type="button" onClick={() => reload()} className="font-semibold underline hover:text-red-900">
+            {t('common.retry')}
+          </button>
+          <button
+            type="button"
+            onClick={() => dispatch({ type: 'SET_GLOBAL_ERROR', payload: null })}
+            aria-label={t('common.dismiss')}
+            className="text-red-400 hover:text-red-700"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+      {streamError && (
+        <div role="alert" className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
+          <span className="flex-1 break-words">{t('app.stream_error', { error: streamError })}</span>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -155,6 +206,7 @@ function AppShell() {
       {/* ===================== Content ===================== */}
       <main className="flex-1 overflow-auto">
         <div className="p-8 max-w-7xl mx-auto">
+          <ErrorBanners />
           <Routes>
             <Route path="*" element={<PersistentViews />} />
           </Routes>

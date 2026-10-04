@@ -19,6 +19,10 @@ from . import device_store
 
 logger = logging.getLogger(__name__)
 
+# Per-device send budget: a hung APNs connection must not stall the agent's
+# reply path (sends are awaited inline).
+_SEND_TIMEOUT_S = 10.0
+
 
 class APNSSender:
     """Sends APNs alerts to all of a user's registered devices."""
@@ -76,11 +80,14 @@ class APNSSender:
 
     async def send(
         self, user_id: str, title: str, body: str, data: dict | None = None,
+        time_sensitive: bool = False,
     ) -> int:
         """Send an alert to every active device of *user_id*.
 
         Returns the number of devices the push was accepted for. Revokes any
-        token APNs reports as unregistered (410).
+        token APNs reports as unregistered (410). ``time_sensitive`` marks
+        proactive alerts that should break through Focus; routine chat replies
+        use the normal ``active`` interruption level.
         """
         if not self._enabled:
             return 0
@@ -104,25 +111,28 @@ class APNSSender:
         for t in tokens:
             device_token = t["device_token"]
             try:
+                # time-sensitive breaks through Focus/lock for proactive health
+                # nudges. Requires the
+                # com.apple.developer.usernotifications.time-sensitive
+                # entitlement in the app build; ignored otherwise.
+                level = "time-sensitive" if time_sensitive else "active"
+                # Custom keys first, ``aps`` last: user data can never clobber it.
+                message = {
+                    **(data or {}),
+                    "aps": {
+                        "alert": {"title": title, "body": body},
+                        "sound": "default",
+                        "interruption-level": level,
+                    },
+                }
                 req = NotificationRequest(
                     device_token=device_token,
-                    message={
-                        "aps": {
-                            "alert": {"title": title, "body": body},
-                            "sound": "default",
-                            # Surface proactive health nudges more prominently —
-                            # breaks through Focus/lock and is more likely to
-                            # show on the iPhone itself (not just a mirrored
-                            # Apple Watch banner). Requires the
-                            # com.apple.developer.usernotifications.time-sensitive
-                            # entitlement in the app build; ignored otherwise.
-                            "interruption-level": "time-sensitive",
-                        },
-                        **(data or {}),
-                    },
+                    message=message,
                     push_type=PushType.ALERT,
                 )
-                resp = await client.send_notification(req)
+                resp = await asyncio.wait_for(
+                    client.send_notification(req), timeout=_SEND_TIMEOUT_S,
+                )
                 if getattr(resp, "is_successful", False):
                     sent += 1
                 else:
@@ -138,6 +148,10 @@ class APNSSender:
                             "APNs: revoked dead token (%s) for user=%s",
                             desc or status, user_id,
                         )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "APNs send timed out after %.0fs for user=%s", _SEND_TIMEOUT_S, user_id,
+                )
             except Exception as e:
                 logger.warning("APNs send failed for user=%s: %s", user_id, e)
         return sent
