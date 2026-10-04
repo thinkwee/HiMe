@@ -33,7 +33,9 @@
     "token_placeholder": "Paste API_AUTH_TOKEN",
     "remember": "Remember on this device",
     "remember_hint": "Keeps the token in this browser after you close it. Otherwise it is kept only for this tab.",
-    "submit": "Save and reload"
+    "submit": "Save and reload",
+    "banner": "The server rejected a request - an API token is required.",
+    "enter_token": "Enter token"
   },
   "nav": {
     "dashboard": "Dashboard",
@@ -90,7 +92,13 @@
     "category_workouts": "Workouts",
     "category_mobility": "Mobility & Gait",
     "category_environment": "Environment & Nutrition",
-    "category_body": "Body & Wellness"
+    "category_body": "Body & Wellness",
+    "val_short": "Val",
+    "value": "Value",
+    "downloaded": "Downloaded",
+    "copy_failed": "Copy failed",
+    "expand_chart": "Expand chart: {{name}}",
+    "chart_error": "The chart for {{name}} couldn't be displayed."
   },
   "agent": {
     "title": "Agent Monitor",
@@ -201,7 +209,66 @@
     "monitor_connected": "Monitor connected to agent",
     "monitor_disconnected": "Monitor disconnected - reconnecting...",
     "agent_starting": "Agent starting...",
-    "agent_stopped_by_user": "Agent stopped by user"
+    "agent_stopped_by_user": "Agent stopped by user",
+    "evt_user": "User",
+    "evt_rows": "{{n}} rows",
+    "evt_rows_truncated": "{{n}} rows (truncated)",
+    "evt_image": "Image",
+    "evt_chat_cleared": "Chat history cleared",
+    "evt_progress": "{{tool}}: {{info}}",
+    "evt_assistant": "Assistant",
+    "evt_error": "Error: {{error}}",
+    "evt_agent_restarted": "Agent restarted after error: {{error}}",
+    "evt_unknown": "unknown",
+    "evt_agent_started": "Agent started",
+    "evt_startup_progress": "[{{step}}/{{total}}] {{label}}",
+    "evt_startup_failed": "Startup failed: {{error}}",
+    "evt_agent_stopped": "Agent stopped: {{reason}}",
+    "evt_task_started": "Task #{{cycle}} started",
+    "evt_task_completed": "Task #{{cycle}} completed",
+    "evt_report_pushed": "Report pushed (ID: {{id}})",
+    "evt_forced_sleep": "Analysis cycle ended without report - {{reason}}. Agent will retry next cycle.",
+    "evt_max_turns": "max turns reached",
+    "evt_token_truncated": "Response truncated at {{used}}/{{max}} tokens (output limit reached)",
+    "evt_quick_start": "Quick analysis started (iOS long-press)",
+    "evt_quick_complete": "Quick analysis complete -> {{state}}",
+    "evt_waiting": "Connected - waiting for the agent to start",
+    "usage_line": "in {{in}} / out {{out}}",
+    "usage_thinking": "thinking {{n}}",
+    "usage_response": "response {{n}}",
+    "usage_cache_hit": "cache hit {{n}}",
+    "usage_cache_write": "cache write {{n}}",
+    "image_load_failed": "Image could not be loaded",
+    "badge_plan": "Plan",
+    "tool_analyze": "Analyze",
+    "tool_manage": "Manage",
+    "analysis_queued": "Analysis queued",
+    "stop_failed": "Failed to stop the agent",
+    "activity_load_failed": "Couldn't load past activity: {{error}}",
+    "weekday_0": "Sun",
+    "weekday_1": "Mon",
+    "weekday_2": "Tue",
+    "weekday_3": "Wed",
+    "weekday_4": "Thu",
+    "weekday_5": "Fri",
+    "weekday_6": "Sat",
+    "status_active": "active",
+    "status_paused": "paused",
+    "condition": "Condition",
+    "cond_gt": "> greater than",
+    "cond_lt": "< less than",
+    "cond_gte": "≥ greater or equal",
+    "cond_lte": "≤ less or equal",
+    "cond_avg_gt": "avg > threshold",
+    "cond_avg_lt": "avg < threshold",
+    "cond_spike": "spike (σ)",
+    "cond_drop": "drop (σ)",
+    "cond_delta_gt": "delta > threshold",
+    "cond_absent": "data absent",
+    "cond_short_spike": "spike",
+    "cond_short_drop": "drop",
+    "cond_short_absent": "absent",
+    "rule_window_cooldown": "{{window}}m window / {{cooldown}}m cooldown"
   },
   "reports": {
     "title": "Analysis Reports",
@@ -233,7 +300,10 @@
     "source_quick": "Quick Analysis",
     "source_scheduled": "Scheduled",
     "data_time_label": "Data Time:",
-    "id_prefix": "ID:"
+    "id_prefix": "ID:",
+    "load_failed": "Failed to load reports",
+    "load_failed_detail": "Couldn't load reports: {{error}}",
+    "clear_search": "Clear search"
   },
   "prompts": {
     "title": "Prompt Manager",
@@ -298,7 +368,8 @@
     "maximize": "Maximize",
     "confirm_delete": "Delete page \"{{pageId}}\"? This cannot be undone.",
     "delete_failed": "Failed to delete page: {{error}}",
-    "load_failed": "Failed to load page: {{error}}"
+    "load_failed": "Failed to load page: {{error}}",
+    "list_failed": "Couldn't load pages: {{error}}"
   },
   "skills": {
     "title": "Skills",
@@ -343,10 +414,16 @@
     "description_placeholder": "e.g. Detect overtraining from HRV trend, RHR rise and sleep efficiency",
     "body_placeholder": "# Playbook body\n\n1. Use the sql tool to query ...\n2. Use the code tool to compute ...\n3. Decision rule: ...",
     "tokens_lines": "Tokens: ~{{tokens}} | Lines: {{lines}}",
-    "shortcut": "Shortcut: Ctrl + S to Save"
+    "shortcut": "Shortcut: Ctrl + S to Save",
+    "confirm_discard": "You have unsaved changes. Discard them?",
+    "body_label": "Playbook body"
   },
   "language_switcher": {
     "english": "English",
     "chinese": "中文"
+  },
+  "app": {
+    "global_error": "Couldn't load data from the server: {{error}}",
+    "stream_error": "Live data stream error: {{error}} Reconnecting..."
   }
 }

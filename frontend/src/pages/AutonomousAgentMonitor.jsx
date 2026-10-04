@@ -1,17 +1,17 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { memo, useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import { Light as SyntaxHighlighter } from 'react-syntax-highlighter'
 import python from 'react-syntax-highlighter/dist/esm/languages/hljs/python'
 import { githubGist } from 'react-syntax-highlighter/dist/esm/styles/hljs'
 import { api } from '../lib/api'
 import { formatFullDateTime, parseBackendDate } from '../lib/utils'
-import { useApp } from '../context/AppContext'
-// Module-level helpers below run outside React, so they translate through the
-// i18next instance directly instead of the useTranslation() hook.
-import i18n from '../i18n'
-import { Play, Square, Brain, Activity, Database, Wifi, WifiOff, Calendar, X, Clock, Plus, Pause, Trash2, Zap, RotateCcw, Pencil, Check, Loader2, CheckCircle2, AlertCircle, Server, HardDrive, Cpu, ListChecks, Rocket } from 'lucide-react'
+import { useAppActions } from '../context/AppContext'
+import InlineFlash from '../components/InlineFlash'
+import { useDocumentVisible, useFlash, useOnActivate, usePolling } from '../lib/hooks'
+import {
+  eventKey, eventTimeMs, eventToMessage, formatTokenUsage, mergeActivity, unwrapEvent,
+} from './agentEvents'
+import { Play, Square, Brain, Activity, Database, Wifi, WifiOff, X, Clock, Plus, Pause, Trash2, Zap, RotateCcw, Pencil, Check, Loader2, CheckCircle2, AlertCircle, Server, HardDrive, Cpu, ListChecks, Rocket } from 'lucide-react'
 
 SyntaxHighlighter.registerLanguage('python', python)
 
@@ -50,170 +50,12 @@ const genId = () =>
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`
 
-function eventToMessage(ev) {
-  const d = ev.data || ev
-  const t = ev.type || d.type || ''
-  if (t === 'status_update') return null
-
-  // Determine task type for badge
-  const isQuick = d.task === 'quick_analysis' || t.startsWith('quick_analysis')
-  const isChat = t === 'user_message' || t.startsWith('chat_')
-  const taskType = isQuick ? 'quick' : isChat ? 'chat' : (d.goal ? 'scheduled' : 'analysis')
-
-  let msg = null
-  switch (t) {
-    case 'user_message':
-      msg = { text: `${d.sender || i18n.t('agent.evt_user')}: ${d.content}`, type: 'user_input' }
-      break
-    case 'chat_thinking':
-      msg = { text: `💭 ${d.content}`, rawDelta: d.content, type: 'thinking', isStreaming: true }
-      break
-    case 'chat_content':
-      msg = { text: `🤖 ${d.content}`, rawDelta: d.content, type: 'content', isStreaming: true }
-      break
-    case 'chat_tool_call':
-    case 'analysis_tool_call':
-    case 'quick_tool_call':
-    case 'tool_call': {
-      const toolName = d.tool || ''
-      let callText
-      if (toolName === 'sql') {
-        const query = d.arguments?.query || ''
-        callText = query
-      } else if (toolName === 'code') {
-        callText = d.arguments?.code || d.arguments?.script || ''
-      } else if (toolName === 'reply_user') {
-        callText = d.arguments?.message || ''
-      } else if (toolName === 'update_md') {
-        callText = `${d.arguments?.file || '?'}\n${d.arguments?.content || ''}`
-      } else if (toolName === 'push_report') {
-        callText = d.arguments?.title || (d.arguments?.content || '').slice(0, 120)
-      } else {
-        callText = JSON.stringify(d.arguments || {}, null, 2)
-      }
-      msg = { text: callText, type: 'tool_call', toolName }
-      break
-    }
-    case 'chat_tool_result':
-    case 'analysis_tool_result':
-    case 'quick_tool_result':
-    case 'tool_result': {
-      const toolName = d.tool || ''
-      if (d.success) {
-        const r = d.result || {}
-        if (toolName === 'sql' && r.columns && r.rows) {
-          const n = r.row_count ?? r.rows.length
-          const meta = r.truncated
-            ? i18n.t('agent.evt_rows_truncated', { n })
-            : i18n.t('agent.evt_rows', { n })
-          msg = { text: meta, type: 'tool_result', toolName, toolSuccess: true, sqlData: { columns: r.columns, rows: r.rows } }
-        } else {
-          let content = r.output ?? r.data ?? r.message ?? ''
-          if (typeof content === 'object') content = JSON.stringify(content, null, 2)
-          msg = { text: String(content), type: 'tool_result', toolName, toolSuccess: true }
-        }
-      } else {
-        msg = { text: d.result?.error || 'Unknown error', type: 'tool_result', toolName, toolSuccess: false }
-      }
-      break
-    }
-    case 'chat_verification':
-    case 'analysis_verification':
-    case 'quick_verification':
-    case 'verification_result':
-      msg = {
-        text: d.preview || '',
-        type: 'verification',
-        verifierStatus: d.status || 'verified',
-        verifierDetail: d.detail || '',
-        verifierEvidenceCount: typeof d.evidence_count === 'number' ? d.evidence_count : 0,
-        verifierTool: d.tool || 'reply_user',
-      }
-      break
-    case 'agent_thinking':
-      msg = d.content?.trim() ? { text: `💭 ${d.content}`, rawDelta: d.content, type: 'thinking', isStreaming: true } : null
-      break
-    case 'content':
-      msg = d.content?.trim() ? { text: `🤖 Assistant: ${d.content}`, rawDelta: d.content, type: 'content', isStreaming: true } : null
-      break
-    case 'error':
-      msg = { text: `❌ Error: ${d.error || ''}. Agent will auto-restart with backoff.`, type: 'error' }
-      break
-    case 'agent_error':
-      msg = { text: `🔄 Agent restarted after error: ${d.error || 'unknown'}`, type: 'warning' }
-      break
-    case 'agent_started':
-      msg = { text: '🚀 Agent started', type: 'system' }
-      break
-    case 'startup_progress':
-      msg = { text: `⏳ [${d.step}/${d.total}] ${d.label}`, type: 'system' }
-      break
-    case 'startup_error':
-      msg = { text: `❌ Startup failed: ${d.error || 'unknown'}`, type: 'error' }
-      break
-    case 'agent_stopped':
-      msg = { text: `🛑 Agent stopped: ${d.reason || d.timestamp || ''}`, type: 'system' }
-      break
-    case 'cycle_start':
-      msg = { text: `🔄 Task #${d.cycle || ''} started${d.goal ? ` — ${d.goal.slice(0, 80)}` : ''}`, type: 'system' }
-      break
-    case 'cycle_end':
-      msg = { text: `✅ Task #${d.cycle || ''} completed`, type: 'system' }
-      break
-    case 'report_pushed':
-      msg = { text: `📊 Report pushed (ID: ${d.report_id || '?'})`, type: 'system' }
-      break
-    case 'forced_sleep':
-      msg = { text: `⚠️ Analysis cycle ended without report — ${d.reason || 'max turns reached'}. Agent will retry next cycle.`, type: 'warning' }
-      break
-    case 'monitor_connected':
-      msg = { text: '📡 Monitor connected to agent', type: 'system' }
-      break
-    case 'token_truncated':
-      msg = { text: `⚠️ Response truncated at ${d.completion_tokens}/${d.max_tokens} tokens (output limit reached)`, type: 'warning' }
-      break
-    case 'quick_analysis_start':
-      msg = { text: '🐱 Quick analysis started (iOS long-press)', type: 'system' }
-      break
-    case 'quick_analysis_complete':
-      msg = { text: `🐱 Quick analysis complete → ${d.state || 'neutral'}`, type: 'system' }
-      break
-  }
-
-  if (msg) return { ...msg, taskType }
-  return null
-}
-
-function formatTokenUsage(tu) {
-  if (!tu) return null
-  const prompt = tu.prompt_tokens
-  const completion = tu.completion_tokens ?? tu.response_tokens
-  if (prompt == null && completion == null) return null
-
-  const in_ = prompt ?? '-'
-  const out = completion ?? '-'
-  const parts = []
-  if (tu.thoughts_tokens != null && (tu.response_tokens != null || tu.completion_tokens != null)) {
-    parts.push(`thinking ${tu.thoughts_tokens}`)
-    parts.push(`response ${tu.response_tokens ?? tu.completion_tokens}`)
-  } else if (tu.response_tokens != null || tu.completion_tokens != null) {
-    parts.push(`response ${tu.response_tokens ?? tu.completion_tokens}`)
-  }
-  if (tu.cache_read_tokens != null && tu.cache_read_tokens > 0) {
-    parts.push(`cache hit ${tu.cache_read_tokens}`)
-  }
-  if (tu.cache_creation_tokens != null && tu.cache_creation_tokens > 0) {
-    parts.push(`cache write ${tu.cache_creation_tokens}`)
-  }
-  const detail = parts.length ? ` (${parts.join(', ')})` : ''
-  return `📊 in ${in_} / out ${out}${detail}`
-}
-
 const TASK_TYPE_BADGE = {
   analysis: { labelKey: 'agent.badge_analysis', cls: 'bg-emerald-100 text-emerald-700' },
   chat: { labelKey: 'agent.badge_chat', cls: 'bg-indigo-100 text-indigo-700' },
   scheduled: { labelKey: 'agent.badge_scheduled', cls: 'bg-amber-100 text-amber-700' },
   quick: { labelKey: 'agent.badge_quick', cls: 'bg-pink-100 text-pink-700' },
+  plan: { labelKey: 'agent.badge_plan', cls: 'bg-teal-100 text-teal-700' },
 }
 
 // Per-tool theme colours — avoids clashing with task-type badge colours
@@ -227,6 +69,8 @@ const TOOL_THEME = {
   sleep:          { bg: 'bg-stone-50/60',   text: 'text-stone-600',   header: 'bg-stone-100/60 text-stone-700',  border: 'border-stone-200/50',   labelKey: 'agent.tool_sleep',       icon: '💤' },
   create_page:    { bg: 'bg-rose-50/60',    text: 'text-rose-700',    header: 'bg-rose-100/60 text-rose-800',    border: 'border-rose-200/50',    labelKey: 'agent.tool_create_page', icon: '🧩' },
   read_skill:     { bg: 'bg-amber-50/60',   text: 'text-amber-700',   header: 'bg-amber-100/60 text-amber-800',  border: 'border-amber-200/50',   labelKey: 'agent.tool_read_skill',  icon: '📖' },
+  analyze:        { bg: 'bg-emerald-50/60', text: 'text-emerald-700', header: 'bg-emerald-100/60 text-emerald-800', border: 'border-emerald-200/50', labelKey: 'agent.tool_analyze',   icon: '🔬' },
+  manage:         { bg: 'bg-orange-50/60',  text: 'text-orange-700',  header: 'bg-orange-100/60 text-orange-800', border: 'border-orange-200/50', labelKey: 'agent.tool_manage',     icon: '🗂️' },
 }
 const DEFAULT_TOOL_THEME = { bg: 'bg-gray-50/60', text: 'text-gray-600', header: 'bg-gray-100/60 text-gray-700', border: 'border-gray-200/50', labelKey: 'agent.tool_generic', icon: '🔧' }
 
@@ -280,7 +124,35 @@ function PythonBlock({ code, theme, maxH = 'max-h-32' }) {
   )
 }
 
-function LogItem({ update }) {
+/** Agent-sent chart. Fetched with the bearer header (never a ?token= URL) and shown from an object URL. */
+function ChatImage({ url, caption }) {
+  const { t } = useTranslation()
+  const [state, setState] = useState({ src: null, error: false })
+  useEffect(() => {
+    if (!url) return undefined
+    let cancelled = false
+    let objectUrl = null
+    api.fetchChatImage(url).then((res) => {
+      if (cancelled) return
+      if (res.success) {
+        objectUrl = URL.createObjectURL(res.blob)
+        setState({ src: objectUrl, error: false })
+      } else {
+        setState({ src: null, error: true })
+      }
+    })
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [url])
+  if (!url) return null
+  if (state.error) return <div className="mt-1 text-[10px] text-red-500">{t('agent.image_load_failed')}</div>
+  if (!state.src) return <div className="mt-1 text-[10px] text-gray-400">{t('common.loading')}</div>
+  return <img src={state.src} alt={caption || t('agent.evt_image')} className="mt-1 max-h-64 rounded border border-gray-200" />
+}
+
+const LogItem = memo(function LogItem({ update }) {
   const { t } = useTranslation()
   const msg = update.message
   const isObj = typeof msg === 'object' && msg !== null
@@ -386,6 +258,11 @@ function LogItem({ update }) {
   } else if (type === 'content') {
     textColor = 'text-indigo-800 font-medium'
     bgColor = 'bg-indigo-50/50 rounded px-1'
+  } else if (type === 'reply' || type === 'image') {
+    textColor = 'text-sky-800 font-medium'
+    bgColor = 'bg-sky-50/60 rounded px-1'
+  } else if (type === 'progress') {
+    textColor = 'text-gray-400 text-[10px]'
   } else if (type === 'user_input') {
     textColor = 'text-amber-700 font-bold'
     bgColor = 'bg-amber-50 rounded px-1'
@@ -413,15 +290,18 @@ function LogItem({ update }) {
       {type !== 'token_usage' && tokenLine && (
         <div className="mt-1 text-xs text-gray-500 font-mono">{tokenLine}</div>
       )}
+      {type === 'image' && isObj && msg.imageUrl && <ChatImage url={msg.imageUrl} caption={text} />}
     </div>
   )
-}
+})
 
 // ---------------------------------------------------------------------------
 // Scheduled Tasks Panel
 // ---------------------------------------------------------------------------
-function ScheduledTasksPanel({ isRunning }) {
+function ScheduledTasksPanel({ isRunning, active }) {
   const { t } = useTranslation()
+  const [flash, setFlash] = useFlash()
+  const [loadError, setLoadError] = useState('')
   const [tasks, setTasks] = useState([])
   const [serverTz, setServerTz] = useState('UTC')
   const [showAdd, setShowAdd] = useState(false)
@@ -436,8 +316,11 @@ function ScheduledTasksPanel({ isRunning }) {
     if (res.success) {
       setTasks(res.tasks || [])
       if (res.timezone) setServerTz(res.timezone)
+      setLoadError('')
+    } else {
+      setLoadError(res.error || t('common.load_failed'))
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     // set-state-in-effect is a false positive here: fetchTasks is async and every
@@ -446,9 +329,11 @@ function ScheduledTasksPanel({ isRunning }) {
     // cannot see through the await when the callee is a memoized function.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchTasks()
-    const interval = setInterval(fetchTasks, 15000)
-    return () => clearInterval(interval)
-  }, [fetchTasks])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  // Poll only while this page is the active route and the tab is visible.
+  usePolling(fetchTasks, 15000, active)
+  useOnActivate(active, fetchTasks)
 
   const handleCreate = async () => {
     if (!newCron.trim() || !newGoal.trim()) return
@@ -459,27 +344,29 @@ function ScheduledTasksPanel({ isRunning }) {
       setShowAdd(false)
       fetchTasks()
     } else {
-      alert(res.error || t('agent.failed_create_task'))
+      setFlash('error', res.error || t('agent.failed_create_task'))
     }
   }
 
   const handleToggle = async (task) => {
     const newStatus = task.status === 'active' ? 'paused' : 'active'
     const res = await api.updateScheduledTask(task.id, { status: newStatus })
-    if (!res.success) alert(res.error || t('common.unknown_error'))
+    if (!res.success) setFlash('error', res.error || t('common.unknown_error'))
     fetchTasks()
   }
 
   const handleDelete = async (task) => {
     if (!window.confirm(t('agent.confirm_delete_task'))) return
     const res = await api.updateScheduledTask(task.id, { status: 'deleted' })
-    if (!res.success) alert(res.error || t('common.unknown_error'))
+    if (!res.success) setFlash('error', res.error || t('common.unknown_error'))
     fetchTasks()
   }
 
   const handleTrigger = async (task) => {
-    if (!isRunning) { alert(t('agent.start_agent_first')); return }
-    await api.triggerAnalysis(task.prompt_goal)
+    if (!isRunning) { setFlash('error', t('agent.start_agent_first')); return }
+    const res = await api.triggerAnalysis(task.prompt_goal)
+    if (res.success) setFlash('success', t('agent.analysis_queued'))
+    else setFlash('error', res.error || t('common.unknown_error'))
   }
 
   const handleEdit = (task) => {
@@ -491,7 +378,7 @@ function ScheduledTasksPanel({ isRunning }) {
   const handleSaveEdit = async () => {
     if (!editCron.trim() || !editGoal.trim()) return
     const res = await api.updateScheduledTask(editingId, { cron_expr: editCron.trim(), prompt_goal: editGoal.trim() })
-    if (!res.success) { alert(res.error || t('common.unknown_error')); return }
+    if (!res.success) { setFlash('error', res.error || t('common.unknown_error')); return }
     setEditingId(null)
     fetchTasks()
   }
@@ -506,7 +393,11 @@ function ScheduledTasksPanel({ isRunning }) {
     if (dom !== '*' || month !== '*') return expr
     if ([min, hour, dow].some((f) => /[*/,-]/.test(f) && f !== '*')) return expr
     if (min === '*' || hour === '*') return expr
-    const dowMap = { '0': 'Sun', '1': 'Mon', '2': 'Tue', '3': 'Wed', '4': 'Thu', '5': 'Fri', '6': 'Sat', '*': t('agent.cron_daily') }
+    const dowMap = {
+      '0': t('agent.weekday_0'), '1': t('agent.weekday_1'), '2': t('agent.weekday_2'), '3': t('agent.weekday_3'),
+      '4': t('agent.weekday_4'), '5': t('agent.weekday_5'), '6': t('agent.weekday_6'), '7': t('agent.weekday_0'),
+      '*': t('agent.cron_daily'),
+    }
     const time = `${hour.padStart(2, '0')}:${min.padStart(2, '0')}`
     return `${dowMap[dow] || dow} ${time}`
   }
@@ -519,7 +410,9 @@ function ScheduledTasksPanel({ isRunning }) {
           {t('agent.scheduled_tasks')}
         </h3>
         <button
+          type="button"
           onClick={() => setShowAdd(!showAdd)}
+          aria-expanded={showAdd}
           className="text-xs flex items-center gap-1 text-primary-600 hover:text-primary-800"
         >
           <Plus className="w-3 h-3" /> {t('common.add')}
@@ -529,6 +422,13 @@ function ScheduledTasksPanel({ isRunning }) {
       <p className="-mt-2 mb-3 text-[11px] text-gray-500">
         {t('agent.cron_timezone_hint', { tz: serverTz })}
       </p>
+      <InlineFlash flash={flash} className="mb-3" />
+      {loadError && (
+        <div role="alert" className="mb-3 flex items-center gap-2 text-xs text-red-600">
+          <span className="flex-1">{loadError}</span>
+          <button type="button" onClick={fetchTasks} className="underline">{t('common.retry')}</button>
+        </div>
+      )}
 
       {showAdd && (
         <div className="mb-3 p-3 bg-gray-50 rounded border border-gray-200 space-y-2">
@@ -537,12 +437,14 @@ function ScheduledTasksPanel({ isRunning }) {
             value={newCron}
             onChange={(e) => setNewCron(e.target.value)}
             placeholder={t('agent.cron_placeholder')}
+            aria-label={t('agent.cron_placeholder')}
             className="input w-full text-sm font-mono"
           />
           <textarea
             value={newGoal}
             onChange={(e) => setNewGoal(e.target.value)}
             placeholder={t('agent.analysis_goal_placeholder')}
+            aria-label={t('agent.analysis_goal_placeholder')}
             className="input w-full text-sm"
             rows={2}
           />
@@ -560,11 +462,11 @@ function ScheduledTasksPanel({ isRunning }) {
           {tasks.map((task) => (
             editingId === task.id ? (
               <div key={task.id} className="p-2.5 rounded border border-primary-200 bg-primary-50/30 text-sm space-y-2">
-                <input type="text" value={editCron} onChange={(e) => setEditCron(e.target.value)} className="input w-full text-sm font-mono" placeholder={t('agent.cron_expression')} />
-                <textarea value={editGoal} onChange={(e) => setEditGoal(e.target.value)} className="input w-full text-sm" rows={2} placeholder={t('agent.analysis_goal_placeholder')} />
+                <input type="text" value={editCron} onChange={(e) => setEditCron(e.target.value)} className="input w-full text-sm font-mono" placeholder={t('agent.cron_expression')} aria-label={t('agent.cron_expression')} />
+                <textarea value={editGoal} onChange={(e) => setEditGoal(e.target.value)} className="input w-full text-sm" rows={2} placeholder={t('agent.analysis_goal_placeholder')} aria-label={t('agent.analysis_goal_placeholder')} />
                 <div className="flex gap-1">
-                  <button onClick={handleSaveEdit} className="p-1 hover:bg-green-50 rounded" title={t('common.save')}><Check className="w-3.5 h-3.5 text-green-600" /></button>
-                  <button onClick={() => setEditingId(null)} className="p-1 hover:bg-gray-100 rounded" title={t('common.cancel')}><X className="w-3.5 h-3.5 text-gray-400" /></button>
+                  <button onClick={handleSaveEdit} className="p-1 hover:bg-green-50 rounded" title={t('common.save')} aria-label={t('common.save')}><Check className="w-3.5 h-3.5 text-green-600" /></button>
+                  <button onClick={() => setEditingId(null)} className="p-1 hover:bg-gray-100 rounded" title={t('common.cancel')} aria-label={t('common.cancel')}><X className="w-3.5 h-3.5 text-gray-400" /></button>
                 </div>
               </div>
             ) : (
@@ -574,24 +476,24 @@ function ScheduledTasksPanel({ isRunning }) {
                     <div className="flex items-center gap-2 mb-1">
                       <span className="font-mono text-xs bg-gray-100 px-1.5 py-0.5 rounded">{cronHuman(task.cron_expr)}</span>
                       <span className={`text-[10px] font-bold uppercase px-1.5 rounded ${task.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
-                        {task.status}
+                        {t(`agent.status_${task.status}`, task.status)}
                       </span>
                     </div>
                     <p className="text-gray-700 text-xs truncate">{task.prompt_goal}</p>
                   </div>
                   <div className="flex gap-1 flex-shrink-0">
                     {isRunning && (
-                      <button onClick={() => handleTrigger(task)} className="p-1 hover:bg-blue-50 rounded" title={t('agent.run_now')}>
+                      <button onClick={() => handleTrigger(task)} className="p-1 hover:bg-blue-50 rounded" title={t('agent.run_now')} aria-label={t('agent.run_now')}>
                         <Play className="w-3.5 h-3.5 text-blue-500" />
                       </button>
                     )}
-                    <button onClick={() => handleEdit(task)} className="p-1 hover:bg-blue-50 rounded" title={t('common.edit')}>
+                    <button onClick={() => handleEdit(task)} className="p-1 hover:bg-blue-50 rounded" title={t('common.edit')} aria-label={t('common.edit')}>
                       <Pencil className="w-3.5 h-3.5 text-blue-400" />
                     </button>
-                    <button onClick={() => handleToggle(task)} className="p-1 hover:bg-yellow-50 rounded" title={task.status === 'active' ? t('agent.pause') : t('agent.resume')}>
+                    <button onClick={() => handleToggle(task)} className="p-1 hover:bg-yellow-50 rounded" title={task.status === 'active' ? t('agent.pause') : t('agent.resume')} aria-label={task.status === 'active' ? t('agent.pause') : t('agent.resume')}>
                       {task.status === 'active' ? <Pause className="w-3.5 h-3.5 text-yellow-500" /> : <RotateCcw className="w-3.5 h-3.5 text-green-500" />}
                     </button>
-                    <button onClick={() => handleDelete(task)} className="p-1 hover:bg-red-50 rounded" title={t('common.delete')}>
+                    <button onClick={() => handleDelete(task)} className="p-1 hover:bg-red-50 rounded" title={t('common.delete')} aria-label={t('common.delete')}>
                       <Trash2 className="w-3.5 h-3.5 text-red-400" />
                     </button>
                   </div>
@@ -608,26 +510,24 @@ function ScheduledTasksPanel({ isRunning }) {
 // ---------------------------------------------------------------------------
 // Trigger Rules Panel
 // ---------------------------------------------------------------------------
-const TRIGGER_CONDITIONS = [
-  ['gt', '> greater than'], ['lt', '< less than'],
-  ['gte', '\u2265 greater or equal'], ['lte', '\u2264 less or equal'],
-  ['avg_gt', 'avg > threshold'], ['avg_lt', 'avg < threshold'],
-  ['spike', 'spike (\u03c3)'], ['drop', 'drop (\u03c3)'],
-  ['delta_gt', 'delta > threshold'], ['absent', 'data absent'],
-]
+const TRIGGER_CONDITIONS = ['gt', 'lt', 'gte', 'lte', 'avg_gt', 'avg_lt', 'spike', 'drop', 'delta_gt', 'absent']
 
-const CONDITION_LABELS = { gt: '>', lt: '<', gte: '\u2265', lte: '\u2264', avg_gt: 'avg >', avg_lt: 'avg <', spike: 'spike', drop: 'drop', delta_gt: '\u0394 >', absent: 'absent' }
+// Compact symbols for the rule summary line; words come from i18n.
+const CONDITION_SYMBOLS = { gt: '>', lt: '<', gte: '\u2265', lte: '\u2264', avg_gt: 'avg >', avg_lt: 'avg <', delta_gt: '\u0394 >' }
 
 function ConditionSelect({ value, onChange, className = '' }) {
+  const { t } = useTranslation()
   return (
-    <select value={value} onChange={onChange} className={`input text-sm ${className}`}>
-      {TRIGGER_CONDITIONS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+    <select value={value} onChange={onChange} aria-label={t('agent.condition')} className={`input text-sm ${className}`}>
+      {TRIGGER_CONDITIONS.map((v) => <option key={v} value={v}>{t(`agent.cond_${v}`)}</option>)}
     </select>
   )
 }
 
-function TriggerRulesPanel({ isRunning }) {
+function TriggerRulesPanel({ isRunning, active }) {
   const { t } = useTranslation()
+  const [flash, setFlash] = useFlash()
+  const [loadError, setLoadError] = useState('')
   const [rules, setRules] = useState([])
   const [showAdd, setShowAdd] = useState(false)
   const [editingId, setEditingId] = useState(null)
@@ -638,17 +538,23 @@ function TriggerRulesPanel({ isRunning }) {
 
   const fetchRules = useCallback(async () => {
     const res = await api.getTriggerRules()
-    if (res.success) setRules(res.rules || [])
-  }, [])
+    if (res.success) {
+      setRules(res.rules || [])
+      setLoadError('')
+    } else {
+      setLoadError(res.error || t('common.load_failed'))
+    }
+  }, [t])
 
   useEffect(() => {
     // False positive — see the note on the scheduled-tasks poll above: fetchRules
     // only setStates after `await api.getTriggerRules()`, never synchronously.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchRules()
-    const interval = setInterval(fetchRules, 15000)
-    return () => clearInterval(interval)
-  }, [fetchRules])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  usePolling(fetchRules, 15000, active)
+  useOnActivate(active, fetchRules)
 
   const handleCreate = async () => {
     if (!newRule.name.trim() || !newRule.feature_type.trim() || !newRule.prompt_goal.trim()) return
@@ -663,27 +569,29 @@ function TriggerRulesPanel({ isRunning }) {
       setShowAdd(false)
       fetchRules()
     } else {
-      alert(res.error || t('agent.failed_create_rule'))
+      setFlash('error', res.error || t('agent.failed_create_rule'))
     }
   }
 
   const handleToggle = async (rule) => {
     const newStatus = rule.status === 'active' ? 'paused' : 'active'
     const res = await api.updateTriggerRule(rule.id, { status: newStatus })
-    if (!res.success) alert(res.error || t('common.unknown_error'))
+    if (!res.success) setFlash('error', res.error || t('common.unknown_error'))
     fetchRules()
   }
 
   const handleDelete = async (rule) => {
     if (!window.confirm(t('agent.confirm_delete_rule'))) return
     const res = await api.updateTriggerRule(rule.id, { status: 'deleted' })
-    if (!res.success) alert(res.error || t('common.unknown_error'))
+    if (!res.success) setFlash('error', res.error || t('common.unknown_error'))
     fetchRules()
   }
 
   const handleTrigger = async (rule) => {
-    if (!isRunning) { alert(t('agent.start_agent_first')); return }
-    await api.triggerAnalysis(rule.prompt_goal)
+    if (!isRunning) { setFlash('error', t('agent.start_agent_first')); return }
+    const res = await api.triggerAnalysis(rule.prompt_goal)
+    if (res.success) setFlash('success', t('agent.analysis_queued'))
+    else setFlash('error', res.error || t('common.unknown_error'))
   }
 
   const handleEdit = (rule) => {
@@ -703,7 +611,7 @@ function TriggerRulesPanel({ isRunning }) {
       window_minutes: parseInt(editRule.window_minutes) || 60,
       cooldown_minutes: parseInt(editRule.cooldown_minutes) || 30,
     })
-    if (!res.success) { alert(res.error || t('common.unknown_error')); return }
+    if (!res.success) { setFlash('error', res.error || t('common.unknown_error')); return }
     setEditingId(null)
     fetchRules()
   }
@@ -715,24 +623,31 @@ function TriggerRulesPanel({ isRunning }) {
           <Zap className="w-5 h-5 text-amber-500" />
           {t('agent.trigger_rules')}
         </h3>
-        <button onClick={() => setShowAdd(!showAdd)} className="text-xs flex items-center gap-1 text-primary-600 hover:text-primary-800">
+        <button type="button" onClick={() => setShowAdd(!showAdd)} aria-expanded={showAdd} className="text-xs flex items-center gap-1 text-primary-600 hover:text-primary-800">
           <Plus className="w-3 h-3" /> {t('common.add')}
         </button>
       </div>
+      <InlineFlash flash={flash} className="mb-3" />
+      {loadError && (
+        <div role="alert" className="mb-3 flex items-center gap-2 text-xs text-red-600">
+          <span className="flex-1">{loadError}</span>
+          <button type="button" onClick={fetchRules} className="underline">{t('common.retry')}</button>
+        </div>
+      )}
 
       {showAdd && (
         <div className="mb-3 p-3 bg-gray-50 rounded border border-gray-200 space-y-2">
-          <input type="text" value={newRule.name} onChange={(e) => setNewRule({ ...newRule, name: e.target.value })} placeholder={t('agent.rule_name')} className="input w-full text-sm" />
+          <input type="text" value={newRule.name} onChange={(e) => setNewRule({ ...newRule, name: e.target.value })} placeholder={t('agent.rule_name')} aria-label={t('agent.rule_name')} className="input w-full text-sm" />
           <div className="grid grid-cols-2 gap-2">
-            <input type="text" value={newRule.feature_type} onChange={(e) => setNewRule({ ...newRule, feature_type: e.target.value })} placeholder={t('agent.feature_placeholder')} className="input text-sm" />
+            <input type="text" value={newRule.feature_type} onChange={(e) => setNewRule({ ...newRule, feature_type: e.target.value })} placeholder={t('agent.feature_placeholder')} aria-label={t('agent.feature_placeholder')} className="input text-sm" />
             <ConditionSelect value={newRule.condition} onChange={(e) => setNewRule({ ...newRule, condition: e.target.value })} />
           </div>
           <div className="grid grid-cols-3 gap-2">
-            <input type="number" value={newRule.threshold} onChange={(e) => setNewRule({ ...newRule, threshold: e.target.value })} placeholder={t('agent.threshold')} className="input text-sm" />
-            <input type="number" value={newRule.window_minutes} onChange={(e) => setNewRule({ ...newRule, window_minutes: e.target.value })} placeholder={t('agent.window_min')} className="input text-sm" />
-            <input type="number" value={newRule.cooldown_minutes} onChange={(e) => setNewRule({ ...newRule, cooldown_minutes: e.target.value })} placeholder={t('agent.cooldown_min')} className="input text-sm" />
+            <input type="number" value={newRule.threshold} onChange={(e) => setNewRule({ ...newRule, threshold: e.target.value })} placeholder={t('agent.threshold')} aria-label={t('agent.threshold')} className="input text-sm" />
+            <input type="number" value={newRule.window_minutes} onChange={(e) => setNewRule({ ...newRule, window_minutes: e.target.value })} placeholder={t('agent.window_min')} aria-label={t('agent.window_min')} className="input text-sm" />
+            <input type="number" value={newRule.cooldown_minutes} onChange={(e) => setNewRule({ ...newRule, cooldown_minutes: e.target.value })} placeholder={t('agent.cooldown_min')} aria-label={t('agent.cooldown_min')} className="input text-sm" />
           </div>
-          <textarea value={newRule.prompt_goal} onChange={(e) => setNewRule({ ...newRule, prompt_goal: e.target.value })} placeholder={t('agent.triggered_when_placeholder')} className="input w-full text-sm" rows={2} />
+          <textarea value={newRule.prompt_goal} onChange={(e) => setNewRule({ ...newRule, prompt_goal: e.target.value })} placeholder={t('agent.triggered_when_placeholder')} aria-label={t('agent.triggered_when_placeholder')} className="input w-full text-sm" rows={2} />
           <div className="flex gap-2">
             <button onClick={handleCreate} className="btn btn-primary text-xs px-3 py-1">{t('common.create')}</button>
             <button onClick={() => setShowAdd(false)} className="btn text-xs px-3 py-1">{t('common.cancel')}</button>
@@ -747,20 +662,20 @@ function TriggerRulesPanel({ isRunning }) {
           {rules.map((rule) => (
             editingId === rule.id ? (
               <div key={rule.id} className="p-2.5 rounded border border-primary-200 bg-primary-50/30 text-sm space-y-2">
-                <input type="text" value={editRule.name} onChange={(e) => setEditRule({ ...editRule, name: e.target.value })} className="input w-full text-sm" placeholder={t('agent.rule_name')} />
+                <input type="text" value={editRule.name} onChange={(e) => setEditRule({ ...editRule, name: e.target.value })} className="input w-full text-sm" placeholder={t('agent.rule_name')} aria-label={t('agent.rule_name')} />
                 <div className="grid grid-cols-2 gap-2">
-                  <input type="text" value={editRule.feature_type} onChange={(e) => setEditRule({ ...editRule, feature_type: e.target.value })} className="input text-sm" placeholder={t('agent.feature_type')} />
+                  <input type="text" value={editRule.feature_type} onChange={(e) => setEditRule({ ...editRule, feature_type: e.target.value })} className="input text-sm" placeholder={t('agent.feature_type')} aria-label={t('agent.feature_type')} />
                   <ConditionSelect value={editRule.condition} onChange={(e) => setEditRule({ ...editRule, condition: e.target.value })} />
                 </div>
                 <div className="grid grid-cols-3 gap-2">
-                  <input type="number" value={editRule.threshold} onChange={(e) => setEditRule({ ...editRule, threshold: e.target.value })} placeholder={t('agent.threshold')} className="input text-sm" />
-                  <input type="number" value={editRule.window_minutes} onChange={(e) => setEditRule({ ...editRule, window_minutes: e.target.value })} placeholder={t('agent.window_min')} className="input text-sm" />
-                  <input type="number" value={editRule.cooldown_minutes} onChange={(e) => setEditRule({ ...editRule, cooldown_minutes: e.target.value })} placeholder={t('agent.cooldown_min')} className="input text-sm" />
+                  <input type="number" value={editRule.threshold} onChange={(e) => setEditRule({ ...editRule, threshold: e.target.value })} placeholder={t('agent.threshold')} aria-label={t('agent.threshold')} className="input text-sm" />
+                  <input type="number" value={editRule.window_minutes} onChange={(e) => setEditRule({ ...editRule, window_minutes: e.target.value })} placeholder={t('agent.window_min')} aria-label={t('agent.window_min')} className="input text-sm" />
+                  <input type="number" value={editRule.cooldown_minutes} onChange={(e) => setEditRule({ ...editRule, cooldown_minutes: e.target.value })} placeholder={t('agent.cooldown_min')} aria-label={t('agent.cooldown_min')} className="input text-sm" />
                 </div>
-                <textarea value={editRule.prompt_goal} onChange={(e) => setEditRule({ ...editRule, prompt_goal: e.target.value })} className="input w-full text-sm" rows={2} placeholder={t('agent.analysis_goal_placeholder')} />
+                <textarea value={editRule.prompt_goal} onChange={(e) => setEditRule({ ...editRule, prompt_goal: e.target.value })} className="input w-full text-sm" rows={2} placeholder={t('agent.analysis_goal_placeholder')} aria-label={t('agent.analysis_goal_placeholder')} />
                 <div className="flex gap-1">
-                  <button onClick={handleSaveEdit} className="p-1 hover:bg-green-50 rounded" title={t('common.save')}><Check className="w-3.5 h-3.5 text-green-600" /></button>
-                  <button onClick={() => setEditingId(null)} className="p-1 hover:bg-gray-100 rounded" title={t('common.cancel')}><X className="w-3.5 h-3.5 text-gray-400" /></button>
+                  <button onClick={handleSaveEdit} className="p-1 hover:bg-green-50 rounded" title={t('common.save')} aria-label={t('common.save')}><Check className="w-3.5 h-3.5 text-green-600" /></button>
+                  <button onClick={() => setEditingId(null)} className="p-1 hover:bg-gray-100 rounded" title={t('common.cancel')} aria-label={t('common.cancel')}><X className="w-3.5 h-3.5 text-gray-400" /></button>
                 </div>
               </div>
             ) : (
@@ -770,12 +685,12 @@ function TriggerRulesPanel({ isRunning }) {
                     <div className="flex items-center gap-2 mb-1">
                       <span className="font-medium text-xs text-gray-900">{rule.name}</span>
                       <span className={`text-[10px] font-bold uppercase px-1.5 rounded ${rule.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
-                        {rule.status}
+                        {t(`agent.status_${rule.status}`, rule.status)}
                       </span>
                     </div>
                     <div className="text-xs text-gray-500 font-mono mb-0.5">
-                      {rule.feature_type} {CONDITION_LABELS[rule.condition] || rule.condition} {rule.threshold}
-                      <span className="text-gray-400 ml-2">{rule.window_minutes}m / {rule.cooldown_minutes}m cd</span>
+                      {rule.feature_type} {CONDITION_SYMBOLS[rule.condition] || t(`agent.cond_short_${rule.condition}`, rule.condition)} {rule.threshold}
+                      <span className="text-gray-400 ml-2">{t('agent.rule_window_cooldown', { window: rule.window_minutes, cooldown: rule.cooldown_minutes })}</span>
                     </div>
                     <p className="text-gray-700 text-xs truncate">{rule.prompt_goal}</p>
                     {rule.trigger_count > 0 && (
@@ -784,17 +699,17 @@ function TriggerRulesPanel({ isRunning }) {
                   </div>
                   <div className="flex gap-1 flex-shrink-0">
                     {isRunning && (
-                      <button onClick={() => handleTrigger(rule)} className="p-1 hover:bg-blue-50 rounded" title={t('agent.run_now')}>
+                      <button onClick={() => handleTrigger(rule)} className="p-1 hover:bg-blue-50 rounded" title={t('agent.run_now')} aria-label={t('agent.run_now')}>
                         <Play className="w-3.5 h-3.5 text-blue-500" />
                       </button>
                     )}
-                    <button onClick={() => handleEdit(rule)} className="p-1 hover:bg-blue-50 rounded" title={t('common.edit')}>
+                    <button onClick={() => handleEdit(rule)} className="p-1 hover:bg-blue-50 rounded" title={t('common.edit')} aria-label={t('common.edit')}>
                       <Pencil className="w-3.5 h-3.5 text-blue-400" />
                     </button>
-                    <button onClick={() => handleToggle(rule)} className="p-1 hover:bg-yellow-50 rounded" title={rule.status === 'active' ? t('agent.pause') : t('agent.resume')}>
+                    <button onClick={() => handleToggle(rule)} className="p-1 hover:bg-yellow-50 rounded" title={rule.status === 'active' ? t('agent.pause') : t('agent.resume')} aria-label={rule.status === 'active' ? t('agent.pause') : t('agent.resume')}>
                       {rule.status === 'active' ? <Pause className="w-3.5 h-3.5 text-yellow-500" /> : <RotateCcw className="w-3.5 h-3.5 text-green-500" />}
                     </button>
-                    <button onClick={() => handleDelete(rule)} className="p-1 hover:bg-red-50 rounded" title={t('common.delete')}>
+                    <button onClick={() => handleDelete(rule)} className="p-1 hover:bg-red-50 rounded" title={t('common.delete')} aria-label={t('common.delete')}>
                       <Trash2 className="w-3.5 h-3.5 text-red-400" />
                     </button>
                   </div>
@@ -824,6 +739,7 @@ const STARTUP_STEPS = [
 
 function StartupModal({ currentStep, error, onClose }) {
   const { t } = useTranslation()
+  const dialogRef = useRef(null)
   // Animate through steps progressively even when they arrive in a burst.
   const [displayStep, setDisplayStep] = useState(0)
   useEffect(() => {
@@ -836,9 +752,27 @@ function StartupModal({ currentStep, error, onClose }) {
   }, [currentStep, displayStep])
 
   const done = displayStep > 7
+  const closable = done || !!error
+
+  // Move focus into the dialog on open so keyboard users land inside it.
+  useEffect(() => {
+    dialogRef.current?.focus()
+  }, [])
+
+  const onKeyDown = (e) => {
+    if (e.key === 'Escape' && closable) onClose()
+  }
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onKeyDown={onKeyDown}>
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="startup-modal-title"
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden outline-none"
+      >
         {/* Header */}
         <div className={`px-6 py-4 ${error ? 'bg-red-50' : done ? 'bg-green-50' : 'bg-indigo-50'}`}>
           <div className="flex items-center justify-between">
@@ -850,12 +784,12 @@ function StartupModal({ currentStep, error, onClose }) {
               ) : (
                 <Loader2 className="w-6 h-6 text-indigo-500 animate-spin" />
               )}
-              <h3 className="text-lg font-semibold text-gray-900">
+              <h3 id="startup-modal-title" className="text-lg font-semibold text-gray-900">
                 {error ? t('agent.startup_failed') : done ? t('agent.agent_ready') : t('agent.starting_agent')}
               </h3>
             </div>
             {(done || error) && (
-              <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">
+              <button type="button" onClick={onClose} aria-label={t('common.close')} className="text-gray-400 hover:text-gray-600 transition-colors">
                 <X className="w-5 h-5" />
               </button>
             )}
@@ -929,15 +863,27 @@ function StartupModal({ currentStep, error, onClose }) {
 // ---------------------------------------------------------------------------
 // Main Monitor
 // ---------------------------------------------------------------------------
-export default function AutonomousAgentMonitor() {
+
+/** Max log entries kept on screen. */
+const MAX_LOG_ITEMS = 500
+/** Right after a (re)connect the server replays its recent backlog; events seen in this window are de-duplicated. */
+const REPLAY_WINDOW_MS = 3000
+const EMPTY_LIVE = { thinking: '', content: '' }
+const stripToolCallXml = (text) => (text || '').replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '').trim()
+
+export default function AutonomousAgentMonitor({ active = true }) {
   const { t } = useTranslation()
-  // Global app state — the sidebar's running indicator reads agentStatus,
-  // so this page keeps it in sync with what it polls.
-  const { dispatch: appDispatch } = useApp()
+  // Stable actions only: the sidebar's running indicator reads agentStatus, so
+  // this page keeps it in sync with what it polls — without re-rendering on
+  // every live data batch.
+  const { dispatch: appDispatch } = useAppActions()
+  const visible = useDocumentVisible()
+  const [actionFlash, setActionFlash] = useFlash(6000)
   // State
   const [agentStatus, setAgentStatus] = useState(null)
   const [isRunning, setIsRunning] = useState(false)
   const [logUpdates, setLogUpdates] = useState([])
+  const [logLoadError, setLogLoadError] = useState('')
   const [logFilter, setLogFilter] = useState('all') // 'all' | 'analysis' | 'chat'
   const [llmProvider, setLlmProvider] = useState('gemini')
   const [model, setModel] = useState('')
@@ -945,14 +891,9 @@ export default function AutonomousAgentMonitor() {
   const [, setDefaultModel] = useState('')
   const [providerModels, setProviderModels] = useState({})
   const [wsConnected, setWsConnected] = useState(false)
-  // Only the setter is used — the polled report list is not rendered here.
-  const [, setReports] = useState([])
-  const [selectedReport, setSelectedReport] = useState(null)
   const [cumulativeTokens, setCumulativeTokens] = useState({ prompt: 0, thoughts: 0, response: 0, cacheRead: 0, cacheCreation: 0 })
-  // Only the setter is used — the 1s timer writes it purely to force a re-render
-  // tick; the elapsed values themselves are recomputed from refs while rendering.
-  const [, setLocalDurations] = useState({ analysis: 0, chat: 0 })
-  const [liveStream, setLiveStream] = useState({ thinking: '', content: '' })
+  const [liveStream, setLiveStream] = useState(EMPTY_LIVE)
+  const [stopping, setStopping] = useState(false)
 
   const [wsReconnecting, setWsReconnecting] = useState(false)
   const [startupModal, setStartupModal] = useState(null) // null | { step, error }
@@ -966,44 +907,70 @@ export default function AutonomousAgentMonitor() {
   const configHydratedRef = useRef(false) // true once the initial provider/model resolution finished
   const connectMonitorRef = useRef(null) // stable ref for reconnect to call
   const isRunningRef = useRef(false) // track isRunning for WS onclose to check
-  const analysisStateKeyRef = useRef(null)
-  const chatStateKeyRef = useRef(null)
-  const analysisLocalStartRef = useRef(null)
-  const chatLocalStartRef = useRef(null)
+  // True while a start this tab triggered is in flight (gates the startup modal).
+  const startInitiatedRef = useRef(false)
   // Streaming chunks bucketed by taskType (analysis/chat/quick/scheduled) so
   // concurrent loops don't interleave their chunks into the same string.
   const streamBufferRef = useRef({})
   const lastStreamTaskRef = useRef('analysis')
+  // Replay de-duplication: how many times each event key is already on screen,
+  // and (right after a connect) how many of those the server may still replay.
+  const keyCountsRef = useRef(new Map())
+  const replayBudgetRef = useRef(null)
+  const replayTimerRef = useRef(null)
+  const waitingShownRef = useRef(false)
 
-  const stripToolCallXml = (text) => (text || '').replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '').trim()
+  const clearLive = useCallback(() => {
+    setLiveStream((prev) => (prev.thinking || prev.content ? EMPTY_LIVE : prev))
+  }, [])
+
+  /** Remember that an event with this key is on screen (bounded). */
+  const registerKey = useCallback((key) => {
+    const counts = keyCountsRef.current
+    if (counts.size > 5000) counts.clear()
+    counts.set(key, (counts.get(key) || 0) + 1)
+  }, [])
+
+  /** True when `key` is a backlog replay of something already shown (consumes one budget slot). */
+  const consumeReplay = useCallback((key) => {
+    const budget = replayBudgetRef.current
+    const left = budget ? budget.get(key) || 0 : 0
+    if (left <= 0) return false
+    budget.set(key, left - 1)
+    return true
+  }, [])
 
   // Flush accumulated streaming content. If taskType is given, flush only that
   // bucket; otherwise flush every bucket.
   const flushStreamBuffer = useCallback((taskType) => {
     const buckets = streamBufferRef.current
     const targets = taskType ? [taskType] : Object.keys(buckets)
-    const time = new Date().toLocaleTimeString()
+    const now = Date.now()
+    const time = new Date(now).toLocaleTimeString()
     const toAdd = []
     for (const tt of targets) {
       const buf = buckets[tt]
       if (!buf) continue
-      if (buf.thinking) {
-        toAdd.push({ id: genId(), time, message: { text: `💭 ${buf.thinking}`, type: 'thinking', taskType: tt } })
-      }
+      // The list is newest-first. Thinking precedes its reply, so the reply is
+      // listed first (on top) and the thinking right below it.
       const contentStripped = stripToolCallXml(buf.content)
       if (contentStripped) {
-        toAdd.push({ id: genId(), time, message: { text: `🤖 Assistant: ${contentStripped}`, type: 'content', taskType: tt } })
+        toAdd.push({ id: genId(), time, ts: now, message: { text: `🤖 ${t('agent.evt_assistant')}: ${contentStripped}`, type: 'content', taskType: tt } })
+      }
+      if (buf.thinking) {
+        toAdd.push({ id: genId(), time, ts: now, message: { text: `💭 ${buf.thinking}`, type: 'thinking', taskType: tt } })
       }
       buf.content = ''
       buf.thinking = ''
     }
     if (toAdd.length > 0) {
-      setLogUpdates((prev) => [...toAdd, ...prev.slice(0, 499)])
+      setLogUpdates((prev) => [...toAdd, ...prev.slice(0, MAX_LOG_ITEMS - toAdd.length)])
     }
-    setLiveStream({ thinking: '', content: '' })
-  }, [])
+    clearLive()
+  }, [clearLive, t])
 
-  const addStatusUpdate = useCallback((msgObj) => {
+  /** meta: { ts?: epoch ms of the event, key?: dedupe key } */
+  const addStatusUpdate = useCallback((msgObj, meta = {}) => {
     const { taskType, ...message } = msgObj
     const tt = taskType || 'analysis'
     const buckets = streamBufferRef.current
@@ -1011,7 +978,7 @@ export default function AutonomousAgentMonitor() {
     const buf = buckets[tt]
 
     if (message.isStreaming) {
-      const delta = message.rawDelta ?? message.text?.replace(/^💭 |^🤖 Assistant: /, '') ?? ''
+      const delta = message.rawDelta ?? message.text?.replace(/^💭 |^🤖 [^:]*: /, '') ?? ''
       lastStreamTaskRef.current = tt
       if (message.type === 'thinking') {
         if (buf.content) flushStreamBuffer(tt)
@@ -1026,8 +993,15 @@ export default function AutonomousAgentMonitor() {
     // Non-streaming event: flush only its own bucket so concurrent loops keep
     // their in-flight streaming text intact.
     flushStreamBuffer(tt)
-    const update = { id: genId(), time: new Date().toLocaleTimeString(), message: { ...message, taskType: tt } }
-    setLogUpdates((prev) => [update, ...prev.slice(0, 499)])
+    const ts = meta.ts ?? Date.now()
+    const update = { id: genId(), time: new Date(ts).toLocaleTimeString(), ts, key: meta.key, message: { ...message, taskType: tt } }
+    setLogUpdates((prev) => {
+      // Consecutive progress ticks from the same tool replace each other.
+      if (message.type === 'progress' && prev[0]?.message?.type === 'progress' && prev[0].message.progressTool === message.progressTool) {
+        return [update, ...prev.slice(1)]
+      }
+      return [update, ...prev.slice(0, MAX_LOG_ITEMS - 1)]
+    })
   }, [flushStreamBuffer])
 
   const addCumulativeTokens = useCallback((tu) => {
@@ -1041,28 +1015,21 @@ export default function AutonomousAgentMonitor() {
     }))
   }, [])
 
-  // Timer for smooth state duration
-  useEffect(() => {
-    const timer = setInterval(() => {
-      const now = Date.now()
-      setLocalDurations({
-        analysis: analysisLocalStartRef.current ? Math.floor((now - analysisLocalStartRef.current) / 1000) : 0,
-        chat: chatLocalStartRef.current ? Math.floor((now - chatLocalStartRef.current) / 1000) : 0,
-      })
-    }, 1000)
-    return () => clearInterval(timer)
-  }, [])
-
   // Timer to sync streaming buffer to live preview state (real-time display).
-  // Single-channel preview shows the most recently active bucket.
+  // Single-channel preview shows the most recently active bucket. Paused while
+  // the page is hidden or not the active route; unchanged content bails out of
+  // the state update so an idle stream causes no re-renders.
   useEffect(() => {
+    if (!active || !visible) return undefined
     const timer = setInterval(() => {
       const tt = lastStreamTaskRef.current || 'analysis'
-      const buf = streamBufferRef.current[tt] || { thinking: '', content: '' }
-      setLiveStream({ thinking: buf.thinking || '', content: buf.content || '' })
+      const buf = streamBufferRef.current[tt] || EMPTY_LIVE
+      const thinking = buf.thinking || ''
+      const content = buf.content || ''
+      setLiveStream((prev) => (prev.thinking === thinking && prev.content === content ? prev : { thinking, content }))
     }, 150)
     return () => clearInterval(timer)
-  }, [])
+  }, [active, visible])
 
   const formatAgentState = (status) => {
     if (!status) return '—'
@@ -1084,19 +1051,6 @@ export default function AutonomousAgentMonitor() {
     return `${s.charAt(0).toUpperCase() + s.slice(1)} (${dur}s)`
   }
 
-  const updateTimingRefs = (status) => {
-    const newAnalysisState = status?.analysis_state
-    if (newAnalysisState !== analysisStateKeyRef.current) {
-      analysisStateKeyRef.current = newAnalysisState
-      analysisLocalStartRef.current = Date.now() - (status?.analysis_state_duration * 1000 || 0)
-    }
-    const newChatState = status?.chat_state
-    if (newChatState !== chatStateKeyRef.current) {
-      chatStateKeyRef.current = newChatState
-      chatLocalStartRef.current = Date.now() - (status?.chat_state_duration * 1000 || 0)
-    }
-  }
-
   // API Calls
   const checkAgentStatus = useCallback(async () => {
     try {
@@ -1105,7 +1059,6 @@ export default function AutonomousAgentMonitor() {
         setAgentStatus(result)
         setIsRunning(true)
         appDispatch({ type: 'SET_AGENT_STATUS', payload: { ...result, running: true, user_id: 'LiveUser' } })
-        updateTimingRefs(result.status)
         if (result.status?.cumulative_tokens) {
           const ct = result.status.cumulative_tokens
           setCumulativeTokens({
@@ -1122,44 +1075,51 @@ export default function AutonomousAgentMonitor() {
           if (result.config.llm_provider) setLlmProvider(result.config.llm_provider)
           if (result.config.model) setModel(result.config.model)
         }
-      } else {
+      } else if (result.success) {
+        // Only an explicit "not running" answer means stopped.
         setAgentStatus(null)
         setIsRunning(false)
         setWsReconnecting(false)
         configSyncedRef.current = false
         appDispatch({ type: 'SET_AGENT_STATUS', payload: { running: false } })
       }
+      // A failed poll (network blip, 5xx, 401) keeps the previous state.
     } catch (error) {
       console.error('Failed to get agent status:', error)
     }
   }, [appDispatch])
 
-  const fetchReports = useCallback(async () => {
-    try {
-      const result = await api.queryAgentMemory('reports')
-      if (result.success && result.data) setReports(result.data)
-    } catch (error) { /* Silent */ }
-  }, [])
-
   const fetchActivityLog = useCallback(async () => {
     try {
-      const result = await api.getAgentActivity(500)
-      if (result.success && result.events?.length) {
-        const items = []
-        result.events.forEach((ev) => {
-          const msg = eventToMessage(ev)
-          if (!msg) return
-          if (msg.isStreaming) return
-          items.push({
-            id: genId(),
-            time: ev.created_at ? parseBackendDate(ev.created_at).toLocaleTimeString() : '',
-            message: msg,
-          })
-        })
-        setLogUpdates(items.reverse())
+      const result = await api.getAgentActivity(MAX_LOG_ITEMS)
+      if (!result.success) {
+        setLogLoadError(result.error || t('common.load_failed'))
+        return
       }
-    } catch (e) { /* Silent */ }
-  }, [])
+      setLogLoadError('')
+      if (!result.events?.length) return
+      const items = []
+      const fetchedCounts = new Map()
+      result.events.forEach((ev) => {
+        const d = unwrapEvent(ev)
+        const key = eventKey(ev.type || d.type || '', d)
+        fetchedCounts.set(key, (fetchedCounts.get(key) || 0) + 1)
+        const msg = eventToMessage(ev)
+        if (!msg) return
+        if (msg.isStreaming) return
+        const ts = eventTimeMs(ev, parseBackendDate) ?? Date.now()
+        items.push({ id: genId(), time: new Date(ts).toLocaleTimeString(), ts, key, message: msg })
+      })
+      // Everything fetched is now "on screen": a WS backlog replay of it must be skipped.
+      const counts = keyCountsRef.current
+      for (const [k, n] of fetchedCounts) counts.set(k, Math.max(counts.get(k) || 0, n))
+      // Merge rather than overwrite: live events that arrived while the fetch
+      // was in flight (or streamed text that is never persisted) must survive.
+      setLogUpdates((prev) => mergeActivity(prev, items.reverse(), MAX_LOG_ITEMS))
+    } catch (e) {
+      setLogLoadError(e?.message || t('common.load_failed'))
+    }
+  }, [t])
 
   // Schedule a WebSocket reconnect with exponential backoff
   const scheduleReconnect = useCallback(() => {
@@ -1179,15 +1139,24 @@ export default function AutonomousAgentMonitor() {
     if (wsStateRef.current === 'connecting' || wsStateRef.current === 'connected') return
 
     wsStateRef.current = 'connecting'
-    if (wsRef.current) { wsRef.current.close(); wsRef.current = null }
+    if (wsRef.current) { const old = wsRef.current; wsRef.current = null; old.close() }
 
     const websocket = api.connectAgentMonitor()
 
     websocket.onopen = () => {
       wsStateRef.current = 'connected'
       wsReconnectAttemptsRef.current = 0
+      waitingShownRef.current = false
       setWsConnected(true)
       setWsReconnecting(false)
+      // The server replays its recent backlog on connect: anything already on
+      // screen (activity-log fetch, or a previous connection) is skipped for a moment.
+      replayBudgetRef.current = new Map(keyCountsRef.current)
+      if (replayTimerRef.current) clearTimeout(replayTimerRef.current)
+      replayTimerRef.current = setTimeout(() => {
+        replayTimerRef.current = null
+        replayBudgetRef.current = null
+      }, REPLAY_WINDOW_MS)
       addStatusUpdate({ taskType: 'analysis', text: `📡 ${t('agent.monitor_connected')}`, type: 'system' })
     }
 
@@ -1196,7 +1165,6 @@ export default function AutonomousAgentMonitor() {
         const data = JSON.parse(event.data)
 
         if (data.type === 'status_update') {
-          updateTimingRefs(data.status)
           setAgentStatus((prev) => ({
             ...prev,
             success: true,
@@ -1214,7 +1182,26 @@ export default function AutonomousAgentMonitor() {
               cacheCreation: ct.cache_creation_tokens || 0,
             })
           }
-        } else if (data.type === 'token_usage') {
+          return
+        }
+        if (data.type === 'pong') return
+        if (data.type === 'agent_waiting') {
+          // Connected, but the agent hasn't started yet. Not an error; events
+          // follow (agent_started, …) once it does.
+          if (!waitingShownRef.current) {
+            waitingShownRef.current = true
+            addStatusUpdate({ taskType: 'analysis', text: `📡 ${t('agent.evt_waiting')}`, type: 'system' })
+          }
+          return
+        }
+
+        // De-duplicate the backlog replay against what is already on screen.
+        const key = eventKey(data.type || '', data)
+        if (consumeReplay(key)) return
+        registerKey(key)
+        const evTs = eventTimeMs(data, parseBackendDate) ?? Date.now()
+
+        if (data.type === 'token_usage') {
           const isChat = !!data.chat_id
           const tokenUsage = {
             prompt_tokens: data.prompt_tokens,
@@ -1229,20 +1216,22 @@ export default function AutonomousAgentMonitor() {
           const buckets = streamBufferRef.current
           if (!buckets[tt]) buckets[tt] = { content: '', thinking: '' }
           const buf = buckets[tt]
-          const time = new Date().toLocaleTimeString()
-          setLiveStream({ thinking: '', content: '' })
+          const now = Date.now()
+          const time = new Date(now).toLocaleTimeString()
+          clearLive()
           const toPrepend = []
-          if (buf.thinking) {
-            toPrepend.push({ id: genId(), time, message: { text: `💭 ${buf.thinking}`, type: 'thinking', taskType: tt } })
-          }
+          // Newest-first: the reply goes on top, its thinking right below it.
           const contentStripped = stripToolCallXml(buf.content)
           if (contentStripped) {
-            toPrepend.push({ id: genId(), time, message: { text: `🤖 Assistant: ${contentStripped}`, type: 'content', taskType: tt } })
+            toPrepend.push({ id: genId(), time, ts: now, message: { text: `🤖 ${t('agent.evt_assistant')}: ${contentStripped}`, type: 'content', taskType: tt } })
+          }
+          if (buf.thinking) {
+            toPrepend.push({ id: genId(), time, ts: now, message: { text: `💭 ${buf.thinking}`, type: 'thinking', taskType: tt } })
           }
           buf.thinking = ''
           buf.content = ''
           setLogUpdates((prev) => {
-            const withFlushed = [...toPrepend, ...prev]
+            const withFlushed = toPrepend.length ? [...toPrepend, ...prev] : prev
             // The list is newest-first, so scan forward to find the most
             // recent reply — that's the one this usage belongs to.
             let idx = -1
@@ -1250,36 +1239,37 @@ export default function AutonomousAgentMonitor() {
               if (withFlushed[i].message?.type === 'content') { idx = i; break }
             }
             if (idx >= 0) {
-              const next = [...withFlushed]
+              const next = withFlushed === prev ? [...prev] : withFlushed
               next[idx] = { ...next[idx], message: { ...next[idx].message, tokenUsage } }
-              return next.slice(0, 500)
+              return next.length > MAX_LOG_ITEMS ? next.slice(0, MAX_LOG_ITEMS) : next
             }
             const tokenLine = formatTokenUsage(tokenUsage)
             if (tokenLine) {
-              return [{ id: genId(), time, message: { text: tokenLine, type: 'token_usage', tokenUsage, taskType: isChat ? 'chat' : 'analysis' } }, ...withFlushed.slice(0, 499)]
+              return [{ id: genId(), time, ts: now, message: { text: tokenLine, type: 'token_usage', tokenUsage, taskType: isChat ? 'chat' : 'analysis' } }, ...withFlushed.slice(0, MAX_LOG_ITEMS - 1)]
             }
-            return withFlushed.slice(0, 500)
+            return withFlushed.length > MAX_LOG_ITEMS ? withFlushed.slice(0, MAX_LOG_ITEMS) : withFlushed
           })
         } else {
           if (data.type === 'startup_progress') {
-            setStartupModal({ step: data.step, error: null })
+            // Only pop the modal for a start this tab initiated, or when the
+            // agent wasn't running — never for a stale replayed progress step.
+            if (startInitiatedRef.current || !isRunningRef.current) {
+              setStartupModal({ step: data.step, error: null })
+            }
           } else if (data.type === 'agent_started') {
             // Mark startup complete (step 8 = past the last step)
             setStartupModal((prev) => prev ? { step: 8, error: null } : null)
             streamBufferRef.current = {}
             lastStreamTaskRef.current = 'analysis'
-            setLiveStream({ thinking: '', content: '' })
+            clearLive()
+            checkAgentStatus()
           } else if (data.type === 'startup_error') {
-            setStartupModal((prev) => ({ step: prev?.step || 0, error: data.error || 'Unknown error' }))
+            setStartupModal((prev) => ({ step: prev?.step || 0, error: data.error || t('common.unknown_error') }))
             setIsRunning(false)
             setWsReconnecting(false)
           }
           const msg = eventToMessage(data)
-          if (msg) addStatusUpdate(msg)
-
-          if (data.type === 'tool_result' && data.success && data.tool === 'push_report') {
-            fetchReports()
-          }
+          if (msg) addStatusUpdate(msg, { ts: evTs, key })
         }
       } catch (e) {
         console.error('Failed to parse monitor event:', e)
@@ -1287,21 +1277,23 @@ export default function AutonomousAgentMonitor() {
     }
 
     websocket.onerror = () => {
+      if (wsRef.current !== websocket) return
       wsStateRef.current = 'disconnected'
       setWsConnected(false)
     }
     websocket.onclose = () => {
       const wasOurs = wsRef.current === websocket
+      if (!wasOurs) return
       wsStateRef.current = 'disconnected'
       setWsConnected(false)
-      if (wasOurs && isRunningRef.current) {
+      if (isRunningRef.current) {
         addStatusUpdate({ taskType: 'analysis', text: `📡 ${t('agent.monitor_disconnected')}`, type: 'system' })
         // Auto-reconnect only if agent is still believed to be running
         scheduleReconnect()
       }
     }
     wsRef.current = websocket
-  }, [addStatusUpdate, addCumulativeTokens, fetchReports, scheduleReconnect, t])
+  }, [addStatusUpdate, addCumulativeTokens, checkAgentStatus, clearLive, consumeReplay, registerKey, scheduleReconnect, t])
 
   // Keep stable refs for callbacks (updated after commit, never during render)
   useEffect(() => {
@@ -1312,13 +1304,14 @@ export default function AutonomousAgentMonitor() {
   // Handlers
   const handleStartAgent = async () => {
     // Show modal immediately (step 0 = waiting for first progress event)
+    startInitiatedRef.current = true
     setStartupModal({ step: 0, error: null })
     try {
       const result = await api.startAutonomousAgent(llmProvider, {
         model: model.trim() || undefined,
       })
       if (!result.success) {
-        setStartupModal({ step: 0, error: result.error || result.detail || 'Unknown error' })
+        setStartupModal({ step: 0, error: result.error || result.detail || t('common.unknown_error') })
         return
       }
       setIsRunning(true)
@@ -1326,28 +1319,39 @@ export default function AutonomousAgentMonitor() {
       wsReconnectAttemptsRef.current = 0
       addStatusUpdate({ taskType: 'analysis', text: `🚀 ${t('agent.agent_starting')}`, type: 'system' })
       connectMonitor()
-      setTimeout(() => { checkAgentStatus(); fetchReports() }, 2000)
+      setTimeout(() => { checkAgentStatus() }, 2000)
     } catch (error) {
       setStartupModal({ step: 0, error: error.message || error.toString() })
     }
   }
 
   const handleStopAgent = async () => {
-    // Cancel any pending reconnect
-    if (wsReconnectTimerRef.current) { clearTimeout(wsReconnectTimerRef.current); wsReconnectTimerRef.current = null }
-    wsReconnectAttemptsRef.current = 0
-    setWsReconnecting(false)
-    if (wsRef.current) { wsRef.current.close(); wsRef.current = null }
-    wsStateRef.current = 'disconnected'
+    if (stopping) return
+    setStopping(true)
     try {
-      await api.stopAutonomousAgent()
+      // Ask the server first: only a confirmed stop may tear down local state,
+      // otherwise a failed request would leave a running agent with no monitor.
+      const res = await api.stopAutonomousAgent()
+      if (!res.success) {
+        setActionFlash('error', res.error || t('agent.stop_failed'))
+        return
+      }
+      if (wsReconnectTimerRef.current) { clearTimeout(wsReconnectTimerRef.current); wsReconnectTimerRef.current = null }
+      wsReconnectAttemptsRef.current = 0
+      setWsReconnecting(false)
+      if (wsRef.current) { const old = wsRef.current; wsRef.current = null; old.close() }
+      wsStateRef.current = 'disconnected'
       setIsRunning(false)
       setAgentStatus(null)
       setWsConnected(false)
       configSyncedRef.current = false
+      appDispatch({ type: 'SET_AGENT_STATUS', payload: { running: false } })
       addStatusUpdate({ taskType: 'analysis', text: `🛑 ${t('agent.agent_stopped_by_user')}`, type: 'system' })
     } catch (error) {
       console.error('Failed to stop agent:', error)
+      setActionFlash('error', error?.message || t('agent.stop_failed'))
+    } finally {
+      setStopping(false)
     }
   }
 
@@ -1400,17 +1404,19 @@ export default function AutonomousAgentMonitor() {
   }, [llmProvider, model])
 
   useEffect(() => {
-    // False positive — all three are async and only setState after their `await`
+    // False positive — both are async and only setState after their `await`
     // on the API call, so nothing is set synchronously in this effect body.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchActivityLog()
     checkAgentStatus()
-    fetchReports()
-    // Poll agent status every 5 seconds — this is the authoritative source for isRunning
-    const statusInterval = setInterval(checkAgentStatus, 5000)
-    const reportInterval = setInterval(fetchReports, 10000)
-    return () => { clearInterval(statusInterval); clearInterval(reportInterval) }
-  }, [fetchActivityLog, checkAgentStatus, fetchReports])
+  }, [fetchActivityLog, checkAgentStatus])
+
+  // Poll agent status — the authoritative source for isRunning. Fast (5s)
+  // while this page is on screen, slow (30s) in the background so the sidebar
+  // indicator stays roughly right, and paused entirely while the tab is hidden.
+  usePolling(checkAgentStatus, active ? 5000 : 30000, true)
+  // Coming back to this page: catch up immediately.
+  useOnActivate(active, () => { checkAgentStatus(); fetchActivityLog() })
 
   useEffect(() => {
     if (isRunning && wsStateRef.current === 'disconnected' && !wsReconnectTimerRef.current) {
@@ -1428,19 +1434,27 @@ export default function AutonomousAgentMonitor() {
   useEffect(() => {
     return () => {
       if (wsReconnectTimerRef.current) { clearTimeout(wsReconnectTimerRef.current); wsReconnectTimerRef.current = null }
-      if (wsRef.current) { wsRef.current.close(); wsRef.current = null }
+      if (replayTimerRef.current) { clearTimeout(replayTimerRef.current); replayTimerRef.current = null }
+      if (wsRef.current) { const old = wsRef.current; wsRef.current = null; old.close() }
       wsStateRef.current = 'disconnected'
     }
   }, [])
 
   // Filtered logs
-  const filteredLogs = logFilter === 'all'
-    ? logUpdates
-    : logUpdates.filter(u => {
-        const tt = u.message?.taskType || 'analysis'
-        if (logFilter === 'chat') return tt === 'chat'
-        return tt !== 'chat' // 'analysis' filter shows analysis + scheduled
-      })
+  const filteredLogs = useMemo(() => (
+    logFilter === 'all'
+      ? logUpdates
+      : logUpdates.filter((u) => {
+          const tt = u.message?.taskType || 'analysis'
+          if (logFilter === 'chat') return tt === 'chat'
+          return tt !== 'chat' // 'analysis' filter shows analysis + scheduled + quick + plan
+        })
+  ), [logUpdates, logFilter])
+
+  const closeStartupModal = () => {
+    startInitiatedRef.current = false
+    setStartupModal(null)
+  }
 
   // Render
   return (
@@ -1449,7 +1463,7 @@ export default function AutonomousAgentMonitor() {
         <StartupModal
           currentStep={startupModal.step}
           error={startupModal.error}
-          onClose={() => setStartupModal(null)}
+          onClose={closeStartupModal}
         />
       )}
       <div className="flex items-center justify-between">
@@ -1468,13 +1482,16 @@ export default function AutonomousAgentMonitor() {
             ) : null}
           </div>
           <button
+            type="button"
             onClick={isRunning ? handleStopAgent : handleStartAgent}
-            className={`btn ${isRunning ? 'btn-danger' : 'btn-primary'} flex items-center space-x-2`}
+            disabled={stopping}
+            className={`btn ${isRunning ? 'btn-danger' : 'btn-primary'} flex items-center space-x-2 disabled:opacity-50`}
           >
             {isRunning ? (<><Square className="w-4 h-4" /><span>{t('agent.stop_agent')}</span></>) : (<><Play className="w-4 h-4" /><span>{t('agent.start_agent')}</span></>)}
           </button>
         </div>
       </div>
+      <InlineFlash flash={actionFlash} />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Configuration */}
@@ -1482,8 +1499,8 @@ export default function AutonomousAgentMonitor() {
           <h3 className="text-lg font-semibold text-gray-900 mb-4">{t('agent.configuration')}</h3>
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">{t('agent.llm_provider')}</label>
-              <select value={llmProvider} onChange={(e) => setLlmProvider(e.target.value)} className="select" disabled={isRunning}>
+              <label htmlFor="agent-llm-provider" className="block text-sm font-medium text-gray-700 mb-2">{t('agent.llm_provider')}</label>
+              <select id="agent-llm-provider" value={llmProvider} onChange={(e) => setLlmProvider(e.target.value)} className="select" disabled={isRunning}>
                 <option value="gemini">Google Gemini (SDK)</option>
                 <option value="google_vertex">Google Vertex AI</option>
                 <option value="openai">OpenAI</option>
@@ -1501,8 +1518,9 @@ export default function AutonomousAgentMonitor() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">{t('agent.model')}</label>
+              <label htmlFor="agent-llm-model" className="block text-sm font-medium text-gray-700 mb-2">{t('agent.model')}</label>
               <input
+                id="agent-llm-model"
                 type="text" value={model} onChange={(e) => setModel(e.target.value)}
                 placeholder={providerModels[llmProvider] || ''}
                 className="input w-full placeholder:text-gray-400" disabled={isRunning}
@@ -1634,8 +1652,8 @@ export default function AutonomousAgentMonitor() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Scheduled Tasks — 1/3 width, aligned with top row */}
         <div className="lg:col-span-1 space-y-6">
-          <ScheduledTasksPanel isRunning={isRunning} />
-          <TriggerRulesPanel isRunning={isRunning} />
+          <ScheduledTasksPanel isRunning={isRunning} active={active} />
+          <TriggerRulesPanel isRunning={isRunning} active={active} />
         </div>
 
         {/* Unified Agent Log — 2/3 width */}
@@ -1649,8 +1667,10 @@ export default function AutonomousAgentMonitor() {
             {/* Filter buttons */}
             {['all', 'analysis', 'chat'].map((f) => (
               <button
+                type="button"
                 key={f}
                 onClick={() => setLogFilter(f)}
+                aria-pressed={logFilter === f}
                 className={`text-xs px-2 py-0.5 rounded font-medium ${logFilter === f ? 'bg-primary-100 text-primary-700' : 'text-gray-400 hover:text-gray-600'}`}
               >
                 {t(`agent.${f}`)}
@@ -1658,12 +1678,19 @@ export default function AutonomousAgentMonitor() {
             ))}
             {logUpdates.length > 0 && (
               <button
+                type="button"
                 onClick={() => { if (window.confirm(t('agent.confirm_clear_logs'))) setLogUpdates([]) }}
                 className="text-xs px-2 py-0.5 rounded font-medium ml-3 bg-red-50 text-red-500 hover:bg-red-100 hover:text-red-700 border border-red-200/60"
               >{t('agent.clear')}</button>
             )}
           </div>
         </div>
+        {logLoadError && (
+          <div role="alert" className="mb-2 flex items-center gap-2 text-xs text-red-600 flex-shrink-0">
+            <span className="flex-1">{t('agent.activity_load_failed', { error: logLoadError })}</span>
+            <button type="button" onClick={fetchActivityLog} className="underline">{t('common.retry')}</button>
+          </div>
+        )}
         <div
           className="bg-gray-50 rounded p-4 overflow-y-auto font-mono text-[11px] border border-gray-100 shadow-inner flex-1"
         >
@@ -1695,48 +1722,6 @@ export default function AutonomousAgentMonitor() {
         </div>
       </div>
       </div>
-
-      {/* Report Modal */}
-      {selectedReport && (
-        <div
-          className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in duration-200"
-          onClick={() => setSelectedReport(null)}
-        >
-          <div
-            className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden shadow-2xl flex flex-col transform animate-in zoom-in-95 duration-200"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex items-start justify-between p-6 border-b border-gray-100 bg-white sticky top-0 z-10">
-              <div>
-                <div className="flex items-center space-x-3 mb-2">
-                  <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wide border ${selectedReport.alert_level === 'critical' ? 'bg-red-50 text-red-700 border-red-100' : selectedReport.alert_level === 'warning' ? 'bg-yellow-50 text-yellow-700 border-yellow-100' : 'bg-green-50 text-green-700 border-green-100'}`}>
-                    {selectedReport.alert_level || 'normal'}
-                  </span>
-                  <span className="text-xs text-gray-400 uppercase tracking-widest font-semibold flex items-center">
-                    <Calendar className="w-3 h-3 mr-1" />
-                    {formatFullDateTime(selectedReport.created_at)}
-                  </span>
-                </div>
-                <h2 className="text-2xl font-bold text-gray-900 leading-tight">
-                  {selectedReport.title || t('agent.health_analysis_report')}
-                </h2>
-              </div>
-              <button onClick={() => setSelectedReport(null)} className="p-2 hover:bg-gray-100 rounded-full transition-colors text-gray-400 hover:text-gray-600">
-                <X className="w-6 h-6" />
-              </button>
-            </div>
-            <div className="p-8 overflow-y-auto font-serif text-base leading-7 text-gray-800 bg-gray-50">
-              <div className="prose prose-indigo max-w-none">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{selectedReport.content || ''}</ReactMarkdown>
-              </div>
-            </div>
-            <div className="p-4 border-t border-gray-100 bg-white flex justify-between items-center text-xs text-gray-400">
-              <div>{t('reports.report_id')} {selectedReport.id}</div>
-              <button onClick={() => setSelectedReport(null)} className="btn bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium px-6">{t('common.close')}</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

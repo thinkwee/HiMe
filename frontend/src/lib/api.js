@@ -130,7 +130,9 @@ function _authHeaders() {
 
 async function _get(path, options = {}) {
   try {
-    const res = await fetch(`${API_BASE}${path}`, { headers: _authHeaders(), ...options })
+    // Merge (not replace) headers so a caller-supplied header can never drop auth.
+    const { headers: extraHeaders, ...rest } = options
+    const res = await fetch(`${API_BASE}${path}`, { ...rest, headers: { ...(extraHeaders || {}), ..._authHeaders() } })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) {
       _noteAuthStatus(res.status)
@@ -169,6 +171,20 @@ async function _post(path, body) {
       headers: { 'Content-Type': 'application/json', ..._authHeaders() },
       body: JSON.stringify(body),
     })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      _noteAuthStatus(res.status)
+      return { success: false, error: data.detail || data.error || `HTTP ${res.status}` }
+    }
+    return data
+  } catch (e) {
+    return { success: false, error: e?.message || 'Network error' }
+  }
+}
+
+async function _delete(path) {
+  try {
+    const res = await fetch(`${API_BASE}${path}`, { method: 'DELETE', headers: _authHeaders() })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) {
       _noteAuthStatus(res.status)
@@ -235,23 +251,28 @@ export const api = {
   getFeatureTypes: () => _get('/data/feature_types'),
 
   getParticipantFeatures: (pid, featureType = 'steps') =>
-    _get(`/data/features/${pid}?feature_type=${encodeURIComponent(featureType)}`),
+    _get(`/data/features/${encodeURIComponent(pid)}?feature_type=${encodeURIComponent(featureType)}`),
 
   getFeatureMetadata: () => _get('/data/feature_metadata'),
 
   inspectParticipantData: async (pid, featureType = 'steps', limit = 100) => {
-    const res = await fetch(
-      `${API_BASE}/data/inspect/${pid}?feature_type=${encodeURIComponent(featureType)}&limit=${limit}`,
-      { headers: _authHeaders() }
-    )
-    // Sanitise NaN/Infinity that SQLite may emit before JSON.parse
-    const text = (await res.text()).replace(/\bNaN\b|-?Infinity\b/g, 'null')
-    const data = JSON.parse(text)
-    if (!res.ok) {
-      _noteAuthStatus(res.status)
-      return { success: false, error: data.detail || data.error || `HTTP ${res.status}` }
+    try {
+      const res = await fetch(
+        `${API_BASE}/data/inspect/${encodeURIComponent(pid)}?feature_type=${encodeURIComponent(featureType)}&limit=${limit}`,
+        { headers: _authHeaders() }
+      )
+      // Sanitise NaN/Infinity that SQLite may emit before JSON.parse
+      const text = (await res.text()).replace(/\bNaN\b|-?Infinity\b/g, 'null')
+      let data = {}
+      try { data = JSON.parse(text) } catch (_) { /* non-JSON body (proxy error page) */ }
+      if (!res.ok) {
+        _noteAuthStatus(res.status)
+        return { success: false, error: data.detail || data.error || `HTTP ${res.status}` }
+      }
+      return data
+    } catch (e) {
+      return { success: false, error: e?.message || 'Network error' }
     }
-    return data
   },
 
   // ------------------------------------------------------------------ //
@@ -299,12 +320,12 @@ export const api = {
     _get(`/agent/activity/LiveUser?limit=${limit}`),
 
   queryAgentMemory: (queryType = 'stats') =>
-    _get(`/agent/memory/LiveUser?query_type=${queryType}`),
+    _get(`/agent/memory/LiveUser?query_type=${encodeURIComponent(queryType)}`),
 
   getTools: () => _get('/agent/tools'),
 
   inspectMemoryTable: (tableName, limit = 50) =>
-    _get(`/agent/memory/LiveUser/inspect?table_name=${tableName}&limit=${limit}`),
+    _get(`/agent/memory/LiveUser/inspect?table_name=${encodeURIComponent(tableName)}&limit=${limit}`),
 
   // Scheduled tasks
   getScheduledTasks: () =>
@@ -314,7 +335,7 @@ export const api = {
     _post('/agent/scheduled-tasks/LiveUser', { cron_expr: cronExpr, prompt_goal: promptGoal }),
 
   updateScheduledTask: (taskId, updates) =>
-    _put(`/agent/scheduled-tasks/LiveUser/${taskId}`, updates),
+    _put(`/agent/scheduled-tasks/LiveUser/${encodeURIComponent(taskId)}`, updates),
 
   triggerAnalysis: (goal = null) =>
     _post('/agent/trigger-analysis/LiveUser', { goal }),
@@ -327,7 +348,7 @@ export const api = {
     _post('/agent/trigger-rules/LiveUser', rule),
 
   updateTriggerRule: (ruleId, updates) =>
-    _put(`/agent/trigger-rules/LiveUser/${ruleId}`, updates),
+    _put(`/agent/trigger-rules/LiveUser/${encodeURIComponent(ruleId)}`, updates),
 
   // ------------------------------------------------------------------ //
   // WebSocket connections
@@ -345,8 +366,8 @@ export const api = {
   // ------------------------------------------------------------------ //
 
   listPrompts: () => _get('/prompts'),
-  fetchPrompt: (id) => _get(`/prompts/${id}`),
-  savePrompt: (id, content) => _post(`/prompts/${id}`, { content }),
+  fetchPrompt: (id) => _get(`/prompts/${encodeURIComponent(id)}`),
+  savePrompt: (id, content) => _post(`/prompts/${encodeURIComponent(id)}`, { content }),
 
   // ------------------------------------------------------------------ //
   // Personalised Pages
@@ -357,21 +378,12 @@ export const api = {
   // ------------------------------------------------------------------ //
 
   listSkills: () => _get('/skills'),
-  fetchSkill: (name) => _get(`/skills/${name}`),
+  fetchSkill: (name) => _get(`/skills/${encodeURIComponent(name)}`),
   createSkill: (name, description, body) =>
     _post('/skills', { name, description, body }),
   updateSkill: (name, description, body) =>
-    _put(`/skills/${name}`, { description, body }),
-  deleteSkill: (name) =>
-    fetch(`${API_BASE}/skills/${name}`, { method: 'DELETE', headers: _authHeaders() })
-      .then(async (res) => {
-        const data = await res.json().catch(() => ({}))
-        if (!res.ok) {
-          _noteAuthStatus(res.status)
-          return { success: false, error: data.detail || `HTTP ${res.status}` }
-        }
-        return data
-      }),
+    _put(`/skills/${encodeURIComponent(name)}`, { description, body }),
+  deleteSkill: (name) => _delete(`/skills/${encodeURIComponent(name)}`),
   setSkillState: (disabled) => _put('/skills/state', { disabled }),
 
   // ------------------------------------------------------------------ //
@@ -410,14 +422,27 @@ export const api = {
       })
       .catch((e) => ({ success: false, error: e?.message || 'Network error' })),
 
-  deletePersonalisedPage: (pageId) =>
-    fetch(`${API_BASE}/personalised-pages/${pageId}`, { method: 'DELETE', headers: _authHeaders() })
-      .then(async (res) => {
-        const data = await res.json().catch(() => ({}))
-        if (!res.ok) {
-          _noteAuthStatus(res.status)
-          return { success: false, error: data.detail || `HTTP ${res.status}` }
-        }
-        return data
-      }),
+  /**
+   * Fetch an agent-sent chart (chat_image event) with the bearer header.
+   * `urlOrId` is either the `url` field from the event ("/api/agent/chat-image/<id>")
+   * or a bare image id. Returns { success: true, blob } or { success: false, error }.
+   */
+  fetchChatImage: async (urlOrId) => {
+    try {
+      const raw = String(urlOrId || '')
+      const path = raw.startsWith('/api/')
+        ? raw.slice(API_BASE.length)
+        : `/agent/chat-image/${encodeURIComponent(raw)}`
+      const res = await fetch(`${API_BASE}${path}`, { headers: _authHeaders() })
+      if (!res.ok) {
+        _noteAuthStatus(res.status)
+        return { success: false, error: `HTTP ${res.status}` }
+      }
+      return { success: true, blob: await res.blob() }
+    } catch (e) {
+      return { success: false, error: e?.message || 'Network error' }
+    }
+  },
+
+  deletePersonalisedPage: (pageId) => _delete(`/personalised-pages/${encodeURIComponent(pageId)}`),
 }

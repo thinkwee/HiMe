@@ -33,7 +33,9 @@
     "token_placeholder": "粘贴 API_AUTH_TOKEN",
     "remember": "在此设备上记住",
     "remember_hint": "关闭浏览器后仍保留该令牌；否则仅在当前标签页内有效。",
-    "submit": "保存并重新加载"
+    "submit": "保存并重新加载",
+    "banner": "服务器拒绝了请求，需要提供 API 令牌。",
+    "enter_token": "输入令牌"
   },
   "nav": {
     "dashboard": "仪表盘",
@@ -90,7 +92,13 @@
     "category_workouts": "锻炼",
     "category_mobility": "移动与步态",
     "category_environment": "环境与营养",
-    "category_body": "身体与健康"
+    "category_body": "身体与健康",
+    "val_short": "值",
+    "value": "数值",
+    "downloaded": "已下载",
+    "copy_failed": "复制失败",
+    "expand_chart": "展开图表：{{name}}",
+    "chart_error": "无法显示“{{name}}”的图表。"
   },
   "agent": {
     "title": "智能体监控",
@@ -201,7 +209,66 @@
     "monitor_connected": "监控已连接到智能体",
     "monitor_disconnected": "监控已断开,正在重连...",
     "agent_starting": "智能体启动中...",
-    "agent_stopped_by_user": "用户已停止智能体"
+    "agent_stopped_by_user": "用户已停止智能体",
+    "evt_user": "用户",
+    "evt_rows": "{{n}} 行",
+    "evt_rows_truncated": "{{n}} 行（已截断）",
+    "evt_image": "图片",
+    "evt_chat_cleared": "聊天记录已清空",
+    "evt_progress": "{{tool}}：{{info}}",
+    "evt_assistant": "助手",
+    "evt_error": "错误：{{error}}",
+    "evt_agent_restarted": "智能体出错后已重启：{{error}}",
+    "evt_unknown": "未知",
+    "evt_agent_started": "智能体已启动",
+    "evt_startup_progress": "[{{step}}/{{total}}] {{label}}",
+    "evt_startup_failed": "启动失败：{{error}}",
+    "evt_agent_stopped": "智能体已停止：{{reason}}",
+    "evt_task_started": "任务 #{{cycle}} 已开始",
+    "evt_task_completed": "任务 #{{cycle}} 已完成",
+    "evt_report_pushed": "报告已推送（ID：{{id}}）",
+    "evt_forced_sleep": "本轮分析未生成报告 - {{reason}}。智能体将在下一轮重试。",
+    "evt_max_turns": "已达到最大轮数",
+    "evt_token_truncated": "回复在 {{used}}/{{max}} 个 token 处被截断（已达输出上限）",
+    "evt_quick_start": "快速分析已开始（iOS 长按）",
+    "evt_quick_complete": "快速分析完成 -> {{state}}",
+    "evt_waiting": "已连接 - 等待智能体启动",
+    "usage_line": "输入 {{in}} / 输出 {{out}}",
+    "usage_thinking": "思考 {{n}}",
+    "usage_response": "回复 {{n}}",
+    "usage_cache_hit": "缓存命中 {{n}}",
+    "usage_cache_write": "缓存写入 {{n}}",
+    "image_load_failed": "图片加载失败",
+    "badge_plan": "计划",
+    "tool_analyze": "分析",
+    "tool_manage": "管理",
+    "analysis_queued": "分析已加入队列",
+    "stop_failed": "停止智能体失败",
+    "activity_load_failed": "无法加载历史活动：{{error}}",
+    "weekday_0": "周日",
+    "weekday_1": "周一",
+    "weekday_2": "周二",
+    "weekday_3": "周三",
+    "weekday_4": "周四",
+    "weekday_5": "周五",
+    "weekday_6": "周六",
+    "status_active": "运行中",
+    "status_paused": "已暂停",
+    "condition": "条件",
+    "cond_gt": "> 大于",
+    "cond_lt": "< 小于",
+    "cond_gte": "≥ 大于等于",
+    "cond_lte": "≤ 小于等于",
+    "cond_avg_gt": "平均值 > 阈值",
+    "cond_avg_lt": "平均值 < 阈值",
+    "cond_spike": "突增（σ）",
+    "cond_drop": "骤降（σ）",
+    "cond_delta_gt": "变化量 > 阈值",
+    "cond_absent": "数据缺失",
+    "cond_short_spike": "突增",
+    "cond_short_drop": "骤降",
+    "cond_short_absent": "缺失",
+    "rule_window_cooldown": "窗口 {{window}} 分钟 / 冷却 {{cooldown}} 分钟"
   },
   "reports": {
     "title": "分析报告",
@@ -233,7 +300,10 @@
     "source_quick": "快速分析",
     "source_scheduled": "定时分析",
     "data_time_label": "数据时间:",
-    "id_prefix": "编号:"
+    "id_prefix": "编号:",
+    "load_failed": "加载报告失败",
+    "load_failed_detail": "无法加载报告：{{error}}",
+    "clear_search": "清除搜索"
   },
   "prompts": {
     "title": "提示词管理",
@@ -298,7 +368,8 @@
     "maximize": "最大化",
     "confirm_delete": "确认删除页面 \"{{pageId}}\"?此操作无法撤销。",
     "delete_failed": "删除页面失败: {{error}}",
-    "load_failed": "加载页面失败: {{error}}"
+    "load_failed": "加载页面失败: {{error}}",
+    "list_failed": "无法加载页面：{{error}}"
   },
   "skills": {
     "title": "技能",
@@ -343,10 +414,16 @@
     "description_placeholder": "例如 根据心率变异趋势、静息心率上升和睡眠效率检测过度训练",
     "body_placeholder": "# 手册正文\n\n1. 使用 sql 工具查询 ...\n2. 使用 code 工具计算 ...\n3. 决策规则: ...",
     "tokens_lines": "Token 数: ~{{tokens}} | 行数: {{lines}}",
-    "shortcut": "快捷键: Ctrl + S 保存"
+    "shortcut": "快捷键: Ctrl + S 保存",
+    "confirm_discard": "有未保存的修改，确定放弃吗？",
+    "body_label": "手册正文"
   },
   "language_switcher": {
     "english": "English",
     "chinese": "中文"
+  },
+  "app": {
+    "global_error": "无法从服务器加载数据：{{error}}",
+    "stream_error": "实时数据流出错：{{error}} 正在重新连接..."
   }
 }

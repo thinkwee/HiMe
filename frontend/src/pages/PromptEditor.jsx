@@ -32,6 +32,12 @@ export default function PromptEditor() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [status, setStatus] = useState(null) // { type: 'success' | 'error', message: string }
+  const statusTimerRef = useRef(null)
+
+  // Never leave the "saved" timer running after unmount.
+  useEffect(() => () => {
+    if (statusTimerRef.current) clearTimeout(statusTimerRef.current)
+  }, [])
 
   // Mirror of selectedId readable from async callbacks without re-creating them
   useEffect(() => {
@@ -101,8 +107,9 @@ export default function PromptEditor() {
   }
 
   const handleSave = async () => {
-    if (!selectedId) return
+    if (!selectedId || saving) return
     setSaving(true)
+    if (statusTimerRef.current) { clearTimeout(statusTimerRef.current); statusTimerRef.current = null }
     setStatus(null)
     try {
       const res = await api.savePrompt(selectedId, content)
@@ -110,7 +117,10 @@ export default function PromptEditor() {
         setStatus({ type: 'success', message: t('common.saved_successfully') })
         // Update local state
         setPrompts(prev => prev.map(p => p.id === selectedId ? { ...p, content } : p))
-        setTimeout(() => setStatus(null), 3000)
+        statusTimerRef.current = setTimeout(() => {
+          statusTimerRef.current = null
+          setStatus(null)
+        }, 3000)
       } else {
         setStatus({ type: 'error', message: res.error || t('common.save_failed') })
       }
@@ -248,7 +258,9 @@ export default function PromptEditor() {
                </div>
             )}
             
+            <label htmlFor="prompt-content" className="sr-only">{selectedPrompt?.title || t('prompts.this_prompt')}</label>
             <textarea
+              id="prompt-content"
               value={content}
               onChange={(e) => setContent(e.target.value)}
               className="w-full flex-1 p-8 bg-white rounded-2xl border-none focus:ring-0 font-mono text-sm leading-relaxed text-gray-800 resize-none shadow-sm placeholder-gray-400"
@@ -256,7 +268,7 @@ export default function PromptEditor() {
               onKeyDown={(e) => {
                 if ((e.ctrlKey || e.metaKey) && e.key === 's') {
                   e.preventDefault()
-                  handleSave()
+                  if (!saving) handleSave()
                 }
               }}
             />

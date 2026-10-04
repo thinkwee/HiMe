@@ -1,10 +1,11 @@
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useTranslation } from 'react-i18next'
 import { api } from '../lib/api'
-import { FileText, Calendar, Filter, Activity, ArrowDown, ArrowUp, Search, X, Zap, Clock } from 'lucide-react'
+import { FileText, Calendar, Filter, Activity, ArrowDown, ArrowUp, RefreshCw, Search, X, Zap, Clock, AlertTriangle } from 'lucide-react'
 import { parseBackendDate } from '../lib/utils'
+import { useOnActivate } from '../lib/hooks'
 
 // Helper to get report source from the report object
 const getReportSource = (report) => {
@@ -40,7 +41,7 @@ const SourceBadge = ({ report, size = 'sm', t }) => {
   )
 }
 
-export default function ReportsView() {
+export default function ReportsView({ active = true }) {
   const { t } = useTranslation()
   // State
   const [reports, setReports] = useState([])
@@ -49,6 +50,8 @@ export default function ReportsView() {
   // flash of the "no reports" empty state before the first fetch resolves).
   const [loading, setLoading] = useState(true)
   const [selectedReport, setSelectedReport] = useState(null)
+  const [loadError, setLoadError] = useState('')
+  const modalRef = useRef(null)
 
   // Filters
   const [alertFilter, setAlertFilter] = useState('all') // all, critical, warning, info, normal
@@ -56,22 +59,26 @@ export default function ReportsView() {
   const [sortOrder, setSortOrder] = useState('desc') // desc, asc
   const [searchQuery, setSearchQuery] = useState('')
 
-  const loadReports = useCallback(async () => {
-    setLoading(true)
+  // `silent` refetches (route re-activation) keep the current list on screen
+  // instead of flashing the skeleton.
+  const loadReports = useCallback(async (silent = false) => {
+    if (silent !== true) setLoading(true)
     try {
       const result = await api.queryAgentMemory('reports')
       if (result.success && Array.isArray(result.data)) {
         setReports(result.data)
+        setLoadError('')
       } else {
-        setReports([])
+        // Keep whatever is already shown; say why instead of pretending there are no reports.
+        setLoadError(result.error || t('reports.load_failed'))
       }
     } catch (error) {
       console.error('Failed to load reports:', error)
-      setReports([])
+      setLoadError(error?.message || t('reports.load_failed'))
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [t])
 
   // Load reports on mount. loadReports is memoized with no dependencies, so this
   // still runs exactly once.
@@ -82,7 +89,20 @@ export default function ReportsView() {
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadReports()
-  }, [loadReports])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // The page stays mounted while hidden: pick up new reports when it becomes active again.
+  useOnActivate(active, () => loadReports(true))
+
+  // Report modal: Escape closes, focus moves into the dialog.
+  useEffect(() => {
+    if (!selectedReport) return undefined
+    const onKey = (e) => { if (e.key === 'Escape') setSelectedReport(null) }
+    document.addEventListener('keydown', onKey)
+    modalRef.current?.focus()
+    return () => document.removeEventListener('keydown', onKey)
+  }, [selectedReport])
 
   // Filter and Sort Logic
   const filteredReports = useMemo(() => {
@@ -147,11 +167,12 @@ export default function ReportsView() {
         </div>
         <div className="flex items-center gap-3">
           <button
-            onClick={loadReports}
+            type="button"
+            onClick={() => loadReports()}
             className="btn-secondary flex items-center gap-2"
             disabled={loading}
           >
-            <ArrowUp className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             {t('reports.refresh')}
           </button>
         </div>
@@ -169,13 +190,16 @@ export default function ReportsView() {
             <input
               type="text"
               placeholder={t('reports.search_placeholder')}
+              aria-label={t('reports.search_placeholder')}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500 w-full md:w-64"
             />
             {searchQuery && (
               <button
+                type="button"
                 onClick={() => setSearchQuery('')}
+                aria-label={t('reports.clear_search')}
                 className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600"
               >
                 <X className="h-4 w-4" />
@@ -195,8 +219,10 @@ export default function ReportsView() {
               { id: 'normal', label: t('reports.filter_normal'), color: 'bg-green-100 text-green-700' },
             ].map((type) => (
               <button
+                type="button"
                 key={type.id}
                 onClick={() => setAlertFilter(type.id)}
+                aria-pressed={alertFilter === type.id}
                 className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${alertFilter === type.id
                     ? type.color || 'bg-gray-800 text-white'
                     : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
@@ -214,30 +240,43 @@ export default function ReportsView() {
           <select
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value)}
+            aria-label={t('reports.sort_by')}
             className="text-sm border-none bg-transparent focus:ring-0 font-medium text-gray-700 cursor-pointer"
           >
             <option value="data_time">{t('reports.sort_data_time')}</option>
             <option value="created_at">{t('reports.sort_created_at')}</option>
           </select>
           <button
+            type="button"
             onClick={() => setSortOrder(prev => prev === 'desc' ? 'asc' : 'desc')}
             className="p-1 rounded hover:bg-gray-100 text-gray-500"
             title={sortOrder === 'desc' ? t('reports.newest_first') : t('reports.oldest_first')}
+            aria-label={sortOrder === 'desc' ? t('reports.newest_first') : t('reports.oldest_first')}
           >
             {sortOrder === 'desc' ? <ArrowDown className="w-4 h-4" /> : <ArrowUp className="w-4 h-4" />}
           </button>
         </div>
       </div>
 
+      {loadError && (
+        <div role="alert" className="flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
+          <span className="flex-1 break-words">{t('reports.load_failed_detail', { error: loadError })}</span>
+          <button type="button" onClick={() => loadReports()} className="font-semibold underline hover:text-red-900">
+            {t('common.retry')}
+          </button>
+        </div>
+      )}
+
       {/* Reports Grid */}
-      {loading ? (
+      {loading && reports.length === 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-pulse">
           {[1, 2, 3].map(i => (
             <div key={i} className="h-64 bg-gray-200 rounded-xl"></div>
           ))}
         </div>
       ) : filteredReports.length === 0 ? (
-        <div className="text-center py-20 bg-gray-50 rounded-xl border border-dashed border-gray-300">
+        loadError ? null : <div className="text-center py-20 bg-gray-50 rounded-xl border border-dashed border-gray-300">
           <FileText className="w-12 h-12 mx-auto text-gray-300 mb-3" />
           <h3 className="text-lg font-medium text-gray-900">{t('reports.no_reports')}</h3>
           <p className="text-gray-500 text-sm">{t('reports.no_reports_hint')}</p>
@@ -247,8 +286,16 @@ export default function ReportsView() {
           {filteredReports.map((report) => (
             <div
               key={report.id}
+              role="button"
+              tabIndex={0}
               onClick={() => setSelectedReport(report)}
-              className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 hover:shadow-md transition-all duration-200 group flex flex-col h-full relative overflow-hidden cursor-pointer"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  setSelectedReport(report)
+                }
+              }}
+              className="focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 bg-white rounded-xl shadow-sm border border-gray-200 p-5 hover:shadow-md transition-all duration-200 group flex flex-col h-full relative overflow-hidden cursor-pointer"
             >
               {/* Alert Stripe */}
               <div className={`absolute top-0 left-0 w-1 h-full ${report.alert_level === 'critical' ? 'bg-red-500' :
@@ -329,7 +376,12 @@ export default function ReportsView() {
           onClick={() => setSelectedReport(null)}
         >
           <div
-            className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden shadow-2xl flex flex-col transform animate-in zoom-in-95 duration-200"
+            ref={modalRef}
+            tabIndex={-1}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="report-modal-title"
+            className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden shadow-2xl flex flex-col transform animate-in zoom-in-95 duration-200 outline-none"
             onClick={e => e.stopPropagation()}
           >
             {/* Modal Header */}
@@ -349,12 +401,14 @@ export default function ReportsView() {
                     {parseBackendDate(selectedReport.created_at).toLocaleString()}
                   </span>
                 </div>
-                <h2 className="text-2xl font-bold text-gray-900 leading-tight">
+                <h2 id="report-modal-title" className="text-2xl font-bold text-gray-900 leading-tight">
                   {selectedReport.title || t('reports.health_analysis_report')}
                 </h2>
               </div>
               <button
+                type="button"
                 onClick={() => setSelectedReport(null)}
+                aria-label={t('common.close')}
                 className="p-2 hover:bg-gray-100 rounded-full transition-colors text-gray-400 hover:text-gray-600"
               >
                 <X className="w-6 h-6" />

@@ -293,18 +293,28 @@ describe('AppContext', () => {
   // refreshAgentStatus — error fallback
   // ------------------------------------------------------------------ //
 
-  it('refreshAgentStatus sets running=false on API error', async () => {
+  it('refreshAgentStatus keeps the previous status when the request fails', async () => {
+    api.getAgentStatus.mockResolvedValueOnce({
+      success: true,
+      agents: { LiveUser: { status: 'running' } },
+    })
     const { result } = renderAppHook()
 
     await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.agentStatus.running).toBe(true)
 
+    // A thrown error and an {success:false} reply must both leave the status alone.
     api.getAgentStatus.mockRejectedValueOnce(new Error('Server down'))
-
     await act(async () => {
       await result.current.refreshAgentStatus()
     })
+    expect(result.current.agentStatus.running).toBe(true)
 
-    expect(result.current.agentStatus).toEqual({ running: false })
+    api.getAgentStatus.mockResolvedValueOnce({ success: false, error: 'HTTP 502' })
+    await act(async () => {
+      await result.current.refreshAgentStatus()
+    })
+    expect(result.current.agentStatus.running).toBe(true)
   })
 
   // ------------------------------------------------------------------ //

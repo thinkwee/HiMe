@@ -9,9 +9,10 @@
  * Single-user mode: always uses "LiveUser" — no user selection needed.
  *
  * All mutations go through the provided actions. Components only consume
- * `useApp()` — they never manage this state locally.
+ * `useApp()` (state + actions) or `useAppActions()` (actions only, stable) —
+ * they never manage this state locally.
  */
-import { createContext, useCallback, useContext, useEffect, useReducer, useRef } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef } from 'react'
 import { api } from '../lib/api'
 import { parseBackendDate } from '../lib/utils'
 
@@ -34,6 +35,8 @@ const initialState = {
     streamData: null,
     historicalData: [],
     liveHistoryWindow: '1hour',
+    /** Last error frame / failure on the data stream (cleared once reconnected). */
+    streamError: null,
   },
 }
 
@@ -86,12 +89,26 @@ function reducer(state, action) {
       return { ...state, loading: action.payload }
     case 'SET_STREAMING':
       return { ...state, streaming: { ...state.streaming, ...action.payload } }
+    case 'STREAM_BATCH': {
+      // One state transition per batch (latest batch + appended history), so
+      // consumers re-render once instead of twice.
+      const { batch, records } = action.payload
+      const prev = state.streaming.historicalData
+      return {
+        ...state,
+        streaming: {
+          ...state.streaming,
+          streamData: batch,
+          historicalData: records.length ? _trimHistorical(prev.concat(records)) : prev,
+        },
+      }
+    }
     case 'APPEND_HISTORICAL':
       return {
         ...state,
         streaming: {
           ...state.streaming,
-          historicalData: _trimHistorical([...state.streaming.historicalData, ...action.payload]),
+          historicalData: _trimHistorical(state.streaming.historicalData.concat(action.payload)),
         },
       }
     default:
@@ -103,7 +120,11 @@ function reducer(state, action) {
 // Context
 // -----------------------------------------------------------------------
 
+// State and actions live in separate contexts: every live batch changes the
+// state, but the actions are stable, so components that only need to dispatch
+// (e.g. the agent monitor) don't re-render on each batch.
 const AppContext = createContext(null)
+const AppActionsContext = createContext(null)
 
 export function AppProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initialState)
@@ -114,6 +135,10 @@ export function AppProvider({ children }) {
   /** Whether the stream was intentionally stopped (no auto-reconnect). */
   const stoppedRef = useRef(false)
   const startStreamRef = useRef(null)
+  /** Monotonic token: a startStream() superseded while awaiting aborts. */
+  const streamSeqRef = useRef(0)
+  /** Set on unmount so late async work doesn't open a socket nobody owns. */
+  const unmountedRef = useRef(false)
 
   // ------------------------------------------------------------------ //
   // Actions
@@ -135,6 +160,8 @@ export function AppProvider({ children }) {
   /** Start Dashboard data stream. Backend streams ALL features automatically.
    *  Always fetches 1month from backend; window filtering is done client-side. */
   const startStream = useCallback(async (liveHistoryWindow = '1hour') => {
+    const seq = ++streamSeqRef.current
+    const superseded = () => seq !== streamSeqRef.current || unmountedRef.current
     try {
       stoppedRef.current = false
       lastWindowRef.current = liveHistoryWindow
@@ -145,10 +172,12 @@ export function AppProvider({ children }) {
         reconnectTimerRef.current = null
       }
 
-      // Close any existing WebSocket before starting a new one
+      // Close any existing WebSocket before starting a new one. The ref is
+      // cleared first so the old socket's async onclose is ignored.
       if (wsRef.current) {
-        try { wsRef.current.close() } catch (err) { console.error('stream close failed:', err) }
+        const old = wsRef.current
         wsRef.current = null
+        try { old.close() } catch (err) { console.error('stream close failed:', err) }
       }
 
       dispatch({
@@ -164,30 +193,39 @@ export function AppProvider({ children }) {
       // Always request the widest window from backend; narrower views
       // are filtered client-side in StatisticsPanel.
       await api.setStreamConfig(true, '1month')
+      // A newer startStream()/stopStream()/unmount happened while awaiting.
+      if (superseded() || stoppedRef.current) return
 
       const websocket = api.connectDataStream()
 
       websocket.onopen = () => {
+        if (wsRef.current !== websocket) return
         reconnectAttemptRef.current = 0 // reset backoff on success
-        dispatch({ type: 'SET_STREAMING', payload: { isStreaming: true } })
+        dispatch({ type: 'SET_STREAMING', payload: { isStreaming: true, streamError: null } })
       }
 
       websocket.onmessage = (event) => {
+        if (wsRef.current !== websocket) return
         try {
           const data = JSON.parse(event.data)
           if (data.type === 'data_batch' && data.batch) {
-            dispatch({ type: 'SET_STREAMING', payload: { streamData: data.batch } })
-            if (Array.isArray(data.batch.data)) {
-              dispatch({ type: 'APPEND_HISTORICAL', payload: data.batch.data })
-            }
-          } else if (data.type === 'stream_complete' || data.type === 'error') {
-            // The stream is finished — don't auto-reconnect, otherwise the
-            // reset below is immediately undone by a fresh startStream().
-            stoppedRef.current = true
-            websocket.close()
-            dispatch({ type: 'SET_STREAMING', payload: { isStreaming: false } })
-            Promise.resolve(api.setStreamConfig(false)).catch(err => console.error('stream config reset failed:', err))
-            if (data.type === 'error') console.error(`Stream error: ${data.error}`)
+            dispatch({
+              type: 'STREAM_BATCH',
+              payload: {
+                batch: data.batch,
+                records: Array.isArray(data.batch.data) ? data.batch.data : [],
+              },
+            })
+          } else if (data.type === 'error') {
+            // A server-side error frame is not a reason to give up for good:
+            // surface it and let the close handler reconnect with back-off.
+            // (The server sends no other terminal frame.)
+            console.error(`Stream error: ${data.error}`)
+            dispatch({
+              type: 'SET_STREAMING',
+              payload: { isStreaming: false, streamError: String(data.error || 'Stream error') },
+            })
+            try { websocket.close() } catch (err) { console.error('stream close failed:', err) }
           }
         } catch (err) {
           console.error('Failed to parse stream message:', err)
@@ -211,7 +249,11 @@ export function AppProvider({ children }) {
 
       wsRef.current = websocket
     } catch (err) {
-      dispatch({ type: 'SET_STREAMING', payload: { isStreaming: false } })
+      if (superseded()) return
+      dispatch({
+        type: 'SET_STREAMING',
+        payload: { isStreaming: false, streamError: err?.message || 'Failed to start stream' },
+      })
       console.error('Failed to start stream:', err?.message || 'Unknown error')
       _scheduleReconnect()
     }
@@ -225,17 +267,19 @@ export function AppProvider({ children }) {
   /** Stop Dashboard data stream. */
   const stopStream = useCallback(() => {
     stoppedRef.current = true
+    streamSeqRef.current += 1 // abort any startStream() still awaiting
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current)
       reconnectTimerRef.current = null
     }
     if (wsRef.current) {
+      const old = wsRef.current
+      wsRef.current = null
       try {
-        wsRef.current.close()
+        old.close()
       } catch (err) {
         console.error('stream close failed:', err)
       }
-      wsRef.current = null
     }
     dispatch({ type: 'SET_STREAMING', payload: { isStreaming: false } })
     Promise.resolve(api.setStreamConfig(false)).catch(err => console.error('stream config reset failed:', err))
@@ -258,6 +302,8 @@ export function AppProvider({ children }) {
   const refreshAgentStatus = useCallback(async () => {
     try {
       const res = await api.getAgentStatus()
+      // Only a successful response may change the status: a failed poll
+      // (network blip, 5xx) says nothing about whether the agent is running.
       if (res?.success) {
         const agents = res.agents || {}
         const firstPid = Object.keys(agents)[0]
@@ -268,7 +314,7 @@ export function AppProvider({ children }) {
         }
       }
     } catch (_) {
-      dispatch({ type: 'SET_AGENT_STATUS', payload: { running: false } })
+      // keep the previous state
     }
   }, [])
 
@@ -276,55 +322,83 @@ export function AppProvider({ children }) {
   // Bootstrap
   // ------------------------------------------------------------------ //
 
+  const bootstrap = useCallback(async (isCancelled = () => false) => {
+    dispatch({ type: 'SET_LOADING', payload: true })
+    dispatch({ type: 'SET_GLOBAL_ERROR', payload: null })
+    try {
+      // Load saved stream config to get the preferred window
+      const streamCfg = await api.getStreamConfig()
+      const savedWindow = streamCfg?.live_history_window || '1hour'
+
+      const [featureErr] = await Promise.all([
+        _loadFeatureTypes(dispatch),
+        refreshAgentStatus().catch(() => {}),
+      ])
+
+      if (isCancelled()) return
+      // Backend unreachable / rejected: say so instead of showing empty pages.
+      const failure = (streamCfg && streamCfg.success === false && streamCfg.error) || featureErr
+      if (failure) dispatch({ type: 'SET_GLOBAL_ERROR', payload: String(failure) })
+
+      // Always auto-start the stream on page load
+      console.log(`Auto-starting stream with window: ${savedWindow}`)
+      startStream(savedWindow)
+    } catch (err) {
+      if (!isCancelled()) dispatch({ type: 'SET_GLOBAL_ERROR', payload: String(err) })
+    } finally {
+      if (!isCancelled()) dispatch({ type: 'SET_LOADING', payload: false })
+    }
+  }, [refreshAgentStatus, startStream])
+
   useEffect(() => {
+    unmountedRef.current = false
     let cancelled = false
-    ;(async () => {
-      dispatch({ type: 'SET_LOADING', payload: true })
-      try {
-        // Load saved stream config to get the preferred window
-        const streamCfg = await api.getStreamConfig()
-        const savedWindow = streamCfg?.live_history_window || '1hour'
-
-        await Promise.all([
-          _loadFeatureTypes(dispatch),
-          refreshAgentStatus().catch(() => {}),
-        ])
-
-        // Always auto-start the stream on page load
-        if (!cancelled) {
-          console.log(`Auto-starting stream with window: ${savedWindow}`)
-          startStream(savedWindow)
-        }
-      } catch (err) {
-        if (!cancelled) dispatch({ type: 'SET_GLOBAL_ERROR', payload: String(err) })
-      } finally {
-        if (!cancelled) dispatch({ type: 'SET_LOADING', payload: false })
-      }
-    })()
+    // set-state-in-effect is a false positive: bootstrap only dispatches after
+    // its first await, and dispatch is not a React setState anyway.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    bootstrap(() => cancelled)
     return () => {
       cancelled = true
+      unmountedRef.current = true
+      stoppedRef.current = true
+      streamSeqRef.current += 1
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current)
         reconnectTimerRef.current = null
       }
+      // Close the data socket so it doesn't leak (or reconnect) after unmount.
+      if (wsRef.current) {
+        const old = wsRef.current
+        wsRef.current = null
+        try { old.close() } catch (err) { console.error('stream close failed:', err) }
+      }
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [bootstrap])
 
-  const value = {
-    ...state,
+  /** Re-run the initial load (used by the global error banner's Retry). */
+  const reload = useCallback(() => bootstrap(), [bootstrap])
+
+  const actions = useMemo(() => ({
     refreshAgentStatus,
     startStream,
     stopStream,
     reconnectStream,
     updateStreamingConfig,
+    reload,
     dispatch,
-  }
+  }), [refreshAgentStatus, startStream, stopStream, reconnectStream, updateStreamingConfig, reload])
 
-  return <AppContext.Provider value={value}>{children}</AppContext.Provider>
+  const value = useMemo(() => ({ ...state, ...actions }), [state, actions])
+
+  return (
+    <AppActionsContext.Provider value={actions}>
+      <AppContext.Provider value={value}>{children}</AppContext.Provider>
+    </AppActionsContext.Provider>
+  )
 }
 
 // -----------------------------------------------------------------------
-// Hook
+// Hooks
 // -----------------------------------------------------------------------
 
 export function useApp() {
@@ -333,15 +407,27 @@ export function useApp() {
   return ctx
 }
 
+/** Stable actions only — does not re-render on state changes (e.g. each live batch). */
+export function useAppActions() {
+  const ctx = useContext(AppActionsContext)
+  if (!ctx) throw new Error('useAppActions must be used inside <AppProvider>')
+  return ctx
+}
+
 // -----------------------------------------------------------------------
 // Private helpers
 // -----------------------------------------------------------------------
 
+/** Loads feature types; returns an error string on failure (non-fatal), else ''. */
 async function _loadFeatureTypes(dispatch) {
   try {
     const res = await api.getFeatureTypes()
     if (res?.success && Array.isArray(res.feature_types)) {
       dispatch({ type: 'SET_FEATURE_TYPES', payload: res.feature_types })
+      return ''
     }
-  } catch (_) { /* non-fatal */ }
+    return (res && res.success === false && res.error) || ''
+  } catch (err) {
+    return err?.message || ''
+  }
 }

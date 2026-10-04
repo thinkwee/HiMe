@@ -41,21 +41,50 @@ export default function Skills() {
   const [saving, setSaving] = useState(false)
   const [status, setStatus] = useState(null) // {type, message}
 
+  // What the editor held when it was last loaded / saved — the baseline for
+  // the unsaved-changes check.
+  const [baseline, setBaseline] = useState({ name: '', description: '', body: '' })
+  // Guards against out-of-order responses: only the latest loadSkill() may fill the editor.
+  const loadSeqRef = useRef(0)
+  const statusTimerRef = useRef(null)
+
   // Mirror of selectedName readable from async callbacks without re-creating them
   useEffect(() => {
     selectedNameRef.current = selectedName
   }, [selectedName])
 
+  useEffect(() => () => {
+    if (statusTimerRef.current) clearTimeout(statusTimerRef.current)
+  }, [])
+
+  /** Show a success message that clears itself (timer is cancelled on unmount / next message). */
+  const flashSuccess = (message) => {
+    if (statusTimerRef.current) clearTimeout(statusTimerRef.current)
+    setStatus({ type: 'success', message })
+    statusTimerRef.current = setTimeout(() => {
+      statusTimerRef.current = null
+      setStatus(null)
+    }, 2500)
+  }
+
+  /** True when the editor holds edits that were never saved. */
+  const hasUnsavedEdits = () => {
+    if (!(isNew || selectedName !== null)) return false
+    return (
+      editorDescription !== baseline.description ||
+      editorBody !== baseline.body ||
+      (isNew && editorName !== baseline.name)
+    )
+  }
+
+  /** Reloads the skill LIST only. The editor is never touched here: refreshing
+   *  after a visibility toggle must not overwrite what the user is typing. */
   const loadSkills = async () => {
     setLoading(true)
     try {
       const res = await api.listSkills()
       if (res.success) {
         setSkills(res.skills || [])
-        const current = selectedNameRef.current
-        if (current && (res.skills || []).find((s) => s.name === current)) {
-          await loadSkill(current)
-        }
       } else {
         setStatus({ type: 'error', message: res.error || t('skills.failed_list_skills') })
       }
@@ -67,13 +96,19 @@ export default function Skills() {
   }
 
   const loadSkill = async (name) => {
+    if (name === selectedName && !isNew) return
+    if (hasUnsavedEdits() && !window.confirm(t('skills.confirm_discard'))) return
+    const seq = ++loadSeqRef.current
     setIsNew(false)
     setSelectedName(name)
     const res = await api.fetchSkill(name)
+    // A newer selection (or New) happened while this request was in flight.
+    if (seq !== loadSeqRef.current) return
     if (res.success) {
       setEditorName(res.name)
       setEditorDescription(res.description || '')
       setEditorBody(res.body || '')
+      setBaseline({ name: res.name, description: res.description || '', body: res.body || '' })
       setStatus(null)
     } else {
       setStatus({ type: 'error', message: res.error || t('skills.failed_load_named', { name }) })
@@ -93,15 +128,20 @@ export default function Skills() {
   }, [])
 
   const handleNew = () => {
+    if (hasUnsavedEdits() && !window.confirm(t('skills.confirm_discard'))) return
+    loadSeqRef.current += 1 // drop any in-flight load
+    const template = '# New analysis playbook\n\n1. ...\n'
     setIsNew(true)
     setSelectedName(null)
     setEditorName('')
     setEditorDescription('')
-    setEditorBody('# New analysis playbook\n\n1. ...\n')
+    setEditorBody(template)
+    setBaseline({ name: '', description: '', body: template })
     setStatus(null)
   }
 
   const handleSave = async () => {
+    if (saving) return
     if (!editorDescription.trim()) {
       setStatus({ type: 'error', message: t('skills.description_required') })
       return
@@ -124,11 +164,11 @@ export default function Skills() {
         res = await api.updateSkill(editorName, editorDescription, editorBody)
       }
       if (res.success) {
-        setStatus({ type: 'success', message: t('skills.saved') })
+        flashSuccess(t('skills.saved'))
         setIsNew(false)
         setSelectedName(editorName)
+        setBaseline({ name: editorName, description: editorDescription, body: editorBody })
         await loadSkills()
-        setTimeout(() => setStatus(null), 2500)
       } else {
         setStatus({ type: 'error', message: res.error || t('skills.save_failed') })
       }
@@ -147,13 +187,14 @@ export default function Skills() {
     try {
       const res = await api.deleteSkill(editorName)
       if (res.success) {
-        setStatus({ type: 'success', message: t('skills.deleted') })
+        flashSuccess(t('skills.deleted'))
+        loadSeqRef.current += 1
         setEditorName('')
         setEditorDescription('')
         setEditorBody('')
+        setBaseline({ name: '', description: '', body: '' })
         setSelectedName(null)
         await loadSkills()
-        setTimeout(() => setStatus(null), 2500)
       } else {
         setStatus({ type: 'error', message: res.error || t('skills.delete_failed') })
       }
@@ -321,6 +362,7 @@ export default function Skills() {
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder={t('skills.search_placeholder')}
+                aria-label={t('skills.search_placeholder')}
                 className="w-full pl-9 pr-3 py-2 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary-200 focus:border-primary-400 bg-white"
               />
             </div>
@@ -335,6 +377,7 @@ export default function Skills() {
                   <button
                     key={opt.k}
                     onClick={() => setFilterMode(opt.k)}
+                    aria-pressed={filterMode === opt.k}
                     className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
                       filterMode === opt.k
                         ? 'bg-primary-100 text-primary-700'
@@ -413,6 +456,8 @@ export default function Skills() {
                         toggleSkill(s.name)
                       }}
                       title={s.enabled ? t('skills.hide_from_agent') : t('skills.show_to_agent')}
+                      aria-label={s.enabled ? t('skills.hide_from_agent') : t('skills.show_to_agent')}
+                      aria-pressed={s.enabled}
                       className="flex-shrink-0 p-1 rounded-md hover:bg-gray-100 transition-colors"
                     >
                       {s.enabled ? (
@@ -475,10 +520,11 @@ export default function Skills() {
               {/* Name + description inputs */}
               <div className="card p-6 bg-white space-y-4">
                 <div>
-                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">
+                  <label htmlFor="skill-name" className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">
                     {t('skills.name_label')}
                   </label>
                   <input
+                    id="skill-name"
                     type="text"
                     value={editorName}
                     onChange={(e) => setEditorName(e.target.value)}
@@ -493,10 +539,11 @@ export default function Skills() {
                   )}
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">
+                  <label htmlFor="skill-description" className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">
                     {t('skills.description_label')}
                   </label>
                   <input
+                    id="skill-description"
                     type="text"
                     value={editorDescription}
                     onChange={(e) => setEditorDescription(e.target.value)}
@@ -508,15 +555,17 @@ export default function Skills() {
 
               {/* Body editor */}
               <div className="card h-full flex flex-col p-1 bg-gray-50 border-gray-200 shadow-inner min-h-[500px] relative">
+                <label htmlFor="skill-body" className="sr-only">{t('skills.body_label')}</label>
                 <textarea
+                  id="skill-body"
                   value={editorBody}
                   onChange={(e) => setEditorBody(e.target.value)}
                   className="w-full flex-1 p-8 bg-white rounded-2xl border-none focus:ring-0 font-mono text-sm leading-relaxed text-gray-800 resize-none shadow-sm placeholder-gray-400"
-                  placeholder="# Playbook body&#10;&#10;1. Use the sql tool to query ...&#10;2. Use the code tool to compute ...&#10;3. Decision rule: ..."
+                  placeholder={t('skills.body_placeholder')}
                   onKeyDown={(e) => {
                     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
                       e.preventDefault()
-                      handleSave()
+                      if (!saving) handleSave()
                     }
                   }}
                 />
