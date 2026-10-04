@@ -122,6 +122,8 @@ class ReplyUserTool(BaseTool):
                     status=verification["status"],
                     detail=verification["detail"],
                 ),
+                "blocked": "verification",
+                "verification_detail": str(verification["detail"] or "")[:200],
             }
         reply_markup = verification["reply_markup"]
 

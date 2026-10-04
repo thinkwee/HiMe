@@ -2,15 +2,11 @@
 //  AgentActivityView.swift
 //  hime
 //
-//  How the chat shows what Hime is doing, in two pieces:
-//
-//  * `LiveBubble` — the ONE live-status bubble at the bottom of the
-//    conversation. While the agent works it shows the latest thought (muted,
-//    italic), the current step in plain words and typing dots; once reply text
-//    starts streaming it becomes that reply (with a pulsing caret). It observes
-//    only `LiveState`, so token-rate updates never re-render the message list.
-//  * `RunCardView` — the collapsible "steps" card left in the timeline, one row
-//    per tool call (symbol + plain verb + short object + status glyph).
+//  How the chat shows what Hime is doing: the tool vocabulary, the bubble
+//  outline, and `TurnActivityCard` — the collapsible activity section at the
+//  top of every assistant turn (live status header, narration, tool steps).
+//  The turn itself (avatar + this card + reply bubbles) is `TurnView` in
+//  ChatView.swift.
 //
 
 import SwiftUI
@@ -68,144 +64,85 @@ func chatBubbleShape(isUser: Bool) -> UnevenRoundedRectangle {
         style: .continuous)
 }
 
-// MARK: - Live bubble
+// MARK: - Turn activity card
 
-struct LiveBubble: View {
-    @ObservedObject var live: LiveState
-    /// Show the avatar (false when it directly follows another Hime row).
-    let showAvatar: Bool
+/// The compact, collapsible activity section of one assistant turn: a header
+/// with a live one-line status ("Thinking…", "Analyzing data · 3 steps",
+/// "Thought for 12s · 4 steps") that expands to the model's narration (dimmed)
+/// and the tool steps, nested under the orchestrator step that spawned them.
+struct TurnActivityCard: View {
+    @ObservedObject var turn: TurnState
 
-    var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            if showAvatar {
-                HimeAvatar(size: 36, activity: live.avatarActivity)
-            } else {
-                Color.clear.frame(width: 36, height: 1)
-            }
-            content
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(
-                    chatBubbleShape(isUser: false)
-                        .fill(HimeColor.assistantBubble)
-                        .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
-                )
-                .overlay(chatBubbleShape(isUser: false).stroke(Color.primary.opacity(0.05), lineWidth: 0.5))
-            Spacer(minLength: 40)
-        }
-    }
-
-    @ViewBuilder
-    private var content: some View {
-        if !live.streamText.isEmpty {
-            VStack(alignment: .leading, spacing: 4) {
-                MarkdownView(text: live.streamText, foreground: .primary)
-                PulsingCaret()
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 6) {
-                if !live.thought.isEmpty {
-                    Text(live.thought)
-                        .font(.footnote)
-                        .italic()
-                        .foregroundColor(.secondary)
-                        .lineLimit(3)
-                        .multilineTextAlignment(.leading)
-                }
-                HStack(spacing: 8) {
-                    if let tool = live.tool {
-                        let info = ChatStepStyle.info(tool)
-                        PulsingIcon(systemName: info.icon)
-                        Text(info.running)
-                            .font(.callout)
-                            .foregroundColor(.secondary)
-                    } else {
-                        PulsingIcon(systemName: "sparkles")
-                        Text("Hime is thinking")
-                            .font(.callout)
-                            .foregroundColor(.secondary)
-                    }
-                    TypingDots()
-                }
-            }
-        }
-    }
-}
-
-// MARK: - Run card
-
-struct RunCardView: View, Equatable {
-    let card: RunCard
-
-    /// nil = follow the default (expanded while live, collapsed once done).
+    /// nil = follow the default: open while the agent works and nothing is in
+    /// the reply body yet, collapsed once the reply starts.
     @State private var userExpanded: Bool?
     @State private var openSteps: Set<String> = []
 
-    static func == (lhs: RunCardView, rhs: RunCardView) -> Bool { lhs.card == rhs.card }
+    init(turn: TurnState) {
+        _turn = ObservedObject(wrappedValue: turn)
+    }
 
-    private var expanded: Bool { userExpanded ?? card.isLive }
+    private var canExpand: Bool { !turn.steps.isEmpty }
 
-    private var headerText: String {
-        let n = card.steps.count
-        if card.isLive {
-            switch n {
-            case 0: return String(localized: "Hime is working")
-            case 1: return String(localized: "Hime is working · \(n) step")
-            default: return String(localized: "Hime is working · \(n) steps")
-            }
-        }
-        return n == 1 ? String(localized: "\(n) step") : String(localized: "\(n) steps")
+    private var expanded: Bool {
+        guard canExpand else { return false }
+        return userExpanded ?? (turn.phase == .live && turn.streamText.isEmpty && turn.replies.isEmpty)
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Color.clear.frame(width: 28, height: 1)
-            VStack(alignment: .leading, spacing: 0) {
-                header
-                if expanded {
-                    Divider().padding(.horizontal, 12)
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(card.steps) { step in
-                            stepRow(step)
-                        }
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            if expanded {
+                Divider().padding(.horizontal, 12)
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(turn.steps) { step in
+                        stepRow(step)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
             }
-            .background(
-                RoundedRectangle(cornerRadius: HimeRadius.card, style: .continuous)
-                    .fill(HimeColor.card)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: HimeRadius.card, style: .continuous)
-                    .stroke(HimeColor.line, lineWidth: 0.5)
-            )
-            Spacer(minLength: 40)
         }
+        .background(
+            RoundedRectangle(cornerRadius: HimeRadius.card, style: .continuous)
+                .fill(HimeColor.card)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: HimeRadius.card, style: .continuous)
+                .stroke(HimeColor.line, lineWidth: 0.5)
+        )
         .animation(.easeInOut(duration: 0.2), value: expanded)
     }
 
     private var header: some View {
         Button {
+            guard canExpand else { return }
             userExpanded = !expanded
         } label: {
             HStack(spacing: 8) {
-                if card.isLive {
+                switch turn.phase {
+                case .live:
                     PulsingIcon(systemName: "sparkles")
-                } else {
+                case .done:
                     Image(systemName: "checklist")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(HimeColor.ink2)
+                case .stopped:
+                    Image(systemName: "stop.circle")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(HimeColor.ink2)
                 }
-                Text(headerText)
+                Text(turn.statusText)
                     .font(.footnote.weight(.medium))
                     .foregroundColor(HimeColor.ink2)
+                    .lineLimit(1)
                 Spacer(minLength: 8)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(HimeColor.ink2.opacity(0.7))
-                    .rotationEffect(.degrees(expanded ? 90 : 0))
+                if canExpand {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(HimeColor.ink2.opacity(0.7))
+                        .rotationEffect(.degrees(expanded ? 90 : 0))
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
@@ -214,7 +151,62 @@ struct RunCardView: View, Equatable {
         .buttonStyle(.plain)
     }
 
+    @ViewBuilder
     private func stepRow(_ step: RunStep) -> some View {
+        switch step.kind {
+        case .narration:
+            let t = step.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty {
+                Text(t)
+                    .font(.footnote)
+                    .italic()
+                    .foregroundColor(HimeColor.ink2.opacity(0.85))
+                    .lineLimit(8)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 3)
+            }
+        case .notice:
+            noticeRow(step)
+        case .tool:
+            toolRow(step)
+        }
+    }
+
+    private func noticeRow(_ step: RunStep) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12))
+                    .foregroundColor(HimeColor.warn)
+                    .frame(width: 16)
+                Text(step.text)
+                    .font(.footnote)
+                    .foregroundColor(HimeColor.ink)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+            }
+            if let detail = step.detail, !detail.isEmpty {
+                Text(detail)
+                    .font(.caption)
+                    .foregroundColor(HimeColor.ink2)
+                    .lineLimit(3)
+                    .padding(.leading, 24)
+            }
+            if let draft = step.preview, !draft.isEmpty {
+                Text(draft)
+                    .font(.caption)
+                    .italic()
+                    .foregroundColor(HimeColor.ink2.opacity(0.75))
+                    .lineLimit(4)
+                    .padding(.leading, 24)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 3)
+    }
+
+    private func toolRow(_ step: RunStep) -> some View {
         let info = ChatStepStyle.info(step.tool)
         let isOpen = openSteps.contains(step.id)
         let tappable = !(step.preview ?? "").isEmpty
@@ -277,7 +269,7 @@ struct RunCardView: View, Equatable {
 
 // MARK: - Pulsing icon
 
-private struct PulsingIcon: View {
+struct PulsingIcon: View {
     let systemName: String
     @State private var animate = false
 
@@ -296,7 +288,7 @@ private struct PulsingIcon: View {
 
 // MARK: - Streaming caret
 
-private struct PulsingCaret: View {
+struct PulsingCaret: View {
     @State private var on = false
 
     var body: some View {
@@ -306,37 +298,5 @@ private struct PulsingCaret: View {
             .opacity(on ? 1 : 0.2)
             .animation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true), value: on)
             .onAppear { on = true }
-    }
-}
-
-// MARK: - Typing dots
-
-private struct TypingDots: View {
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 0.1, paused: false)) { context in
-            let t = context.date.timeIntervalSinceReferenceDate
-            HStack(spacing: 4) {
-                ForEach(0..<3, id: \.self) { i in
-                    Circle()
-                        .fill(HimeColor.accent.opacity(0.85))
-                        .frame(width: 5, height: 5)
-                        .scaleEffect(scale(t, i))
-                        .opacity(opacity(t, i))
-                }
-            }
-        }
-    }
-
-    private func wave(_ t: TimeInterval, _ i: Int) -> Double {
-        let phase = t * 2.2 - Double(i) * 0.45
-        return 0.5 + 0.5 * sin(phase * .pi)
-    }
-
-    private func opacity(_ t: TimeInterval, _ i: Int) -> Double {
-        0.3 + 0.7 * wave(t, i)
-    }
-
-    private func scale(_ t: TimeInterval, _ i: Int) -> Double {
-        0.7 + 0.5 * wave(t, i)
     }
 }

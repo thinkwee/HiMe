@@ -409,6 +409,9 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
         self._chat_task = task
         try:
             await asyncio.wait({task})
+            # Explicit end-of-run marker (additive): lets clients settle the
+            # turn block as soon as the run is over, however it ended.
+            await self._emit({"type": "chat_run_done"})
         except asyncio.CancelledError:
             task.cancel()
             raise

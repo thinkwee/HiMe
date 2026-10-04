@@ -19,19 +19,28 @@ import SwiftUI
 @MainActor
 final class ChatViewModel: ObservableObject {
     @Published var messages: [ChatMessage] = [] {
-        didSet { rows = Self.makeRows(messages, runs: runs) }
+        didSet {
+            rows = Self.makeRows(messages, turns: turns)
+            syncTurnReplies()
+        }
     }
-    /// Collapsible step cards of agent runs; each renders right after its anchor message.
-    @Published private(set) var runs: [RunCard] = [] {
-        didSet { rows = Self.makeRows(messages, runs: runs) }
+    /// One block per agent run (activity + reply bubbles); each renders right
+    /// after its anchor message. Identity is stable from the first event of the
+    /// run for the rest of the session. Per-token updates mutate the turn's own
+    /// observable, never this array.
+    private var turns: [TurnState] = [] {
+        didSet {
+            rows = Self.makeRows(messages, turns: turns)
+            syncTurnReplies()
+        }
     }
-    /// The single timeline (messages + run cards) with the per-row avatar flag
+    /// The single timeline (messages + turns) with the per-row avatar flag
     /// precomputed — what the list renders.
     @Published private(set) var rows: [ChatRow] = []
-    /// Live-bubble content. A separate observable so token-rate updates never
-    /// invalidate this view model (and with it the message list).
+    /// What the header avatar follows. A separate observable so token-rate
+    /// updates never invalidate this view model (and with it the message list).
     let live = LiveState()
-    /// True while the agent is working on a turn (shows the live bubble + Stop).
+    /// True while the agent is working on a turn (shows Stop).
     @Published private(set) var isBusy = false
     /// False once the server answered 404 to `/chat/stop` (old server).
     @Published private(set) var stopAvailable = true
@@ -46,16 +55,15 @@ final class ChatViewModel: ObservableObject {
     /// True while this thread's screen is on display. Set by the view; the hub
     /// only reconciles visible threads on reconnect / foreground.
     private(set) var isVisible = false
-    /// Accumulates the model's streamed reasoning for the live thought line.
-    private var thinkingBuffer = ""
-    /// Model text output since the last tool call. Shown as streaming text, and
-    /// demoted to the thought line when a tool call follows (it was narration).
-    private var narrationBuffer = ""
-    /// True once `chat_reply_delta` started streaming the real reply.
-    private var replyStreaming = false
-    private var currentRunId: String?
-    private var runAnchorId: String?
-    /// Bumped on every new run so delayed fallbacks can tell runs apart.
+    /// Server run id -> its turn.
+    private var turnByRun: [String: TurnState] = [:]
+    /// Turns created on send that no server run has claimed yet (FIFO).
+    private var pendingTurns: [TurnState] = []
+    /// True once the server has sent a `chat_run_done` (new servers); old ones
+    /// fall back to a quiet-period settle after each reply.
+    private var sawRunDone = false
+    private var settleTask: Task<Void, Never>?
+    /// Bumped on every send so delayed fallbacks can tell runs apart.
     private var runSerial = 0
     private var lastEventAt = Date()
     private var watchdogTask: Task<Void, Never>?
@@ -115,7 +123,7 @@ final class ChatViewModel: ObservableObject {
         let msg = ChatMessage(role: .user, text: text, localImage: image,
                               clientMsgId: UUID().uuidString, delivery: .sending)
         messages.append(msg)
-        beginRun(newTurn: true)
+        beginTurn(anchor: msg.id)
         ChatHub.shared.noteOutgoing(threadId: threadId, text: text.isEmpty ? String(localized: "Image") : text)
         Task { await deliver(messageId: msg.id) }
     }
@@ -125,7 +133,7 @@ final class ChatViewModel: ObservableObject {
         guard let i = messages.firstIndex(where: { $0.id == messageId }),
               messages[i].delivery == .failed else { return }
         messages[i].delivery = .sending
-        beginRun(newTurn: true)
+        beginTurn(anchor: messageId)
         Task { await deliver(messageId: messageId) }
     }
 
@@ -160,7 +168,7 @@ final class ChatViewModel: ObservableObject {
             setDelivery(messageId, .failed)
             pendingResend.removeAll { $0 == messageId }
             if pendingResend.isEmpty { agentStarting = false }
-            if !messages.contains(where: { $0.delivery == .sending }) { endRun() }
+            if let t = pendingTurns.first(where: { $0.anchorId == messageId }) { finish(t) }
             showBanner(reason)
         }
     }
@@ -229,7 +237,7 @@ final class ChatViewModel: ObservableObject {
                     self.pendingResend = []
                     for id in ids { self.setDelivery(id, .failed) }
                     self.agentStarting = false
-                    self.endRun()
+                    self.finishAll()
                     self.showBanner(String(localized: "Hime didn't wake up. Tap the message to retry."))
                     break
                 }
@@ -345,7 +353,7 @@ final class ChatViewModel: ObservableObject {
         let result = prefix + merged + tail
         if result != messages { messages = result }
 
-        if addedAssistant, result.last?.role == .assistant { endRun() }
+        if addedAssistant, result.last?.role == .assistant { finishAll() }
     }
 
     private static func textKey(role: ChatMessage.Role, text: String, hasImage: Bool) -> String {
@@ -365,20 +373,49 @@ final class ChatViewModel: ObservableObject {
                     timestamp: row.date ?? Date())
     }
 
-    private static func makeRows(_ messages: [ChatMessage], runs: [RunCard]) -> [ChatRow] {
-        var byAnchor: [String: [RunCard]] = [:]
-        for r in runs { byAnchor[r.anchorId, default: []].append(r) }
-        var out: [ChatRow] = []
-        out.reserveCapacity(messages.count + runs.count)
-        var prevRole: ChatMessage.Role?
-        for m in messages {
-            out.append(ChatRow(item: .message(m), showAvatar: prevRole != m.role))
-            prevRole = m.role
-            if let cards = byAnchor[m.id] {
-                for c in cards { out.append(ChatRow(item: .run(c), showAvatar: false)) }
+    private static func makeRows(_ messages: [ChatMessage], turns: [TurnState]) -> [ChatRow] {
+        var byAnchor: [String: [TurnState]] = [:]
+        var orphans: [TurnState] = []
+        let ids = Set(messages.map { $0.id })
+        for t in turns {
+            if let a = t.anchorId, ids.contains(a) {
+                byAnchor[a, default: []].append(t)
+            } else {
+                orphans.append(t)
             }
         }
+        let turnIds = Set(turns.map { $0.id })
+        var out: [ChatRow] = []
+        out.reserveCapacity(messages.count + turns.count)
+        var prevRole: ChatMessage.Role?
+        for m in messages {
+            // A reply that belongs to a turn is rendered inside that turn.
+            let inTurn = m.role == .assistant && m.turnId.map { turnIds.contains($0) } == true
+            if !inTurn {
+                out.append(ChatRow(item: .message(m), showAvatar: prevRole != m.role))
+                prevRole = m.role
+            }
+            if let ts = byAnchor[m.id] {
+                for t in ts { out.append(ChatRow(item: .turn(t), showAvatar: false)) }
+                prevRole = nil  // a turn carries its own avatar
+            }
+        }
+        for t in orphans { out.append(ChatRow(item: .turn(t), showAvatar: false)) }
         return out
+    }
+
+    /// Mirror each turn's delivered replies out of the message list (the single
+    /// source of truth the history merge works on) into the turn.
+    private func syncTurnReplies() {
+        guard !turns.isEmpty else { return }
+        var byTurn: [String: [ChatMessage]] = [:]
+        for m in messages where m.role == .assistant {
+            if let id = m.turnId { byTurn[id, default: []].append(m) }
+        }
+        for t in turns {
+            let next = byTurn[t.id] ?? []
+            if t.replies != next { t.replies = next }
+        }
     }
 
     func evidence(for message: ChatMessage) async -> String? {
@@ -407,80 +444,160 @@ final class ChatViewModel: ObservableObject {
     }
 
     private func clearLocal() {
-        endRun()
-        runs.removeAll()
+        finishAll()
+        settleTask?.cancel()
+        settleTask = nil
+        pendingTurns.removeAll()
+        turnByRun.removeAll()
+        turns.removeAll()
         messages.removeAll()
         pendingResend.removeAll()
         agentStarting = false
     }
 
 
-    // MARK: - Run lifecycle (live bubble + step cards)
+    // MARK: - Turn lifecycle
 
-    /// Start (or continue) showing live work. `newTurn` is true when the user
-    /// just sent something: later steps get a fresh card anchored below it.
-    private func beginRun(newTurn: Bool) {
-        if newTurn || !live.active {
-            runAnchorId = messages.last?.id
-            if currentRunId != nil { closeCards(stopped: false, onlyLiveFlag: true) }
-            currentRunId = nil
-            thinkingBuffer = ""
-            narrationBuffer = ""
-            replyStreaming = false
-            runSerial += 1
-            if newTurn {
-                live.thought = ""
-                live.streamText = ""
-                live.tool = nil
-            }
-        }
+    /// A turn for the message the user just sent: shown at once ("Thinking…")
+    /// and bound to its server run when the first event of that run arrives.
+    private func beginTurn(anchor: String?) {
+        let t = TurnState(anchorId: anchor)
+        pendingTurns.append(t)
+        addTurn(t)
+        runSerial += 1
         touch()
-        if !live.active { live.active = true }
-        if !isBusy { isBusy = true }
+        syncLive()
         startWatchdog()
     }
 
-    /// Resume the live bubble when an event proves the agent is working again
-    /// (e.g. after an acknowledgment reply, or a proactive run).
-    private func ensureActive() {
-        if !live.active { beginRun(newTurn: false) }
-        touch()
-    }
-
-    private func touch() { lastEventAt = Date() }
-
-    /// Finish the live bubble. Quiet by design: no message is appended. Steps
-    /// still running are marked `stopped` (user Stop) or settled as done.
-    private func endRun(stopped: Bool = false) {
-        watchdogTask?.cancel()
-        watchdogTask = nil
-        closeCards(stopped: stopped, onlyLiveFlag: false)
-        currentRunId = nil
-        thinkingBuffer = ""
-        narrationBuffer = ""
-        replyStreaming = false
-        live.reset()
-        if isBusy { isBusy = false }
-    }
-
-    /// Mark live cards finished. `onlyLiveFlag` leaves step statuses alone (a
-    /// new user turn started while earlier steps may still be reporting back).
-    private func closeCards(stopped: Bool, onlyLiveFlag: Bool) {
-        var copy = runs
-        var changed = false
-        for i in copy.indices where copy[i].isLive {
-            copy[i].isLive = false
-            changed = true
-            if onlyLiveFlag { continue }
-            for j in copy[i].steps.indices where copy[i].steps[j].status == .running {
-                copy[i].steps[j].status = stopped ? .stopped : .ok
+    private func addTurn(_ t: TurnState) {
+        var next = turns
+        next.append(t)
+        if next.count > Self.maxRuns {
+            // Drop the oldest settled turns; their replies stay as plain messages.
+            var excess = next.count - Self.maxRuns
+            next.removeAll { old in
+                guard excess > 0, old.phase != .live else { return false }
+                excess -= 1
+                if let rid = old.runId { turnByRun[rid] = nil }
+                return true
             }
         }
-        if changed { runs = copy }
+        turns = next
+    }
+
+    private func removeTurn(_ t: TurnState) {
+        pendingTurns.removeAll { $0 === t }
+        if let rid = t.runId { turnByRun[rid] = nil }
+        turns.removeAll { $0 === t }
+    }
+
+    private static func runId(of event: [String: Any]) -> String? {
+        guard let r = event["run_id"] as? String, !r.isEmpty else { return nil }
+        return r
+    }
+
+    /// The turn an event belongs to. Events carrying a run id map to that run's
+    /// turn (binding the oldest not-yet-bound turn, since the server handles
+    /// messages in order, or creating one). Events without a run id (old
+    /// servers, legacy sub-analysis events) belong to the oldest live turn.
+    private func turn(for event: [String: Any], create: Bool) -> TurnState? {
+        if let rid = Self.runId(of: event) {
+            if let t = turnByRun[rid] { return t }
+            guard create else { return nil }
+            let t: TurnState
+            if !pendingTurns.isEmpty {
+                t = pendingTurns.removeFirst()
+            } else {
+                t = TurnState(anchorId: messages.last?.id)
+                addTurn(t)
+            }
+            t.runId = rid
+            turnByRun[rid] = t
+            return t
+        }
+        if let t = turns.first(where: { $0.phase == .live }) { return t }
+        guard create else { return nil }
+        let t = TurnState(anchorId: messages.last?.id)
+        addTurn(t)
+        return t
+    }
+
+    /// Turn to feed an activity event into: resolved, reopened if a premature
+    /// settle (old servers) ended it, and marked as alive. Stopped or
+    /// server-closed turns ignore late stragglers.
+    private func activeTurn(for event: [String: Any]) -> TurnState? {
+        guard let t = turn(for: event, create: true) else { return nil }
+        if t.phase == .stopped { return nil }
+        if t.phase == .done {
+            if t.closedByServer { return nil }
+            t.reopen()
+        }
+        touch()
+        syncLive()
+        startWatchdog()
+        return t
+    }
+
+    private func touch() {
+        lastEventAt = Date()
+        settleTask?.cancel()
+        settleTask = nil
+    }
+
+    /// Mirror the oldest live turn into the small header-avatar state and the
+    /// busy flag (Stop button, composer placeholder).
+    private func syncLive() {
+        let lt = turns.first(where: { $0.phase == .live })
+        let active = lt != nil
+        if live.active != active { live.active = active }
+        let tool = lt.flatMap { $0.runningTool ?? ($0.writingReply ? "reply_user" : nil) }
+        if live.tool != tool { live.tool = tool }
+        let replying = !(lt?.streamText.isEmpty ?? true)
+        if live.replying != replying { live.replying = replying }
+        if isBusy != active { isBusy = active }
+        if !active {
+            watchdogTask?.cancel()
+            watchdogTask = nil
+        }
+    }
+
+    /// End one turn. An empty provisional turn (send failed, nothing arrived)
+    /// is dropped instead of leaving an empty block behind.
+    private func finish(_ t: TurnState, stopped: Bool = false, byServer: Bool = false) {
+        if byServer { t.closedByServer = true }
+        if !t.hasContent && t.runId == nil && t.errorText == nil && t.phase == .live {
+            removeTurn(t)
+        } else {
+            pendingTurns.removeAll { $0 === t }
+            t.settle(stopped: stopped)
+        }
+        syncLive()
+    }
+
+    private func finishAll(stopped: Bool = false, error: String? = nil) {
+        for t in turns where t.phase == .live {
+            if let error { t.errorText = error }
+            finish(t, stopped: stopped)
+        }
+        syncLive()
+    }
+
+    /// Old servers send no `chat_run_done`: settle the turn shortly after a
+    /// reply unless more events show the run is still going.
+    private func armSettle(_ t: TurnState) {
+        guard !sawRunDone else { return }
+        settleTask?.cancel()
+        settleTask = Task { [weak self, weak t] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled, let self, let t else { return }
+            self.settleTask = nil
+            if t.phase == .live { self.finish(t) }
+        }
     }
 
     /// If events stop arriving mid-run (a dropped event, a crashed turn), end
-    /// the live bubble instead of animating forever.
+    /// the live turn instead of animating forever.
     private func startWatchdog() {
         guard watchdogTask == nil else { return }
         watchdogTask = Task { [weak self] in
@@ -489,57 +606,12 @@ final class ChatViewModel: ObservableObject {
                 guard !Task.isCancelled, let self else { return }
                 if !self.live.active { break }
                 if Date().timeIntervalSince(self.lastEventAt) > 150 {
-                    self.endRun()
+                    self.finishAll(error: String(localized: "Hime stopped responding."))
                     return
                 }
             }
             self?.watchdogTask = nil
         }
-    }
-
-    private func addStep(tool: String, nested: Bool, arguments: [String: Any]?) {
-        let step = RunStep(id: UUID().uuidString, tool: tool, nested: nested,
-                           detail: Self.detail(tool: tool, arguments: arguments),
-                           status: .running, preview: nil)
-        if let id = currentRunId, let i = runs.firstIndex(where: { $0.id == id }) {
-            runs[i].steps.append(step)
-            runs[i].isLive = true
-        } else if let anchor = runAnchorId {
-            let card = RunCard(id: UUID().uuidString, anchorId: anchor, steps: [step], isLive: true)
-            var next = runs
-            next.append(card)
-            if next.count > Self.maxRuns { next.removeFirst(next.count - Self.maxRuns) }
-            runs = next
-            currentRunId = card.id
-        }
-    }
-
-    private func completeStep(tool: String, nested: Bool, success: Bool, preview: String?) {
-        for i in runs.indices.reversed() {
-            guard let j = runs[i].steps.lastIndex(where: {
-                $0.status == .running && $0.tool == tool && $0.nested == nested
-            }) else { continue }
-            runs[i].steps[j].status = success ? .ok : .failed
-            runs[i].steps[j].preview = preview
-            return
-        }
-    }
-
-    /// Tool of the innermost step still running (what the live bubble names).
-    private func runningTool() -> String? {
-        guard let id = currentRunId, let card = runs.first(where: { $0.id == id }) else { return nil }
-        return card.steps.last(where: { $0.status == .running })?.tool
-    }
-
-    /// Model text that preceded a tool call was narration, not the reply:
-    /// move it to the muted thought line and clear the streaming text.
-    private func demoteNarration() {
-        let n = narrationBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !n.isEmpty { live.thought = Self.tail(n) }
-        narrationBuffer = ""
-        thinkingBuffer = ""
-        replyStreaming = false
-        if !live.streamText.isEmpty { live.streamText = "" }
     }
 
     // MARK: - Stop
@@ -569,11 +641,11 @@ final class ChatViewModel: ObservableObject {
                 let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
                 if (obj?["stopped"] as? Bool) == false {
                     // Nothing was running server-side: the indicator was stale.
-                    endRun()
+                    finishAll()
                     return
                 }
                 try? await Task.sleep(nanoseconds: 4_000_000_000)
-                if live.active && runSerial == serial { endRun(stopped: true) }
+                if live.active && runSerial == serial { finishAll(stopped: true) }
             } catch {
                 showBanner(String(localized: "Couldn't stop. Please try again."))
             }
@@ -595,57 +667,62 @@ final class ChatViewModel: ObservableObject {
         case "agent_started":
             agentStarting = false
             if !pendingResend.isEmpty { Task { await flushPending() } }
-        case "chat_thinking":
-            ensureActive()
+        case "chat_thinking", "chat_content":
+            // Model reasoning / free text. Always activity-section narration:
+            // the user-facing reply travels only via reply_user.
             let delta = (event["content"] as? String) ?? ""
-            guard !delta.isEmpty else { break }
-            thinkingBuffer += delta
-            let t = Self.tail(thinkingBuffer)
-            if live.thought != t { live.thought = t }
-        case "chat_content":
-            // The model's text output. Usually narration before a tool call
-            // (demoted to the thought line when the call arrives); the real
-            // reply streams via `chat_reply_delta` / arrives as `chat_reply`.
-            ensureActive()
-            let delta = (event["content"] as? String) ?? ""
-            guard !delta.isEmpty else { break }
-            narrationBuffer += delta
-            if !replyStreaming {
-                let t = narrationBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
-                if live.streamText != t { live.streamText = t }
-            }
+            guard !delta.isEmpty, let t = activeTurn(for: event) else { break }
+            t.appendNarration(delta, thinking: type == "chat_thinking")
         case "chat_reply_delta":
-            ensureActive()
-            let text = (event["text"] as? String) ?? ""
-            guard !text.isEmpty else { break }
-            replyStreaming = true
-            if live.streamText != text { live.streamText = text }
+            guard let t = activeTurn(for: event) else { break }
+            if (event["reset"] as? Bool) == true {
+                // Draft not delivered: keep it visible as an activity step.
+                t.holdBack(reason: (event["reason"] as? String) ?? "rejected",
+                           detail: event["detail"] as? String)
+            } else {
+                let text = (event["text"] as? String) ?? ""
+                guard !text.isEmpty else { break }
+                t.rechecking = false
+                if t.streamText != text { t.streamText = text }
+            }
+            syncLive()
+        case "chat_verification":
+            if let t = turn(for: event, create: false),
+               let status = event["status"] as? String, status != "verified",
+               let detail = event["detail"] as? String, !detail.isEmpty {
+                t.lastVerificationDetail = detail
+            }
         case "chat_tool_call":
             handleToolCall(event, forceNested: false)
         case "chat_tool_result":
             handleToolResult(event, forceNested: false)
         case "chat_reply":
-            finalizeReply(text: (event["content"] as? String) ?? "",
-                          hash: event["message_hash"] as? String,
-                          reportId: event["report_id"] as? Int)
+            attachReply(text: (event["content"] as? String) ?? "",
+                        hash: event["message_hash"] as? String,
+                        reportId: event["report_id"] as? Int,
+                        imagePath: nil, event: event)
         case "chat_image":
-            endRun()
-            let path = event["url"] as? String
-            if let path, messages.contains(where: { $0.imagePath == path }) { break }
-            messages.append(ChatMessage(role: .assistant,
-                                        text: (event["caption"] as? String) ?? "",
-                                        imagePath: path,
-                                        messageHash: event["message_hash"] as? String))
+            attachReply(text: (event["caption"] as? String) ?? "",
+                        hash: event["message_hash"] as? String,
+                        reportId: nil,
+                        imagePath: event["url"] as? String, event: event)
+        case "chat_run_done":
+            sawRunDone = true
+            if let t = turn(for: event, create: false) { finish(t, byServer: true) }
         case "chat_stopped":
-            endRun(stopped: true)
+            if let t = turn(for: event, create: false) {
+                finish(t, stopped: true, byServer: true)
+            } else {
+                finishAll(stopped: true)
+            }
         case "chat_cleared":
             clearLocal()
         default:
             // Sub-analysis runs tag their tool events by source
             // (`analysis_tool_call`, `plan_...`, `quick_...`). Fold them into the
-            // current run's steps; ignore them when no chat run is live so
-            // background cron analyses don't pop a bubble into the chat.
-            if live.active {
+            // live turn's steps; ignore them when no chat run is live so
+            // background cron analyses don't pop a block into the chat.
+            if turns.contains(where: { $0.phase == .live }) {
                 if type.hasSuffix("_tool_call") {
                     handleToolCall(event, forceNested: true)
                 } else if type.hasSuffix("_tool_result") {
@@ -658,55 +735,102 @@ final class ChatViewModel: ObservableObject {
     private func handleToolCall(_ event: [String: Any], forceNested: Bool) {
         let tool = (event["tool"] as? String) ?? ""
         if tool == "finish_chat" {
-            // Turn is over; nothing to show.
-            if live.active { endRun() }
+            // The orchestrator is done; the run ends with it.
+            if let t = turn(for: event, create: false) { finish(t, byServer: true) }
             return
         }
-        ensureActive()
-        demoteNarration()
-        guard !tool.isEmpty else {
-            live.tool = nil
+        guard let t = activeTurn(for: event) else { return }
+        guard !tool.isEmpty else { return }
+        // The reply itself is the body, not a step.
+        if tool == "reply_user" {
+            t.writingReply = true
+            syncLive()
             return
         }
-        live.tool = tool
-        // The reply itself is the bubble, not a step.
-        if tool == "reply_user" { return }
-        // Sub-agent tools (sql / code / ...) carry a `source` and/or `parent` tag.
-        let nested = forceNested || event["source"] != nil || event["parent"] != nil
-        addStep(tool: tool, nested: nested, arguments: event["arguments"] as? [String: Any])
+        var parent = event["parent"] as? String
+        if parent == nil, forceNested || event["source"] != nil {
+            parent = (event["source"] as? String) ?? "analyze"
+        }
+        let args = event["arguments"] as? [String: Any]
+        var detail = Self.detail(tool: tool, arguments: args)
+        if detail == nil, let summary = event["summary"] as? String {
+            let c = Self.clip(summary.replacingOccurrences(of: "\n", with: " "), 60)
+            if !c.isEmpty { detail = c }
+        }
+        t.addTool(callId: event["call_id"] as? String, tool: tool, parent: parent, detail: detail)
+        syncLive()
     }
 
     private func handleToolResult(_ event: [String: Any], forceNested: Bool) {
         let tool = (event["tool"] as? String) ?? ""
-        // `reply_user`'s result lands after its `chat_reply`: nothing to do.
-        guard !tool.isEmpty, tool != "reply_user", tool != "finish_chat" else { return }
+        guard !tool.isEmpty, tool != "finish_chat",
+              let t = turn(for: event, create: false) else { return }
         touch()
-        let nested = forceNested || event["source"] != nil || event["parent"] != nil
         let ok = (event["success"] as? Bool) ?? false
-        completeStep(tool: tool, nested: nested, success: ok,
-                     preview: Self.preview(of: event["result_preview"] ?? event["result"]))
-        guard live.active else { return }
-        // Text produced after a result (sub-agent findings) is not the reply.
-        demoteNarration()
-        let next = runningTool()
-        if live.tool != next { live.tool = next }
+        if tool == "reply_user" {
+            t.writingReply = false
+            if !ok {
+                // Blocked / rejected: keep the draft visible as a step.
+                let result = event["result"] as? [String: Any]
+                let reason = (result?["blocked"] as? String) == "verification" ? "verification" : "rejected"
+                t.holdBack(reason: reason, detail: result?["verification_detail"] as? String)
+            }
+            syncLive()
+            return
+        }
+        let nested = forceNested || event["source"] != nil || event["parent"] != nil
+        t.completeTool(callId: event["call_id"] as? String, tool: tool, nested: nested, success: ok,
+                       preview: Self.preview(of: event["result_preview"] ?? event["result"]))
+        syncLive()
     }
 
-    private func finalizeReply(text: String, hash: String?, reportId: Int? = nil) {
-        endRun()
-        // A replayed / duplicated event (or one already merged from history)
-        // must not render twice: same evidence hash + text, or an identical
-        // assistant message arriving within seconds of the previous one.
-        if let last = messages.last(where: { $0.role == .assistant }) {
-            if let hash, last.messageHash == hash, last.text == text { return }
-            if hash == nil, last.text == text, Date().timeIntervalSince(last.timestamp) < 5,
-               messages.last?.role == .assistant { return }
+    /// Attach a delivered reply (text and/or image) to its turn, in place of
+    /// the streamed draft. A message the history merge already added is
+    /// adopted into the turn rather than duplicated.
+    private func attachReply(text: String, hash: String?, reportId: Int?,
+                             imagePath: String?, event: [String: Any]) {
+        // Only a turn that is still unbound (old server) may claim a reply
+        // that carries no run id; otherwise it is a proactive push.
+        let t: TurnState?
+        if Self.runId(of: event) != nil {
+            t = turn(for: event, create: true)
+        } else {
+            t = turns.first(where: { $0.phase == .live && $0.runId == nil })
         }
-        if let hash, messages.contains(where: {
-            $0.role == .assistant && $0.messageHash == hash && $0.text == text
-        }) { return }
-        messages.append(ChatMessage(role: .assistant, text: text,
-                                    messageHash: hash, reportId: reportId))
+        if let t, !t.closedByServer { t.reopen() }
+        touch()
+
+        // A replayed / duplicated event (or one already merged from history)
+        // must not render twice: same evidence hash + text, an identical
+        // assistant message arriving within seconds of the previous one, or
+        // the same image.
+        var dup: Int?
+        if let imagePath {
+            dup = messages.lastIndex(where: { $0.imagePath == imagePath })
+        } else if let last = messages.lastIndex(where: { $0.role == .assistant }) {
+            let m = messages[last]
+            if let hash, m.messageHash == hash, m.text == text { dup = last }
+            else if hash == nil, m.text == text, Date().timeIntervalSince(m.timestamp) < 5,
+                    messages.last?.role == .assistant { dup = last }
+        }
+        if dup == nil, let hash {
+            dup = messages.lastIndex(where: {
+                $0.role == .assistant && $0.messageHash == hash && $0.text == text
+            })
+        }
+        if let i = dup {
+            if let t, messages[i].turnId == nil { messages[i].turnId = t.id }
+        } else {
+            messages.append(ChatMessage(role: .assistant, text: text, imagePath: imagePath,
+                                        messageHash: hash, reportId: reportId, turnId: t?.id))
+        }
+        if let t {
+            t.writingReply = false
+            t.rechecking = false
+            if !t.streamText.isEmpty { t.streamText = "" }
+            syncLive()
+            armSettle(t)
+        }
     }
 
     // MARK: - Text helpers

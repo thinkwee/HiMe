@@ -72,22 +72,17 @@ struct ChatView: View {
                                     onRetry: { id in vm.retry(messageId: id) }
                                 )
                                 .equatable()
-                            case .run(let card):
-                                RunCardView(card: card)
-                                    .equatable()
+                            case .turn(let turn):
+                                // One stable block per agent run; observes only its own
+                                // `TurnState`, so streamed tokens re-render just this row.
+                                TurnView(turn: turn,
+                                         loadEvidence: { msg in await vm.evidence(for: msg) })
                             }
-                        }
-                        if vm.isBusy {
-                            // The one live-status bubble; observes only `LiveState`.
-                            LiveBubble(live: vm.live,
-                                       showAvatar: !(vm.rows.last?.isAssistantSide ?? false))
-                                .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .leading)))
                         }
                         Color.clear.frame(height: 1).id(Self.bottomID)
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 14)
-                    .animation(.spring(response: 0.35, dampingFraction: 0.8), value: vm.isBusy)
                 }
                 // Open (and stay) pinned to the newest message.
                 .defaultScrollAnchor(.bottom)
@@ -469,6 +464,8 @@ private struct ChatBubble: View, Equatable {
     /// Only the first Hime message in a consecutive run shows the avatar; the
     /// rest reserve the same gutter so their bubbles stay left-aligned under it.
     let showAvatar: Bool
+    /// Rendered inside a `TurnView`, which owns the avatar: no gutter, tighter trailing space.
+    var embedded = false
     let loadEvidence: (ChatMessage) async -> String?
     let onRetry: (String) -> Void
 
@@ -490,6 +487,8 @@ private struct ChatBubble: View, Equatable {
         HStack(alignment: .top, spacing: 8) {
             if isUser {
                 Spacer(minLength: 44)
+            } else if embedded {
+                EmptyView()
             } else if showAvatar {
                 HimeAvatar(size: 36)
             } else {
@@ -540,7 +539,7 @@ private struct ChatBubble: View, Equatable {
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
             }
-            if !isUser { Spacer(minLength: 40) }
+            if !isUser { Spacer(minLength: embedded ? 0 : 40) }
         }
     }
 
@@ -552,6 +551,11 @@ private struct ChatBubble: View, Equatable {
             Text(message.text)
                 .font(.body)
                 .foregroundColor(HimeColor.userBubbleText)
+        } else if message.isStreaming {
+            VStack(alignment: .leading, spacing: 4) {
+                MarkdownView(text: message.text, foreground: .primary)
+                PulsingCaret()
+            }
         } else {
             MarkdownView(text: message.text, foreground: .primary)
         }
@@ -614,6 +618,57 @@ private struct ChatBubble: View, Equatable {
             }
             .font(.caption)
             .foregroundColor(.secondary)
+        }
+    }
+}
+
+// MARK: - Turn
+
+/// One assistant turn as a single stable block: avatar at the top-left
+/// (animated while the run is live, still afterwards), the collapsible
+/// activity section, then the reply bubble(s). Streamed text, a draft being
+/// held back and the final delivered reply all update this one view in place,
+/// so nothing is swapped out when the run completes.
+private struct TurnView: View {
+    @ObservedObject var turn: TurnState
+    let loadEvidence: (ChatMessage) async -> String?
+
+    /// Delivered replies followed by the streaming draft (if any). Rendered by
+    /// position, so the draft becomes its delivered reply without a view swap.
+    private var bodies: [ChatMessage] {
+        var items = turn.replies
+        if !turn.streamText.isEmpty {
+            items.append(ChatMessage(id: "stream-" + turn.id, role: .assistant,
+                                     text: turn.streamText, isStreaming: true))
+        }
+        return items
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            if turn.phase == .live {
+                HimeAvatar(size: 36, activity: turn.avatarActivity)
+            } else {
+                HimeAvatar(size: 36, state: turn.phase == .stopped ? "tired" : "relaxed")
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                TurnActivityCard(turn: turn)
+                ForEach(Array(bodies.enumerated()), id: \.offset) { _, message in
+                    ChatBubble(message: message,
+                               showAvatar: false,
+                               embedded: true,
+                               loadEvidence: loadEvidence,
+                               onRetry: { _ in })
+                        .equatable()
+                        .transition(.opacity)
+                }
+                if let error = turn.errorText {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundColor(HimeColor.bad)
+                }
+            }
+            Spacer(minLength: 40)
         }
     }
 }

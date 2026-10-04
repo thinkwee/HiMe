@@ -37,13 +37,11 @@ enum AvatarActivity: Equatable {
 }
 
 extension LiveState {
-    /// Activity of the in-flight run, derived from fields the live bubble
-    /// already renders (so it can never disagree with the bubble).
+    /// Activity of the in-flight run, derived from the live turn's state.
     var avatarActivity: AvatarActivity {
         guard active else { return .idle }
-        if tool == "reply_user" { return .replying }
+        if tool == "reply_user" || replying { return .replying }
         if let tool, !tool.isEmpty { return .working }
-        if !streamText.isEmpty { return .replying }
         return .thinking
     }
 }

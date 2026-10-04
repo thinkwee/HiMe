@@ -10,13 +10,18 @@ stamped centrally by ``AutonomousHealthAgent._emit``):
                                  argument decoded so far (full text, not a
                                  diff). ``reset: true`` with ``text: ""`` means
                                  the streamed reply was not delivered (blocked
-                                 / rejected / provider retried): clear it.
+                                 / rejected / provider retried): clear it. Reset events also
+                 carry ``reason`` ("verification" | "retry" | "rejected") and,
+                 for "verification", a short ``detail``; clients may show the
+                 held-back draft as an activity step (old clients ignore both).
   chat_tool_call                 ``{tool, call_id?, summary, status:"running",
                                  arguments, parent?}``
   chat_tool_result               ``{tool, call_id?, success, status:"ok"|"error",
                                  result_preview (<=300 chars), result, parent?}``
   chat_reply                     final delivered reply (as before)
   chat_stopped                   the run was cancelled by POST /chat/stop
+  chat_run_done                  the run is over (after chat_reply / chat_stopped /
+                                 errors alike); clients settle the turn block
 
 ``parent`` is "analyze"/"manage" on events emitted by a sub-agent, so clients
 can nest those steps under the orchestrator's analyze/manage step.
