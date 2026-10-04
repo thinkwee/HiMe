@@ -41,7 +41,12 @@ class InboxQueue:
         """Enqueue a user message.  Drops oldest if full."""
         if self._queue.full():
             try:
-                self._queue.get_nowait()  # discard oldest
+                dropped = self._queue.get_nowait()  # discard oldest
+                logger.warning(
+                    "InboxQueue full (%d): dropping oldest %s message from %s (chat=%s)",
+                    self._queue.maxsize, dropped.channel.value,
+                    dropped.sender_id, dropped.chat_id,
+                )
             except asyncio.QueueEmpty:
                 pass
         await self._queue.put(envelope)
@@ -101,9 +106,10 @@ class InboxQueue:
 def _debounce(messages: list[MessageEnvelope]) -> list[MessageEnvelope]:
     """Merge messages from the same sender that arrived within ``_DEBOUNCE_WINDOW_S``.
 
-    Only messages from the same ``(channel, sender_id)`` pair are considered
-    for merging, so a rapid-fire Telegram burst and a simultaneous Feishu
-    message from a user with the same ID will never collapse into one.
+    Only messages from the same ``(channel, sender_id, chat_id)`` triple are
+    considered for merging, so a rapid-fire Telegram burst and a simultaneous
+    Feishu message from a user with the same ID — or one user talking in two
+    different chats — will never collapse into one.
     """
     if len(messages) <= 1:
         return messages
@@ -113,7 +119,11 @@ def _debounce(messages: list[MessageEnvelope]) -> list[MessageEnvelope]:
 
     for msg in messages[1:]:
         prev = current_group[-1]
-        same_sender = (msg.channel == prev.channel and msg.sender_id == prev.sender_id)
+        same_sender = (
+            msg.channel == prev.channel
+            and msg.sender_id == prev.sender_id
+            and msg.chat_id == prev.chat_id
+        )
         within_window = (msg.timestamp.timestamp() - prev.timestamp.timestamp()) < _DEBOUNCE_WINDOW_S
 
         if same_sender and within_window:

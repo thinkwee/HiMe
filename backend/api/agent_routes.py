@@ -9,7 +9,7 @@ All business logic lives in:
 """
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from .agent_diagnostics import diagnostics_router
 from .agent_lifecycle import (  # noqa: F401  — re-exported for main.py
@@ -23,10 +23,11 @@ from .agent_state import (  # noqa: F401  — re-exported for main.py
     active_agents,
     get_active_agents_dict,
     get_memory_manager_for,
+    require_valid_ids,
 )
 from .agent_tasks import tasks_router
 
-router = APIRouter(prefix="/api/agent", tags=["agent"])
+router = APIRouter(prefix="/api/agent", tags=["agent"], dependencies=[Depends(require_valid_ids)])
 router.include_router(lifecycle_router)
 router.include_router(diagnostics_router)
 router.include_router(tasks_router)

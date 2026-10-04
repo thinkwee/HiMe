@@ -254,7 +254,8 @@ async def get_skill(name: str):
     try:
         raw = await asyncio.to_thread(entry.file_path.read_text, "utf-8")
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.error("Skill file operation failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to read skill file.") from exc
     # Strip frontmatter so the editor can show body separately.
     from ..agent.skills.loader import parse_frontmatter
     _meta, body = parse_frontmatter(raw)
@@ -281,7 +282,8 @@ async def create_skill(payload: SkillCreate):
     try:
         await asyncio.to_thread(path.write_text, content, "utf-8")
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.error("Skill file operation failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to write skill file.") from exc
     _refresh_running_agents()
     logger.info("Created skill %s at %s", payload.name, path)
     return {"success": True, "name": payload.name, "file_path": str(path)}
@@ -298,7 +300,8 @@ async def update_skill(name: str, payload: SkillUpdate):
     try:
         await asyncio.to_thread(path.write_text, content, "utf-8")
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.error("Skill file operation failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to write skill file.") from exc
     _refresh_running_agents()
     logger.info("Updated skill %s at %s", name, path)
     return {"success": True, "name": name, "file_path": str(path)}
@@ -313,7 +316,8 @@ async def delete_skill(name: str):
     try:
         await asyncio.to_thread(path.unlink)
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.error("Skill file operation failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to delete skill file.") from exc
     _refresh_running_agents()
     logger.info("Deleted skill %s at %s", name, path)
     return {"success": True, "name": name}

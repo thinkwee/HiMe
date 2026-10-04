@@ -5,8 +5,10 @@ All settings are documented inline.  Boolean values can be set as
 ``true``/``false``/``1``/``0`` in the .env file (Pydantic handles the parsing).
 """
 import logging
+import os
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -34,6 +36,18 @@ class Settings(BaseSettings):
     PERPLEXITY_API_KEY:       str | None = None
     MISTRAL_API_KEY:          str | None = None
     MINIMAX_API_KEY:          str | None = None
+    ZHIPUAI_API_KEY:          str | None = None
+    # Less common providers resolved by ``get_env_api_key`` (declared here so
+    # they are documented and visible to the .env -> os.environ export below).
+    CEREBRAS_API_KEY:         str | None = None
+    AI_GATEWAY_API_KEY:       str | None = None
+    ZAI_API_KEY:              str | None = None
+    MINIMAX_CN_API_KEY:       str | None = None
+    HF_TOKEN:                 str | None = None
+    OPENCODE_API_KEY:         str | None = None
+    KIMI_API_KEY:             str | None = None
+    ANTHROPIC_OAUTH_TOKEN:    str | None = None
+    VLLM_API_KEY:             str | None = None
 
     # Google Cloud / Vertex AI
     GOOGLE_CLOUD_API_KEY:     str | None = None
@@ -241,7 +255,6 @@ class Settings(BaseSettings):
     # Bidirectional Telegram Gateway
     TELEGRAM_GATEWAY_ENABLED: bool = False
     TELEGRAM_POLL_TIMEOUT:    int  = 30
-    TELEGRAM_WAKE_ON_MESSAGE: bool = True
     # Comma-separated chat IDs allowed to interact (empty = only CHAT_ID)
     TELEGRAM_ALLOWED_CHAT_IDS: str = ""
     TELEGRAM_GROUP_LINK: str | None = None
@@ -341,6 +354,7 @@ class Settings(BaseSettings):
             self.PERPLEXITY_API_KEY,
             self.MISTRAL_API_KEY,
             self.MINIMAX_API_KEY,
+            self.ZHIPUAI_API_KEY,
             self.AZURE_OPENAI_API_KEY,
             self.AWS_ACCESS_KEY_ID,
         ]
@@ -358,17 +372,23 @@ class Settings(BaseSettings):
         Returns True if valid. On failure logs a warning and the application
         will silently fall back to UTC via ``utils.app_timezone()``.
         """
-        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        from zoneinfo import ZoneInfo
         try:
             ZoneInfo(self.TIMEZONE)
             return True
-        except (ZoneInfoNotFoundError, ValueError) as e:
+        except Exception as e:  # unknown name, malformed key, missing tzdata...
             logger.warning(
                 "TIMEZONE=%r is not a valid IANA timezone (%s); falling back to UTC. "
                 "Set TIMEZONE in .env to e.g. Europe/London, America/New_York, Asia/Shanghai.",
                 self.TIMEZONE, e,
             )
             return False
+
+    @field_validator("TELEGRAM_POLL_TIMEOUT")
+    @classmethod
+    def _clamp_poll_timeout(cls, v: int) -> int:
+        # 0 would turn getUpdates into a hot short-poll loop.
+        return max(1, v)
 
     # ------------------------------------------------------------------ #
     # Pydantic settings
@@ -380,5 +400,34 @@ class Settings(BaseSettings):
     )
 
 
+def _export_dotenv_to_environ(path: str = ".env") -> int:
+    """Export ``.env`` values into ``os.environ`` (never overriding real env vars).
+
+    pydantic-settings reads ``.env`` into :class:`Settings` but does NOT touch
+    ``os.environ``, while the LLM providers resolve keys with ``os.getenv`` —
+    so under ``python -m backend.main`` (no shell-level ``source .env``) a key
+    that is only in ``.env`` was invisible to them. Empty values are skipped so
+    a blank ``FOO=`` template line doesn't shadow anything.
+
+    Returns the number of variables exported.
+    """
+    try:
+        from dotenv import dotenv_values
+    except ImportError:  # pragma: no cover — python-dotenv is a declared dependency
+        return 0
+    try:
+        values = dotenv_values(path)
+    except Exception as exc:  # pragma: no cover — unreadable .env
+        logger.warning("Could not read %s for environment export: %s", path, exc)
+        return 0
+    exported = 0
+    for key, val in values.items():
+        if key and val and key not in os.environ:
+            os.environ[key] = val
+            exported += 1
+    return exported
+
+
 # Module-level singleton
 settings = Settings()
+_export_dotenv_to_environ()

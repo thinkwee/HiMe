@@ -76,7 +76,27 @@ class FeishuGateway(BaseGateway):
             allowed_chat_ids=self.allowed_chat_ids,
         )
 
-        # Card-callback HTTP route — ALWAYS mounted, regardless of transport.
+        # The webhook is reachable from the network; without a verification
+        # token or encrypt key anyone could forge events. Refuse to build the
+        # gateway (main.py logs it and leaves Feishu disabled) rather than run
+        # an open endpoint.
+        self._has_webhook_secret = bool(
+            getattr(settings, "FEISHU_VERIFICATION_TOKEN", "")
+            or getattr(settings, "FEISHU_ENCRYPT_KEY", "")
+        )
+        if isinstance(self._transport, FeishuWebhookTransport) and not self._has_webhook_secret:
+            msg = (
+                "FEISHU_TRANSPORT=webhook requires FEISHU_VERIFICATION_TOKEN "
+                "or FEISHU_ENCRYPT_KEY (neither is set) — refusing to start the "
+                "Feishu gateway because its webhook would accept forged events. "
+                "Set one of them (Feishu console > Events & Callbacks), or use "
+                "FEISHU_TRANSPORT=ws."
+            )
+            logger.error(msg)
+            raise ValueError(msg)
+
+        # Card-callback HTTP route — mounted for every transport when a
+        # verification token / encrypt key is configured (see register_routes).
         # Reason: Feishu sends interactive-card button clicks to the bot's
         # "Message Card Request URL" (configured separately in the developer
         # console under Bot Settings), which is *not* part of the event
@@ -348,5 +368,17 @@ class FeishuGateway(BaseGateway):
         settings page) and not over the long-connection event channel.
         Without this route the user sees a Feishu-side error popup
         whenever they tap an evidence button.
+
+        In ``ws`` mode the route is only mounted when a verification token or
+        encrypt key is configured — otherwise it would be an unauthenticated
+        endpoint, so card callbacks are left unmounted (evidence buttons then
+        don't work on Feishu; set FEISHU_VERIFICATION_TOKEN to enable them).
         """
+        if not self._has_webhook_secret:
+            logger.warning(
+                "Feishu card-callback route not mounted: set "
+                "FEISHU_VERIFICATION_TOKEN (or FEISHU_ENCRYPT_KEY) to enable "
+                "interactive card buttons."
+            )
+            return
         self._card_webhook.register_routes(app)

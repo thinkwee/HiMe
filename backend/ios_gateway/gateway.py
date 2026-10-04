@@ -12,6 +12,7 @@ to a closed app go out over APNs.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
@@ -116,8 +117,14 @@ class IOSGateway(BaseGateway):
             logger.warning("IOSGateway[user=%s]: emit failed: %s", self.user_id, e)
             return False
 
-    async def _maybe_push_apns(self, body: str, data: dict) -> None:
-        """Send an APNs alert iff the app has no live stream connection."""
+    async def _maybe_push_apns(
+        self, body: str, data: dict, time_sensitive: bool = False,
+    ) -> None:
+        """Send an APNs alert iff the app has no live stream connection.
+
+        ``time_sensitive`` is reserved for proactive alerts (report pushes);
+        ordinary chat replies go out at the default interruption level.
+        """
         if ios_connections.is_online(self.user_id):
             return  # delivered live over the WebSocket
         if self._apns is None or not getattr(self._apns, "enabled", False):
@@ -140,7 +147,10 @@ class IOSGateway(BaseGateway):
         # doesn't suppress the whole burst.
         self._last_apns_ts = now
         try:
-            await self._apns.send(self.user_id, title=_APP_NAME, body=body, data=data)
+            extra = {"time_sensitive": True} if time_sensitive else {}
+            await self._apns.send(
+                self.user_id, title=_APP_NAME, body=body, data=data, **extra,
+            )
         except Exception as e:  # pragma: no cover — network/credential errors
             logger.warning("IOSGateway[user=%s]: APNs send failed: %s", self.user_id, e)
             if self._last_apns_ts == now:
@@ -176,6 +186,8 @@ class IOSGateway(BaseGateway):
         await self._maybe_push_apns(
             body=(text or "")[:120],
             data={"chat_id": target, "message_hash": msg_hash},
+            # A proactive report push carries its report id; plain replies don't.
+            time_sensitive=report_id is not None,
         )
         # Report the real outcome: _emit_to_stream returns False when there is no
         # active agent (e.g. mid supervisor-restart). Returning True regardless
@@ -198,7 +210,10 @@ class IOSGateway(BaseGateway):
         self.last_image_id = None
         try:
             if photo_path and os.path.exists(photo_path):
-                image_id = image_store.register(self.user_id, photo_path)
+                # mkdir + reap + copyfile: blocking FS work, keep off the loop.
+                image_id = await asyncio.to_thread(
+                    image_store.register, self.user_id, photo_path,
+                )
                 self.last_image_id = image_id
         except Exception as e:  # pragma: no cover — defensive
             logger.warning("IOSGateway[user=%s]: image register failed: %s", self.user_id, e)

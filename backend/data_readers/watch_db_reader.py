@@ -359,6 +359,23 @@ class WatchDBReader(BaseDataReader):
         """
         return self.get_all_samples_since_id(0, limit=limit)
 
+    def get_max_id(self) -> int | None:
+        """Return ``MAX(id)`` of the raw table (0 if empty), or None if unreadable.
+
+        The live ingest loop compares this against its stored high-water mark
+        to detect a recreated ``watch.db`` (ids restarting from 1).
+        """
+        if not self.db_path.exists():
+            return None
+        try:
+            def _run(con):
+                return con.execute("SELECT MAX(id) FROM health_samples_eav").fetchone()
+            row = self._execute(_run)
+            return int(row[0]) if row and row[0] is not None else 0
+        except Exception as e:
+            logger.warning("WATCH_DB_READER: get_max_id error: %s", e)
+            return None
+
     def get_total_sample_count(self) -> int:
         """Return the total number of rows in health_samples_eav."""
         if not self.db_path.exists():

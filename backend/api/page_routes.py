@@ -16,6 +16,7 @@ import re
 import shutil
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -373,20 +374,55 @@ async def serve_page_frontend(page_id: str):
     return HTMLResponse(content=html, headers=_PAGE_SECURITY_HEADERS)
 
 
+# A page backend that hangs (agent-written code: bad loop, blocking socket)
+# must not pin a worker thread / request forever.
+_PAGE_HANDLER_TIMEOUT_S = 20.0
+
+# page_id -> ((mtime_ns, size), module). Loading re-executes the agent's module
+# top level (imports, DB opens), so do it once per file revision, not per request.
+_module_cache: dict[str, tuple[tuple[int, int], Any]] = {}
+
+
+def _load_page_module(page_id: str, route_path: Path) -> Any:
+    """Return the page's backend module, re-executing only when the file changed.
+
+    Blocking (stat, read, compile, exec) — call via ``asyncio.to_thread``.
+    Raises ``SyntaxError`` for broken agent code.
+    """
+    st = route_path.stat()
+    key = (st.st_mtime_ns, st.st_size)
+    cached = _module_cache.get(page_id)
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    source = route_path.read_text(encoding="utf-8")
+    compile(source, str(route_path), "exec")  # SyntaxError -> caller's 422
+    spec = importlib.util.spec_from_file_location(
+        f"personalised_page_{page_id}", route_path
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    _module_cache[page_id] = (key, mod)
+    return mod
+
+
 async def _exec_route_handler(page_id: str, request: Request | None):
-    """Load and execute a page's route_handler."""
+    """Load (cached by mtime) and execute a page's route_handler under a timeout."""
     _validate_page_id(page_id)
     route_path = _PAGES_DIR / page_id / "route.py"
     if not route_path.exists():
+        _module_cache.pop(page_id, None)
         return JSONResponse(
             status_code=404,
             content={"success": False, "error": f"Page '{page_id}' backend not found"},
         )
 
-    # Pre-validate syntax before attempting to import
-    source = await asyncio.to_thread(route_path.read_text, encoding="utf-8")
     try:
-        await asyncio.to_thread(compile, source, str(route_path), "exec")
+        # Agent-generated module top level can do arbitrary slow work
+        # (heavy imports, opening a DB) — never run it on the event loop.
+        module = await asyncio.wait_for(
+            asyncio.to_thread(_load_page_module, page_id, route_path),
+            timeout=_PAGE_HANDLER_TIMEOUT_S,
+        )
     except SyntaxError as se:
         logger.error(
             "serve_page_data syntax error for %s: %s (line %s)",
@@ -401,20 +437,23 @@ async def _exec_route_handler(page_id: str, request: Request | None):
                          "Ask the agent to recreate this page.",
             },
         )
+    except asyncio.TimeoutError:
+        logger.error("serve_page_data: loading backend for %s timed out", page_id)
+        return JSONResponse(
+            status_code=504,
+            content={"success": False, "error": f"Page '{page_id}' backend timed out while loading."},
+        )
+    except Exception as e:
+        logger.error("serve_page_data load error for %s: %s", page_id, e, exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": f"Page '{page_id}' backend encountered an internal error.",
+            },
+        )
 
     try:
-        def _load_module():
-            spec = importlib.util.spec_from_file_location(
-                f"personalised_page_{page_id}", route_path
-            )
-            mod = importlib.util.module_from_spec(spec)
-            # Agent-generated module top level can do arbitrary slow work
-            # (heavy imports, opening a DB) — never run it on the event loop.
-            spec.loader.exec_module(mod)
-            return mod
-
-        module = await asyncio.to_thread(_load_module)
-
         if not hasattr(module, "route_handler"):
             return JSONResponse(
                 status_code=500,
@@ -424,15 +463,28 @@ async def _exec_route_handler(page_id: str, request: Request | None):
                 },
             )
 
-        if asyncio.iscoroutinefunction(module.route_handler):
-            result = await module.route_handler(request)
-        else:
+        async def _run():
+            if asyncio.iscoroutinefunction(module.route_handler):
+                return await module.route_handler(request)
             # Pre-read body so sync handlers can access it via request._body
             body = await request.body()
             request._body = body
-            result = await asyncio.to_thread(module.route_handler, request)
+            return await asyncio.to_thread(module.route_handler, request)
 
+        result = await asyncio.wait_for(_run(), timeout=_PAGE_HANDLER_TIMEOUT_S)
         return JSONResponse(content=result)
+    except asyncio.TimeoutError:
+        logger.error(
+            "serve_page_data: route_handler for %s exceeded %.0fs", page_id,
+            _PAGE_HANDLER_TIMEOUT_S,
+        )
+        return JSONResponse(
+            status_code=504,
+            content={
+                "success": False,
+                "error": f"Page '{page_id}' backend timed out.",
+            },
+        )
     except Exception as e:
         logger.error("serve_page_data error for %s: %s", page_id, e, exc_info=True)
         return JSONResponse(

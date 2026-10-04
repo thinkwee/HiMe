@@ -8,11 +8,12 @@ can import from a single source without circular dependencies.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections import defaultdict
 
-from fastapi import HTTPException
-from pydantic import BaseModel
+from fastapi import HTTPException, Request
+from pydantic import BaseModel, field_validator
 
 from ..agent import MemoryManager
 from ..config import settings
@@ -85,8 +86,41 @@ def _client_ip(request) -> str:
     if settings.TRUST_PROXY_HEADERS:
         forwarded = request.headers.get("X-Forwarded-For")
         if forwarded:
-            return forwarded.split(",")[0].strip()
+            # Each proxy appends the address it saw to the RIGHT of the list;
+            # everything to the left is client-supplied and spoofable. Our
+            # (single, trusted) proxy's entry is therefore the rightmost one.
+            parts = [p.strip() for p in forwarded.split(",") if p.strip()]
+            if parts:
+                return parts[-1]
     return request.client.host if request.client else "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Identifier validation (user_id / pid end up in file names under memory/ and
+# data/data_stores/, so they must never contain path separators or dots).
+# ---------------------------------------------------------------------------
+
+_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def validate_user_id(value: str) -> str:
+    """Return *value* if it is a safe identifier, else raise HTTP 400."""
+    if not isinstance(value, str) or not _ID_RE.match(value):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid user id: use 1-64 letters, digits, '_' or '-'.",
+        )
+    return value
+
+
+async def require_valid_ids(request: Request) -> None:
+    """Router dependency: validate every ``pid`` / ``user_id`` path or query value."""
+    for key in ("pid", "user_id"):
+        val = request.path_params.get(key)
+        if val is None:
+            val = request.query_params.get(key)
+        if val is not None:
+            validate_user_id(val)
 
 
 # ---------------------------------------------------------------------------
@@ -99,6 +133,13 @@ class StartAgentRequest(BaseModel):
     model:           str | None  = None
     granularity:     str   = "real-time"
     speed_multiplier: float = 1.0
+
+    @field_validator("user_id")
+    @classmethod
+    def _check_user_id(cls, v: str) -> str:
+        if not _ID_RE.match(v):
+            raise ValueError("user_id must be 1-64 letters, digits, '_' or '-'")
+        return v
 
 
 class QuickAnalysisResponse(BaseModel):
@@ -134,15 +175,35 @@ def get_memory_manager_for(pid: str) -> MemoryManager | None:
 
 
 def _get_or_create_memory(pid: str) -> MemoryManager | None:
-    """Return existing MemoryManager from registry or create a transient one."""
-    if pid in active_agents:
-        return active_agents[pid]["memory"]
+    """Return existing MemoryManager from registry or create a transient one.
+
+    While the agent is still starting its registry entry is a placeholder with
+    ``memory=None``; in that case fall through to the on-disk DB so readers
+    (chat history, reports, ...) keep working instead of seeing nothing.
+    """
+    info = active_agents.get(pid)
+    if info is not None and info.get("memory") is not None:
+        return info["memory"]
     # Only create a transient MemoryManager if the DB file actually exists,
     # otherwise every poll creates one and logs "MemoryManager ready".
+    if not _ID_RE.match(pid or ""):
+        return None
     db_file = settings.MEMORY_DB_PATH / f"{pid}.db"
     if not db_file.exists():
         return None
     return MemoryManager(settings.MEMORY_DB_PATH, pid)
+
+
+async def aget_or_create_memory(pid: str) -> MemoryManager | None:
+    """Async variant of :func:`_get_or_create_memory`.
+
+    Constructing a transient ``MemoryManager`` opens SQLite and runs schema
+    migrations, so it is done off the event loop.
+    """
+    info = active_agents.get(pid)
+    if info is not None and info.get("memory") is not None:
+        return info["memory"]
+    return await asyncio.to_thread(_get_or_create_memory, pid)
 
 
 def get_active_agent(user_id: str):

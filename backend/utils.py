@@ -1,10 +1,15 @@
 """
 Utility functions for safe JSON serialization of DataFrames and timestamp formatting.
 """
+import json
+import logging
 import math
+import os
+import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -15,7 +20,32 @@ import pandas as pd
 # naive Timestamp comparisons in agent-generated code.
 # ---------------------------------------------------------------------------
 
+logger = logging.getLogger(__name__)
+
 _TS_FMT = '%Y-%m-%dT%H:%M:%S'
+
+
+def atomic_write_json(path: "str | os.PathLike[str]", data: Any, indent: int | None = 2) -> None:
+    """Write *data* as JSON to *path* atomically (temp file + ``os.replace``).
+
+    A crash or concurrent reader never observes a half-written file. Blocking —
+    call via ``asyncio.to_thread`` from async code.
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(target.parent), prefix=f".{target.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=indent)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def ts_now() -> str:
@@ -56,19 +86,29 @@ def parse_db_iso_utc(s: str | None) -> datetime | None:
 # ---------------------------------------------------------------------------
 
 
+_warned_bad_tz: set[str] = set()
+
+
 def app_timezone() -> ZoneInfo:
     """
     Return the configured application timezone as a ZoneInfo.
 
-    Falls back to UTC if `settings.TIMEZONE` is unset or unknown. The
-    fallback is silent here; startup calls `settings.validate_timezone()`
-    once which logs a warning so operators see the misconfiguration.
+    An unset ``settings.TIMEZONE`` means UTC. An invalid one (unknown name,
+    malformed key such as an absolute path, ...) logs a one-time warning and
+    falls back to UTC, so the cron scheduler and prompt builders never crash
+    on a typo in ``.env``.
     """
     from .config import settings  # lazy import: utils <- config <- ... cycle-free
     tz_name = (settings.TIMEZONE or "UTC").strip() or "UTC"
     try:
         return ZoneInfo(tz_name)
-    except ZoneInfoNotFoundError:
+    except Exception as exc:  # ZoneInfoNotFoundError, ValueError, OSError, ...
+        if tz_name not in _warned_bad_tz:
+            _warned_bad_tz.add(tz_name)
+            logger.warning(
+                "TIMEZONE=%r is invalid (%s); falling back to UTC.",
+                tz_name, exc,
+            )
         return ZoneInfo("UTC")
 
 
