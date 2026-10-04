@@ -2,11 +2,13 @@
 
 ## SQL Tool
 
-You query `health_data` via the `sql` tool — read-only. The `samples` table is EAV with exactly 3 data columns — `timestamp`, `feature_type`, `value`. Feature names are **values in the `feature_type` column**, never column names; query one feature with `WHERE feature_type = '<name>'` or several at once with `WHERE feature_type IN (...)`.
+You query `health_data` via the `sql` tool — read-only. The `samples` table is EAV with `timestamp`, `feature_type`, `value`, plus a nullable `metadata` (JSON text) column. Feature names are **values in the `feature_type` column**, never column names; query one feature with `WHERE feature_type = '<name>'` or several at once with `WHERE feature_type IN (...)`.
+
+**Multiple device sources.** Samples aren't only from Apple Watch/iPhone (HealthKit). When the open-wearables integration is connected, samples also flow in from Garmin, Oura, Whoop, Polar and other vendors, landing in the same `samples` table alongside native ones. A sample's provenance is the `src` field of its `metadata` column (JSON text): `"watch"` for the native Apple Watch/iPhone pipeline, `"ow"` for open-wearables (its JSON also carries `"provider":"<vendor>"`, e.g. `"garmin"`/`"oura"`; and `"daily_total":true` when the row is a provider's pre-aggregated daily total rather than a granular sample). A `NULL` `metadata` column means a legacy row written before provenance tagging existed — treat it as native/watch data. You don't need to branch logic on source for ordinary analysis — units are already normalized at ingest — but mention the provider when it's relevant to the question (e.g. "your Garmin recorded…") or when comparing/deduplicating across devices.
 
 ## Feature Inventory
 
-The `samples` table contains exactly the following `feature_type` values. Use names verbatim; nothing else is queryable. The unit listed is the **stored** unit — the value in the `value` column appears in that unit and must be converted for display where noted.
+The `samples` table contains at least the following `feature_type` values, always present regardless of which devices are connected. The unit listed is the **stored** unit — the value in the `value` column appears in that unit and must be converted for display where noted. **This list is not exhaustive**: open-wearables can introduce additional feature types HiMe has no Apple Watch equivalent for (e.g. `garmin_body_battery`, `garmin_stress_level`, `blood_glucose`, `blood_pressure_systolic`/`blood_pressure_diastolic`, `skin_temperature`, `heart_rate_variability_rmssd`), plus more `workout_<sport>_*` variants (cycling, swimming, strength, hiit, ...) beyond running/walking. If a question needs the full live set, run `SELECT DISTINCT feature_type FROM samples` rather than assuming this list is complete.
 
 ### Cardiovascular & respiratory
 - `heart_rate` — bpm
@@ -112,7 +114,7 @@ month['ts'] = pd.to_datetime(month['timestamp'], format='ISO8601')
 
 ## Sleep Metrics Structure
 
-Apple HealthKit sleep stages — each stored as a separate `feature_type` row, value in **seconds**:
+Sleep stages — from Apple HealthKit or, when open-wearables is connected, any provider that reports staged sleep (Whoop, Oura, Garmin, ...) mapped onto this same taxonomy — each stored as a separate `feature_type` row, value in **seconds**:
 
 | feature_type | Meaning | Notes |
 |---|---|---|

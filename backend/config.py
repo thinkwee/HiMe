@@ -159,6 +159,51 @@ class Settings(BaseSettings):
     DATA_SOURCE: str = "live"
 
     # ------------------------------------------------------------------ #
+    # open-wearables integration (optional, experimental — off by default)
+    # ------------------------------------------------------------------ #
+    # open-wearables (https://github.com/open-wearables/open-wearables) is a
+    # separate, self-hosted FastAPI service that unifies Garmin/Oura/Whoop/
+    # Polar/... wearable data behind one REST API + outgoing webhooks. When
+    # enabled, backend/data_sources/open_wearables polls it (and optionally
+    # receives its webhooks) and funnels the data into the same DataStore
+    # samples table the native Apple Watch pipeline uses. See
+    # docs/DEVELOPMENT.md for the module layout.
+    OPENWEARABLES_ENABLED: bool = False
+    # Base URL of the open-wearables backend (its own API, not the frontend).
+    OPENWEARABLES_BASE_URL: str = "http://openwearables-app:8000"
+    # Sent as the X-Open-Wearables-API-Key header on every request.
+    OPENWEARABLES_API_KEY: str = ""
+    # How often (seconds) the fast poller pulls new timeseries/workouts/sleep
+    # data, using a per-category event-time cursor with a small overlap.
+    OPENWEARABLES_POLL_INTERVAL: int = 300
+    # How often (seconds) the reconciliation pass re-fetches a wide trailing
+    # window for every category, independent of the fast-poll cursors. This
+    # is what catches data that syncs into open-wearables hours after its own
+    # event time (e.g. Oura syncing a whole night the next morning) — the
+    # fast poll's cursor+overlap alone would skip it. See docs/OPEN_WEARABLES.md.
+    OPENWEARABLES_RECONCILE_INTERVAL: int = 3600
+    # How many hours back the reconciliation pass re-scans on each run.
+    OPENWEARABLES_RECONCILE_WINDOW_HOURS: int = 48
+    # On first run (no cursor yet) each category backfills this many days.
+    OPENWEARABLES_BACKFILL_DAYS: int = 7
+    # Comma-separated provider allowlist (e.g. "garmin,oura"). Empty (default)
+    # = allow every provider open-wearables reports EXCEPT apple/apple_health,
+    # which HiMe's native Apple Watch pipeline already owns.
+    OPENWEARABLES_PROVIDERS: str = ""
+    # Attempt to self-register a webhook endpoint on open-wearables at
+    # startup (push path, lower latency than polling). Best-effort: on stock
+    # open-wearables deployments this requires a developer JWT HiMe doesn't
+    # have, so registration commonly fails and the poller is relied on
+    # instead — this is expected and logged at info, not a startup error.
+    OPENWEARABLES_WEBHOOK_ENABLED: bool = True
+    # Public callback base URL open-wearables should POST events to (the
+    # webhook path itself, /api/integrations/openwearables/webhook, is
+    # fixed and appended automatically). Leave blank to default to
+    # "http://backend:8000" (the in-cluster/docker-compose service name) —
+    # override with a real public HTTPS URL for a non-Docker deployment.
+    OPENWEARABLES_WEBHOOK_CALLBACK_URL: str = ""
+
+    # ------------------------------------------------------------------ #
     # Localization
     # ------------------------------------------------------------------ #
     # Default language for user-facing backend messages (reply_user fallbacks,

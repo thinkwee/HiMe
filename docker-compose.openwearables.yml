@@ -1,0 +1,244 @@
+# HIME — open-wearables (OW) integration overlay [EXPERIMENTAL / OPT-IN]
+#
+# Adds the open-wearables platform (https://github.com/the-momentum/open-wearables)
+# as a self-hosted sidecar so HiMe's backend can pull unified wearable data from
+# Garmin/Polar/Whoop/Oura/Strava/Fitbit/etc. through one API instead of talking
+# to each vendor directly. Off by default; nothing in this file runs unless you
+# explicitly bring it up. See docs/OPEN_WEARABLES.md for the full guide.
+#
+# This is a STANDALONE overlay — it does NOT modify docker-compose.yml. Compose
+# derives the project name from the current directory (here: "hime") whether
+# you pass one file or several, so services declared in this overlay join the
+# SAME default network as docker-compose.yml's `backend` service automatically;
+# no external network or edits to docker-compose.yml are required.
+#
+# Quickstart (or just use ./hime.sh wearables ...):
+#   ./hime.sh wearables setup                    # clone OW + generate its .env
+#   docker compose -f docker-compose.yml -f docker-compose.openwearables.yml \
+#       up -d openwearables-db openwearables-redis openwearables-svix \
+#              openwearables-app openwearables-celery-worker openwearables-celery-beat
+#   ./hime.sh wearables bootstrap                 # mint an API key into HiMe's .env
+#
+# To also start HiMe's own stack in the same command:
+#   docker compose -f docker-compose.yml -f docker-compose.openwearables.yml up -d
+#
+# Build context: all `build:` blocks below point into ./external/open-wearables,
+# a pinned git checkout created by `./hime.sh wearables setup` (open-wearables
+# ships no published container images — everything builds from source).
+#
+# Ports published to the host (everything else is internal-only, reached by
+# HiMe's backend over the shared compose network):
+#   openwearables-app  -> localhost:8010  (OAuth redirects during provider
+#                          connect, Swagger UI at /docs, debugging). Chosen to
+#                          avoid HiMe's own 8000 (backend), 5173 (frontend) and
+#                          8765 (watch exporter).
+#
+# Named volumes (namespaced with an "openwearables-" prefix; distinct from
+# HiMe's own `watch-data` volume declared in docker-compose.yml):
+#   openwearables-postgres-data, openwearables-redis-data
+#
+# Resource footprint: roughly +350-550MB RAM across db/redis/app/svix/2x
+# celery once running (see docs/OPEN_WEARABLES.md).
+
+volumes:
+  openwearables-postgres-data:
+  openwearables-redis-data:
+
+services:
+  # ── Postgres — OW's primary database, plus a `svix` DB used by svix-server. ──
+  openwearables-db:
+    image: postgres:18
+    container_name: openwearables-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: open-wearables
+      POSTGRES_USER: open-wearables
+      POSTGRES_PASSWORD: open-wearables
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U open-wearables -d open-wearables"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - openwearables-postgres-data:/var/lib/postgresql
+      # Reused verbatim from the pinned OW checkout so it never drifts out of
+      # sync with the app's own expectations (idempotent: creates the `svix`
+      # DB on first cluster init only).
+      - ./external/open-wearables/backend/scripts/init/create-svix-db.sql:/docker-entrypoint-initdb.d/create-svix-db.sql:ro
+
+  # ── Redis — Celery broker/result backend + OW's own session/cache use. ──
+  # Entrypoint copied from open-wearables' docker-compose.yml: seeds AOF from
+  # an existing RDB snapshot before enabling it so a pre-populated dump.rdb
+  # (e.g. restored from backup) isn't silently ignored on first boot.
+  openwearables-redis:
+    image: redis:8
+    container_name: openwearables-redis
+    restart: unless-stopped
+    entrypoint:
+      - sh
+      - -c
+      - |
+        if [ ! -d /data/appendonlydir ] && [ -f /data/dump.rdb ]; then
+          redis-server --daemonize no &
+          RPID=$$!
+          until redis-cli ping >/dev/null 2>&1; do sleep 0.2; done
+          redis-cli CONFIG SET appendonly yes
+          sleep 1
+          until redis-cli INFO persistence | grep -q 'aof_rewrite_in_progress:0'; do sleep 0.2; done
+          redis-cli SHUTDOWN NOSAVE
+          wait "$$RPID" 2>/dev/null
+        fi
+        exec redis-server --appendonly yes --appendfsync everysec
+    volumes:
+      - openwearables-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ── App — the OW FastAPI service. MUST be named `openwearables-app`: HiMe's
+  # backend connector reaches it at OPENWEARABLES_BASE_URL, which defaults to
+  # http://openwearables-app:8000 (the in-network DNS name + container port).
+  openwearables-app:
+    build:
+      context: ./external/open-wearables/backend
+      dockerfile: Dockerfile
+    image: hime-openwearables-app:local
+    pull_policy: never
+    container_name: openwearables-app
+    restart: unless-stopped
+    command: scripts/start/app.sh
+    env_file:
+      - ./external/open-wearables/backend/config/.env
+    environment:
+      DB_HOST: openwearables-db
+      REDIS_HOST: openwearables-redis
+      SVIX_SERVER_URL: http://openwearables-svix:8071
+    ports:
+      - "8010:8000"
+    depends_on:
+      openwearables-db:
+        condition: service_healthy
+      openwearables-redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/docs', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # ── Celery worker/beat — background sync jobs (provider pulls, webhook
+  # fan-out, scheduled tasks). Reuse the app image built above; `pull_policy:
+  # never` mirrors open-wearables' own compose file (no `build:` here is
+  # intentional — `openwearables-app` builds the shared image tag once).
+  openwearables-celery-worker:
+    image: hime-openwearables-app:local
+    pull_policy: never
+    container_name: openwearables-celery-worker
+    restart: unless-stopped
+    command: scripts/start/worker.sh
+    env_file:
+      - ./external/open-wearables/backend/config/.env
+    environment:
+      DB_HOST: openwearables-db
+      REDIS_HOST: openwearables-redis
+      SVIX_SERVER_URL: http://openwearables-svix:8071
+    depends_on:
+      - openwearables-redis
+      - openwearables-db
+      - openwearables-app
+
+  openwearables-celery-beat:
+    image: hime-openwearables-app:local
+    pull_policy: never
+    container_name: openwearables-celery-beat
+    restart: unless-stopped
+    command: scripts/start/beat.sh
+    env_file:
+      - ./external/open-wearables/backend/config/.env
+    environment:
+      DB_HOST: openwearables-db
+      REDIS_HOST: openwearables-redis
+      SVIX_SERVER_URL: http://openwearables-svix:8071
+    depends_on:
+      - openwearables-redis
+      - openwearables-db
+      - openwearables-app
+
+  # ── Svix — self-hosted outgoing-webhook delivery (OW -> HiMe's
+  # /api/integrations/openwearables/webhook). Entrypoint copied verbatim from
+  # OW's compose file: falls back SVIX_JWT_SECRET to SECRET_KEY if unset.
+  openwearables-svix:
+    image: svix/svix-server:v1
+    container_name: openwearables-svix
+    restart: unless-stopped
+    entrypoint:
+      - sh
+      - -c
+      - |
+        : "$${SVIX_JWT_SECRET:=$$SECRET_KEY}"
+        export SVIX_JWT_SECRET
+        exec svix-server "$$@"
+      - --
+    command: ["--run-migrations"]
+    env_file:
+      - ./external/open-wearables/backend/config/.env
+    environment:
+      SVIX_DB_DSN: "postgresql://open-wearables:open-wearables@openwearables-db:5432/svix"
+      SVIX_QUEUE_TYPE: "redis"
+      SVIX_REDIS_DSN: "redis://openwearables-redis:6379/1"
+      SVIX_CACHE_TYPE: "redis"
+    depends_on:
+      openwearables-db:
+        condition: service_healthy
+      openwearables-redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "svix-server", "healthcheck", "http://localhost:8071"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  # ────────────────────────────────────────────────────────────────────────
+  # OPTIONAL services — omitted from `./hime.sh wearables start` by default.
+  # Uncomment to enable, then run:
+  #   docker compose -f docker-compose.yml -f docker-compose.openwearables.yml \
+  #       up -d openwearables-flower           # or openwearables-frontend
+  # ────────────────────────────────────────────────────────────────────────
+
+  # openwearables-flower:
+  #   image: hime-openwearables-app:local
+  #   pull_policy: never
+  #   container_name: openwearables-flower
+  #   restart: unless-stopped
+  #   command: scripts/start/flower.sh
+  #   env_file:
+  #     - ./external/open-wearables/backend/config/.env
+  #   environment:
+  #     DB_HOST: openwearables-db
+  #     REDIS_HOST: openwearables-redis
+  #     SVIX_SERVER_URL: http://openwearables-svix:8071
+  #   ports:
+  #     - "5555:5555"   # Celery task monitoring UI
+  #   depends_on:
+  #     - openwearables-redis
+  #     - openwearables-db
+  #     - openwearables-app
+
+  # openwearables-frontend:
+  #   build:
+  #     context: ./external/open-wearables/frontend
+  #     dockerfile: Dockerfile.dev
+  #   container_name: openwearables-frontend
+  #   restart: unless-stopped
+  #   env_file:
+  #     - ./external/open-wearables/frontend/.env.example
+  #   environment:
+  #     VITE_API_URL: http://localhost:8010
+  #   ports:
+  #     - "3000:3000"   # OW's own dashboard/portal (dev credentials from ADMIN_EMAIL/ADMIN_PASSWORD)
+  #   depends_on:
+  #     - openwearables-app

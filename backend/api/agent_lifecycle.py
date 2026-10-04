@@ -33,6 +33,13 @@ from .agent_state import (
 # Single-user identity for the in-app channel.
 _LIVE_USER = "LiveUser"
 
+# Provenance metadata attached to every sample from the native watch.db
+# live-ingest path — see DataStore.ingest_batch()'s COALESCE upsert and
+# prompts/data_schema.md's provenance note. Precomputed (compact JSON,
+# matching backend/data_sources/open_wearables/mapper.py's separators) since
+# it is identical for every ingested row.
+_WATCH_METADATA = json.dumps({"src": "watch"}, separators=(",", ":"))
+
 logger = logging.getLogger(__name__)
 
 lifecycle_router = APIRouter()
@@ -321,6 +328,31 @@ async def _build_ingest_task(body: StartAgentRequest, data_store: DataStore) -> 
     )
 
 
+def _build_watch_records(samples: list, pid: str) -> list:
+    """Convert raw watch.db rows to DataStore ingest format.
+
+    Every row is tagged with ``{"src":"watch"}`` metadata so its provenance
+    is explicit (mirrors open-wearables' ``{"src":"ow",...}`` — see
+    backend/data_sources/open_wearables/mapper.py). This is what makes
+    DataStore.ingest_batch()'s ``COALESCE(excluded.metadata,
+    samples.metadata)`` upsert safe: a NULL-metadata writer can never erase
+    another source's provenance, because after this change there no longer
+    is one (see prompts/data_schema.md's provenance note).
+    """
+    records = []
+    for s in samples:
+        ts = s["ts"]
+        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+        records.append({
+            "date": ts_fmt(dt),
+            "value": s["value"],
+            "feature_type": s["feature_type"],
+            "pid": pid,
+            "metadata": _WATCH_METADATA,
+        })
+    return records
+
+
 async def _live_ingest_loop(reader, data_store: DataStore, user_id: str) -> None:
     """
     Continuously poll the live watch.db and forward ALL samples into the DataStore.
@@ -345,19 +377,7 @@ async def _live_ingest_loop(reader, data_store: DataStore, user_id: str) -> None
                 user_id, last_id, last_updated_at)
     data_store.is_ingesting = True
 
-    def _build_records(samples: list, pid: str) -> list:
-        """Convert raw watch.db rows to DataStore ingest format."""
-        records = []
-        for s in samples:
-            ts = s["ts"]
-            dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-            records.append({
-                "date": ts_fmt(dt),
-                "value": s["value"],
-                "feature_type": s["feature_type"],
-                "pid": pid,
-            })
-        return records
+    _build_records = _build_watch_records
 
     # --- PHASE 1: Historical Sync (id-based, catches all rows) ---
     try:

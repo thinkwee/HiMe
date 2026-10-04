@@ -170,6 +170,27 @@ Security model: agent-generated `route.py` is validated against a denylist of im
 
 ---
 
+## open-wearables integration (optional, experimental)
+
+`backend/data_sources/open_wearables/` connects HiMe to a separately self-hosted [open-wearables](https://github.com/open-wearables/open-wearables) instance, which unifies Garmin/Oura/Whoop/Polar/... wearable data behind one API. It is entirely off by default (`OPENWEARABLES_ENABLED=false`) — when off, no background task starts and no network call is made.
+
+**Module layout:**
+
+| Module | Responsibility |
+|--------|-----------------|
+| `client.py` | Async httpx client for the open-wearables `/api/v1` REST surface (users, providers/OAuth, timeseries with cursor pagination, workouts/sleep events, sync-status, webhook endpoint CRUD). Never raises — logs and returns `None`/`[]` on any failure. The three paginated list methods (`get_timeseries`, `list_workouts`, `list_sleep_sessions`) return a `PageResult(items, complete)`: `complete=False` on a transport error/non-2xx/timeout *or* on hitting the `max_pages` safety cap, so a caller never mistakes a truncated or failed fetch for "no data" — see `poller.py`. |
+| `features.py` | `SERIES_TYPE_MAP` (open-wearables `SeriesType` → existing HiMe `feature_type`, for metrics HiMe already tracks from Apple Watch) + `SERIES_TYPE_CONVERSION` (unit multipliers where OW's and HiMe's *storage* units differ, e.g. `oxygen_saturation` 0-100 → HiMe's `blood_oxygen` 0-1 fraction) + `OW_FEATURE_SPEC` (display/aggregation specs, same schema as `apple_health_features.FEATURE_SPEC`, for OW-only metrics like `garmin_body_battery` or `blood_glucose`). |
+| `mapper.py` | Pure functions: OW payload → `DataStore.ingest_batch()` rows. Handles timestamp normalization (OW's offset-aware ISO strings → HiMe's naive UTC `YYYY-MM-DDTHH:MM:SS` convention, matching `backend/utils.py::ts_fmt` and `agent_lifecycle._live_ingest_loop`), sleep-session → `sleep_*` stage samples (anchored at segment/session **end** time; a staged session emits only its stage rows, never the session total alongside them — matches `prompts/data_schema.md`'s total-sleep convention), workout → `workout_<category>_{duration,distance,energy}` samples, `is_daily_total` handling (granular samples supersede a same-batch daily total for the same feature/provider/day; a surviving daily total is written at a deterministic day-anchor timestamp with a `daily_total` metadata marker), and provider filtering (drops `apple`/`apple_health` by default so the native Apple Watch pipeline stays authoritative; respects `OPENWEARABLES_PROVIDERS` otherwise). No I/O, fully unit-testable. |
+| `poller.py` | Background asyncio loop, started from `main.py`'s lifespan only when enabled. Resolves/creates the OW user on first run, then runs two-tier polling: a **fast poll** every `OPENWEARABLES_POLL_INTERVAL`s using a persisted per-category event-time cursor (small overlap; advances only on a complete fetch, holds back on error, advances to the last-fetched sample's timestamp on a truncated fetch) that backfills `OPENWEARABLES_BACKFILL_DAYS` on first run, plus a **reconciliation pass** every `OPENWEARABLES_RECONCILE_INTERVAL`s that re-scans the trailing `OPENWEARABLES_RECONCILE_WINDOW_HOURS` independent of the cursors (catches data that syncs into OW hours after its own event time — idempotent upserts make the overlap free). Optionally triggers reconciliation early when `GET .../sync/runs` reports a newly-completed sync run. State lives in `app_state.json`, key `"openwearables"` (same mechanism `backend/api/config_routes.py` uses for the rest of app state). Also makes one best-effort attempt to self-register a webhook endpoint at startup. |
+| `webhook.py` | `POST /api/integrations/openwearables/webhook` — verifies the inbound Svix signature by hand (HMAC-SHA256 over `{id}.{timestamp}.{raw_body}`, stdlib `hmac`/`hashlib`/`base64`, no `svix` pip dependency) against the persisted signing secret, then maps + ingests. Always answers fast and never 500s on a bad payload (auth failures are the only non-2xx). Exempted from `BearerAuthMiddleware` the same way the Feishu webhook is. |
+| `routes.py` | `GET /status`, `GET /providers`, `POST /connect/{provider}`, `POST /sync` — consumed by the frontend Devices page. Ordinary `/api/*` routes, no special auth handling needed. |
+
+**Data flow:** open-wearables REST/webhook → `mapper.py` → `DataStore.ingest_batch()` → the same `samples` table (`data/data_stores/LiveUser_data.db`) the Apple Watch live-ingest loop writes to. Dashboard, agent context, and retention all read that one table, so OW-sourced data shows up everywhere native data does, with no separate code path downstream. Webhook and poll ingestion overlap harmlessly — `ingest_batch()`'s upsert on `(timestamp, feature_type)` makes re-ingesting the same sample a no-op.
+
+Feature display metadata is merged into the existing `GET /api/data/feature_metadata` response (`OW_FEATURE_SPEC` + `FEATURE_SPEC`), so new OW-only metrics get dashboard cards automatically.
+
+---
+
 ## Configuration reference
 
 All settings live in `.env`. The most important ones:

@@ -77,6 +77,14 @@ def mock_settings(tmp_dirs):
         AUTO_RESTORE_AGENT=False,
         DATA_SOURCE="live",
         TELEGRAM_GATEWAY_ENABLED=False,
+        # Explicit override (not just relying on the Settings default): a
+        # developer's real .env may have this on for their own deployment,
+        # but the test suite must be deterministic regardless — same reason
+        # TELEGRAM_GATEWAY_ENABLED is pinned above. Individual tests that
+        # need it on (see tests/test_openwearables_webhook.py) flip it back
+        # via monkeypatch on this same mock_settings instance.
+        OPENWEARABLES_ENABLED=False,
+        OPENWEARABLES_API_KEY="",
         # Provide dummy API keys so provider init doesn't complain
         OPENAI_API_KEY="test-key",
         GOOGLE_API_KEY="test-key",
@@ -319,7 +327,12 @@ async def test_client(mock_settings, tmp_dirs, health_data_db, memory_db):
          patch("backend.api.agent_state.settings", mock_settings), \
          patch("backend.api.agent_lifecycle.settings", mock_settings), \
          patch("backend.api.config_routes.settings", mock_settings), \
-         patch("backend.api.page_routes.settings", mock_settings):
+         patch("backend.api.page_routes.settings", mock_settings), \
+         patch("backend.data_sources.open_wearables.client.settings", mock_settings), \
+         patch("backend.data_sources.open_wearables.features.settings", mock_settings), \
+         patch("backend.data_sources.open_wearables.webhook.settings", mock_settings), \
+         patch("backend.data_sources.open_wearables.poller.settings", mock_settings), \
+         patch("backend.data_sources.open_wearables.routes.settings", mock_settings):
 
         # Import app AFTER patching so routers pick up mock settings
         from backend.main import app

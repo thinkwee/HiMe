@@ -114,3 +114,5 @@ test_api.py
 scripts/
 CLAUDE.md
 
+# open-wearables checkout (managed by ./hime.sh wearables setup)
+external/

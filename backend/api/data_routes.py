@@ -212,13 +212,19 @@ async def get_feature_metadata():
     """Feature display metadata (unit, format, scale)."""
     try:
         from ..data_readers.apple_health_features import FEATURE_SPEC
+        from ..data_sources.open_wearables.features import OW_FEATURE_SPEC
+
+        # OW-only metrics first, native Apple Health specs last so they win
+        # on any (unexpected) key collision — the native pipeline is
+        # authoritative for anything it already defines.
+        merged_spec = {**OW_FEATURE_SPEC, **FEATURE_SPEC}
         features = {
             k: {
                 "display_unit":  v.get("display_unit", ""),
                 "format":        v.get("format", "{:.2f}"),
                 "display_scale": v.get("display_scale", 1),
             }
-            for k, v in FEATURE_SPEC.items()
+            for k, v in merged_spec.items()
         }
         return {"success": True, "features": features, "data_source": "live"}
     except Exception as exc:

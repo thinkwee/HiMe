@@ -21,13 +21,15 @@ When using `create_page`, include these two lines in `<head>`:
 
 ## Valid `feature_type` values
 
-These are the only values that appear in the `samples` table. Using any other name (e.g. `sleep_hours`, `hrv`, `active_calories`, `step_count`) returns zero rows — not an error.
+These always appear in the `samples` table (Apple Watch/iPhone via HealthKit). Using an unrelated made-up name (e.g. `sleep_hours`, `step_count`) returns zero rows — not an error.
 
 `active_energy`, `audio_exposure_event`, `blood_oxygen`, `distance`, `exercise_time`, `flights_climbed`, `heart_rate`, `respiratory_rate`, `resting_energy`, `resting_heart_rate`, `running_ground_contact`, `running_power`, `running_stride_length`, `running_vertical_oscillation`, `sleep_awake`, `sleep_core`, `sleep_deep`, `sleep_rem`, `sleeping_wrist_temp`, `stair_ascent_speed`, `stair_descent_speed`, `stand_time`, `steps`, `time_in_daylight`, `walking_asymmetry`, `walking_double_support`, `walking_heart_rate_avg`, `walking_speed`, `walking_step_length`, `water`
 
+**Not exhaustive.** When the open-wearables integration is connected (Garmin, Oura, Whoop, Polar, ...), more `feature_type` values can exist in the same table — e.g. `heart_rate_variability_rmssd`, `garmin_body_battery`, `garmin_stress_level`, `blood_glucose`, `blood_pressure_systolic`/`blood_pressure_diastolic`, `skin_temperature`, plus extra `workout_<sport>_*` rows beyond running/walking. Those samples carry a `metadata` column (JSON, e.g. `{"src":"ow","provider":"garmin"}`) that native HealthKit rows don't have. If a page needs one of these, confirm it exists first — call `health_stats(feature_type, days=...)` against the candidate name and check `count > 0` — rather than assuming it's absent.
+
 Common derivations:
 - "sleep hours" → sum of `sleep_core + sleep_deep + sleep_rem` (values are seconds).
-- "HRV" is not in this dataset; use `resting_heart_rate` or `walking_heart_rate_avg` instead, or remove the metric.
+- "HRV" (SDNN) → `heart_rate_variability`; the RMSSD variant some non-Apple providers report lands separately as `heart_rate_variability_rmssd` when open-wearables is connected — don't average the two together.
 - "steps" → `steps` (not `step_count`). "active calories" → `active_energy` (not `active_calories`).
 
 ## Components

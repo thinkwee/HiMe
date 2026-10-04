@@ -818,6 +818,365 @@ _native_status() {
 }
 
 # ══════════════════════════════════════════════════════════════════
+# wearables — optional open-wearables (OW) integration [EXPERIMENTAL].
+# Subcommands: setup | start | stop | status | bootstrap | seed | help
+#
+# Entirely opt-in: none of these run automatically and none of the commands
+# above touch external/, docker-compose.openwearables.yml, or the
+# OPENWEARABLES_* vars in .env — a user who never types "wearables" sees zero
+# change in behavior. See docs/OPEN_WEARABLES.md for the full guide.
+# ══════════════════════════════════════════════════════════════════
+OW_DIR="external/open-wearables"
+OW_REPO_URL="https://github.com/the-momentum/open-wearables"
+OW_PINNED_SHA="44a268be623e81995e896b05ed93a56411ddf807"
+OW_COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.openwearables.yml)
+OW_SERVICES=(openwearables-db openwearables-redis openwearables-svix openwearables-app openwearables-celery-worker openwearables-celery-beat)
+OW_APP_URL="http://localhost:8010"
+# OPENWEARABLES_BASE_URL value for each HiMe run mode (see _hime_mode above):
+# docker mode shares a Docker network with openwearables-app, so the
+# in-network DNS name resolves; native mode runs HiMe's backend on the host,
+# which can only reach the container via its published port.
+OW_BASE_URL_DOCKER="http://openwearables-app:8000"
+OW_BASE_URL_NATIVE="${OW_APP_URL}"
+
+cmd_wearables() {
+    local sub="${1:-help}"
+    shift 2>/dev/null || true
+    case "$sub" in
+        setup)              _wearables_setup "$@" ;;
+        start)              _wearables_start "$@" ;;
+        stop)               _wearables_stop "$@" ;;
+        status)             _wearables_status "$@" ;;
+        bootstrap)          _wearables_bootstrap "$@" ;;
+        seed)               _wearables_seed "$@" ;;
+        help|--help|-h|"")  _wearables_help ;;
+        *) fail "Unknown wearables subcommand: $sub. Run './hime.sh wearables help' for usage." ;;
+    esac
+}
+
+_wearables_require_docker() {
+    command -v docker >/dev/null 2>&1 \
+        || fail "Docker is not installed. The open-wearables integration requires Docker."
+    docker info >/dev/null 2>&1 \
+        || fail "Docker daemon is not running. Start Docker Desktop first."
+}
+
+_wearables_gen_secret() {
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex 32
+    else
+        # `od` is in coreutils and present everywhere; `xxd` ships with
+        # vim-common and is commonly absent on minimal Linux images.
+        head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
+        printf '\n'
+    fi
+}
+
+# Set KEY=VALUE in FILE, preserving every other line. Appends if KEY is absent.
+_wearables_set_env_var() {
+    local file="$1" key="$2" value="$3"
+    if [ -f "$file" ] && grep -q "^${key}=" "$file"; then
+        sed -i.bak "s|^${key}=.*|${key}=${value}|" "$file" && rm -f "${file}.bak"
+    else
+        printf '%s=%s\n' "$key" "$value" >> "$file"
+    fi
+}
+
+_wearables_ow_env_get() {
+    local key="$1" file="$OW_DIR/backend/config/.env"
+    [ -f "$file" ] || return 1
+    grep -E "^${key}=" "$file" | tail -1 | cut -d= -f2-
+}
+
+_wearables_help() {
+    cat << 'HELP'
+HiMe — open-wearables (OW) integration (experimental, opt-in)
+
+Usage: ./hime.sh wearables <subcommand>
+
+Subcommands:
+  setup       Clone open-wearables (pinned commit) into ./external/open-wearables
+              and generate its backend .env. Safe to re-run (idempotent).
+  start       Bring up the OW service stack (db, redis, svix, app, celery).
+  stop        Tear down the OW service stack only (HiMe core is untouched).
+  status      Show OW container status.
+  bootstrap   Headless: log in as the OW admin, mint an API key, and write
+              OPENWEARABLES_API_KEY / OPENWEARABLES_ENABLED=true /
+              OPENWEARABLES_BASE_URL into .env (base URL matched to HiMe's
+              docker/native run mode; pass --docker or --native to override
+              detection).
+  seed [id]   Generate synthetic wearable data in OW for end-to-end testing
+              without real devices (default preset: active_athlete).
+  help        Show this help message.
+
+Typical first run:
+  ./hime.sh wearables setup && ./hime.sh wearables start && ./hime.sh wearables bootstrap
+  ./hime.sh restart --rebuild   # pick up OPENWEARABLES_* in .env
+
+See docs/OPEN_WEARABLES.md for the full guide.
+HELP
+}
+
+# ══════════════════════════════════════════════════════════════════
+# wearables setup — clone the pinned OW checkout + generate its backend .env.
+# ══════════════════════════════════════════════════════════════════
+_wearables_setup() {
+    echo -e "${BOLD}Setting up open-wearables${NC}"
+    echo "═══════════════════════════════════════"
+    command -v git >/dev/null 2>&1 || fail "git is required for './hime.sh wearables setup'."
+
+    mkdir -p external
+
+    if [ ! -d "$OW_DIR/.git" ]; then
+        info "Cloning open-wearables..."
+        git clone "$OW_REPO_URL" "$OW_DIR" || fail "Failed to clone $OW_REPO_URL."
+    fi
+
+    info "Checking out pinned commit ${OW_PINNED_SHA}..."
+    if ! git -C "$OW_DIR" checkout --detach "$OW_PINNED_SHA" 2>/dev/null; then
+        # Full clones normally already contain the pinned SHA; only hit the
+        # network again if it's genuinely missing (e.g. a shallow checkout).
+        git -C "$OW_DIR" fetch --depth 1 origin "$OW_PINNED_SHA" 2>/dev/null \
+            || git -C "$OW_DIR" fetch origin \
+            || fail "Failed to fetch open-wearables from $OW_REPO_URL."
+        git -C "$OW_DIR" checkout --detach "$OW_PINNED_SHA" \
+            || fail "Failed to check out pinned commit $OW_PINNED_SHA."
+    fi
+    ok "open-wearables checked out at ${OW_PINNED_SHA:0:12} (detached HEAD)."
+
+    # Generate the OW backend .env (idempotent: leave an existing one alone).
+    local ow_env_dir="$OW_DIR/backend/config"
+    local ow_env="$ow_env_dir/.env"
+    if [ -f "$ow_env" ]; then
+        warn "OW env already exists at $ow_env — leaving it untouched."
+        warn "Delete it and re-run 'wearables setup' to regenerate."
+    else
+        [ -f "$ow_env_dir/.env.example" ] \
+            || fail "$ow_env_dir/.env.example not found — is the checkout intact?"
+        cp "$ow_env_dir/.env.example" "$ow_env"
+
+        # NOTE: avoid ".local"/".test"/".internal"/etc. — pydantic's email
+        # validator rejects RFC 2606 / ICANN special-use TLDs outright, which
+        # crash-loops seed_admin.py on every app start ("not a valid email
+        # address: ... special-use or reserved name").
+        local admin_email="admin@openwearables-hime.com"
+        local admin_password secret_key
+        admin_password="$(_wearables_gen_secret | cut -c1-24)"
+        secret_key="$(_wearables_gen_secret)"
+
+        _wearables_set_env_var "$ow_env" ADMIN_EMAIL "$admin_email"
+        _wearables_set_env_var "$ow_env" ADMIN_PASSWORD "$admin_password"
+        _wearables_set_env_var "$ow_env" SECRET_KEY "$secret_key"
+        # Off by default upstream; HiMe's webhook flow needs it on.
+        _wearables_set_env_var "$ow_env" OUTGOING_WEBHOOKS_ENABLED true
+        # Match the service names used in docker-compose.openwearables.yml
+        # (OW's own .env.example assumes its own compose file's names).
+        _wearables_set_env_var "$ow_env" DB_HOST openwearables-db
+        _wearables_set_env_var "$ow_env" REDIS_HOST openwearables-redis
+        _wearables_set_env_var "$ow_env" SVIX_SERVER_URL "http://openwearables-svix:8071"
+        # Browser-facing OAuth redirects must hit the published host port,
+        # not the container-internal 8000.
+        _wearables_set_env_var "$ow_env" API_BASE_URL "${OW_APP_URL}"
+
+        ok "Generated $ow_env"
+        echo ""
+        echo "   OW admin email:    $admin_email"
+        echo "   OW admin password: $admin_password"
+        echo "   (this is the OW dashboard/API login, separate from HiMe's own auth;"
+        echo "    saved in $ow_env, printed here because it's otherwise unrecoverable)"
+    fi
+
+    # Keep the checkout out of git.
+    if [ -f .gitignore ] && ! grep -qxF 'external/' .gitignore; then
+        printf '\n# open-wearables checkout (managed by ./hime.sh wearables setup)\nexternal/\n' >> .gitignore
+        ok "Added external/ to .gitignore"
+    fi
+
+    echo ""
+    ok "Setup complete. Next: './hime.sh wearables start' then './hime.sh wearables bootstrap'."
+}
+
+# ══════════════════════════════════════════════════════════════════
+# wearables start|stop|status — compose up/down/ps scoped to OW_SERVICES only.
+# HiMe's own backend/frontend/watch services are never touched by these.
+# ══════════════════════════════════════════════════════════════════
+_wearables_start() {
+    _wearables_require_docker
+    [ -f docker-compose.openwearables.yml ] \
+        || fail "docker-compose.openwearables.yml missing. Are you in the HiMe project root?"
+    [ -d "$OW_DIR/backend" ] \
+        || fail "open-wearables checkout not found. Run './hime.sh wearables setup' first."
+    [ -f "$OW_DIR/backend/config/.env" ] \
+        || fail "OW backend .env not found. Run './hime.sh wearables setup' first."
+
+    echo -e "${BOLD}Starting open-wearables${NC} (first run builds from source — can take a few minutes)"
+    echo "═══════════════════════════════════════"
+    docker compose "${OW_COMPOSE_FILES[@]}" up -d "${OW_SERVICES[@]}" \
+        || fail "Failed to start the open-wearables stack. Check the output above."
+    ok "open-wearables stack starting."
+    echo ""
+    echo "   OW API:  ${OW_APP_URL}  (docs: ${OW_APP_URL}/docs)"
+    echo ""
+    ok "Use './hime.sh wearables status' to check health, then './hime.sh wearables bootstrap'."
+}
+
+_wearables_stop() {
+    _wearables_require_docker
+    info "Stopping open-wearables (HiMe's own backend/frontend/watch are untouched)..."
+    docker compose "${OW_COMPOSE_FILES[@]}" down "${OW_SERVICES[@]}" >/dev/null 2>&1 || true
+    ok "open-wearables stack stopped."
+}
+
+_wearables_status() {
+    _wearables_require_docker
+    echo -e "${BOLD}open-wearables status${NC}"
+    echo "═══════════════════════════════════════"
+    docker compose "${OW_COMPOSE_FILES[@]}" ps "${OW_SERVICES[@]}"
+}
+
+# ══════════════════════════════════════════════════════════════════
+# wearables bootstrap — headless login -> API key -> write it into HiMe's .env
+# ══════════════════════════════════════════════════════════════════
+_wearables_bootstrap() {
+    _wearables_require_docker
+    command -v curl >/dev/null 2>&1 || fail "curl is required for './hime.sh wearables bootstrap'."
+    command -v python3 >/dev/null 2>&1 || fail "python3 is required for './hime.sh wearables bootstrap' (JSON parsing)."
+
+    local ow_env="$OW_DIR/backend/config/.env"
+    [ -f "$ow_env" ] || fail "OW backend .env not found. Run './hime.sh wearables setup' first."
+
+    local admin_email admin_password
+    admin_email="$(_wearables_ow_env_get ADMIN_EMAIL)"
+    admin_password="$(_wearables_ow_env_get ADMIN_PASSWORD)"
+    [ -n "$admin_email" ] && [ -n "$admin_password" ] \
+        || fail "ADMIN_EMAIL/ADMIN_PASSWORD not set in $ow_env."
+
+    info "Waiting for openwearables-app to become healthy (${OW_APP_URL})..."
+    local tries=0
+    while ! curl -s -o /dev/null -w '%{http_code}' "${OW_APP_URL}/docs" 2>/dev/null | grep -q '^2'; do
+        sleep 2
+        tries=$((tries + 1))
+        if [ $tries -ge 60 ]; then
+            fail "openwearables-app did not become healthy after 120s. Check: docker compose -f docker-compose.yml -f docker-compose.openwearables.yml logs openwearables-app"
+        fi
+    done
+    ok "openwearables-app is up."
+
+    info "Logging in as OW admin ($admin_email)..."
+    local login_resp jwt
+    login_resp="$(curl -s -X POST "${OW_APP_URL}/api/v1/auth/login" \
+        -H 'Content-Type: application/x-www-form-urlencoded' \
+        --data-urlencode "username=${admin_email}" \
+        --data-urlencode "password=${admin_password}")"
+    jwt="$(printf '%s' "$login_resp" | python3 "$PROJECT_ROOT/docker/openwearables/json_field.py" access_token)"
+    [ -n "$jwt" ] || fail "Login failed. Response: $login_resp"
+    ok "Logged in."
+
+    info "Creating an API key..."
+    local key_resp api_key
+    key_resp="$(curl -s -X POST "${OW_APP_URL}/api/v1/developer/api-keys" \
+        -H "Authorization: Bearer ${jwt}" \
+        -H 'Content-Type: application/json' \
+        -d '{"name":"hime-integration"}')"
+    api_key="$(printf '%s' "$key_resp" | python3 "$PROJECT_ROOT/docker/openwearables/json_field.py" id)"
+    [ -n "$api_key" ] || fail "API key creation failed. Response: $key_resp"
+    ok "API key created (${api_key:0:10}...)."
+
+    if [ ! -f .env ]; then
+        [ -f .env.example ] || fail ".env.example missing; cannot bootstrap HiMe's .env."
+        cp .env.example .env
+        warn ".env not found, created from .env.example."
+    fi
+    _wearables_set_env_var .env OPENWEARABLES_API_KEY "$api_key"
+    _wearables_set_env_var .env OPENWEARABLES_ENABLED true
+
+    # Point HiMe's backend at the right open-wearables address: the
+    # compose-internal hostname only resolves when HiMe's own backend is
+    # ALSO running in Docker (shared network with openwearables-app); a
+    # native backend must use the published host port instead. Reuses the
+    # same docker/native detection as start/stop/restart/logs/status (see
+    # _hime_mode above); --docker/--native on this invocation still wins.
+    local hime_mode ow_base_url
+    hime_mode="$(_hime_mode "$@")"
+    if [ "$hime_mode" = docker ]; then
+        ow_base_url="$OW_BASE_URL_DOCKER"
+    else
+        ow_base_url="$OW_BASE_URL_NATIVE"
+    fi
+    _wearables_set_env_var .env OPENWEARABLES_BASE_URL "$ow_base_url"
+    ok "Wrote OPENWEARABLES_API_KEY, OPENWEARABLES_ENABLED=true, and OPENWEARABLES_BASE_URL=$ow_base_url to .env"
+
+    echo ""
+    echo "   Detected HiMe run mode: $hime_mode"
+    echo "   OPENWEARABLES_BASE_URL has two valid values depending on how HiMe's"
+    echo "   own backend runs (not how open-wearables runs — that's always Docker):"
+    echo "     - $OW_BASE_URL_DOCKER  (docker mode: HiMe backend is a container on"
+    echo "       the same compose network as openwearables-app)"
+    echo "     - $OW_BASE_URL_NATIVE          (native mode: HiMe backend runs on the"
+    echo "       host and can only reach openwearables-app via its published port)"
+    echo "   If you switch HiMe between docker/native later, re-run"
+    echo "   './hime.sh wearables bootstrap' (or edit OPENWEARABLES_BASE_URL in .env"
+    echo "   by hand) so it keeps matching."
+
+    echo ""
+    echo "Next steps:"
+    echo "  1. Restart HiMe so the backend picks up the new .env values:"
+    echo "       ./hime.sh restart --rebuild   (docker mode)"
+    echo "       ./hime.sh restart             (native mode)"
+    echo "  2. Connect a real provider from the HiMe Devices page, or run"
+    echo "     './hime.sh wearables seed' to generate synthetic data for testing"
+    echo "     without real devices."
+}
+
+# ══════════════════════════════════════════════════════════════════
+# wearables seed [preset-id] — dispatch a synthetic-data seed job in OW.
+# ══════════════════════════════════════════════════════════════════
+_wearables_seed() {
+    _wearables_require_docker
+    command -v curl >/dev/null 2>&1 || fail "curl is required for './hime.sh wearables seed'."
+    command -v python3 >/dev/null 2>&1 || fail "python3 is required for './hime.sh wearables seed' (JSON handling)."
+
+    local preset="${1:-active_athlete}"
+    local ow_env="$OW_DIR/backend/config/.env"
+    [ -f "$ow_env" ] || fail "OW backend .env not found. Run './hime.sh wearables setup' first."
+
+    local admin_email admin_password
+    admin_email="$(_wearables_ow_env_get ADMIN_EMAIL)"
+    admin_password="$(_wearables_ow_env_get ADMIN_PASSWORD)"
+    [ -n "$admin_email" ] && [ -n "$admin_password" ] \
+        || fail "ADMIN_EMAIL/ADMIN_PASSWORD not set in $ow_env."
+
+    info "Logging in as OW admin..."
+    local login_resp jwt
+    login_resp="$(curl -s -X POST "${OW_APP_URL}/api/v1/auth/login" \
+        -H 'Content-Type: application/x-www-form-urlencoded' \
+        --data-urlencode "username=${admin_email}" \
+        --data-urlencode "password=${admin_password}")"
+    jwt="$(printf '%s' "$login_resp" | python3 "$PROJECT_ROOT/docker/openwearables/json_field.py" access_token)"
+    [ -n "$jwt" ] || fail "Login failed. Response: $login_resp. Is './hime.sh wearables start' running?"
+
+    info "Fetching seed presets..."
+    local presets_resp payload
+    presets_resp="$(curl -s "${OW_APP_URL}/api/v1/settings/seed/presets" -H "Authorization: Bearer ${jwt}")"
+    payload="$(printf '%s' "$presets_resp" | python3 "$PROJECT_ROOT/docker/openwearables/seed_payload.py" "$preset")" \
+        || fail "Could not resolve seed preset '$preset'. See ${OW_APP_URL}/api/v1/settings/seed/presets for valid ids."
+
+    info "Dispatching seed generation (preset: $preset)..."
+    local seed_resp
+    seed_resp="$(curl -s -X POST "${OW_APP_URL}/api/v1/settings/seed" \
+        -H "Authorization: Bearer ${jwt}" \
+        -H 'Content-Type: application/json' \
+        -d "$payload")"
+    echo "$seed_resp"
+    ok "Seed task dispatched."
+    echo ""
+    echo "This creates a brand-new synthetic OW user with generated data — it does"
+    echo "NOT require a real HiMe-connected user to exist first. The task runs"
+    echo "asynchronously; follow progress with:"
+    echo "  docker compose -f docker-compose.yml -f docker-compose.openwearables.yml logs -f openwearables-celery-worker"
+}
+
+# ══════════════════════════════════════════════════════════════════
 # help
 # ══════════════════════════════════════════════════════════════════
 cmd_help() {
@@ -842,6 +1201,9 @@ Commands:
                       Services: backend | frontend | watch | all
   reset [--yes]       Delete agent memory and ingested data.
   forget [--yes]      Selective erasure: clear chat history but KEEP health data.
+  wearables <sub>     Optional open-wearables integration (experimental, opt-in).
+                      Run './hime.sh wearables help' for its subcommands, or
+                      see docs/OPEN_WEARABLES.md.
   help                Show this help message.
 
 Flags:
@@ -871,6 +1233,7 @@ case "$command" in
     restart) cmd_restart "$@" ;;
     reset)   cmd_reset "$@" ;;
     forget)  cmd_forget "$@" ;;
+    wearables) cmd_wearables "$@" ;;
     logs)    cmd_logs "$@" ;;
     status)  cmd_status "$@" ;;
     help|--help|-h) cmd_help ;;

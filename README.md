@@ -124,6 +124,7 @@ If a new release adds variables, diff `.env.example` against your `.env` and fil
 - [`docs/INSTALL.md`](docs/INSTALL.md) — manual setup, native dev install, public deployment, customization.
 - [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — LAN, public-internet, and Compose production patterns.
 - [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — architecture, adding tools/providers, code style.
+- [`docs/OPEN_WEARABLES.md`](docs/OPEN_WEARABLES.md) — optional, experimental self-hosted integration for Garmin/Oura/Whoop/Polar/Strava/Fitbit and more.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution process.
 - [`SECURITY.md`](SECURITY.md) — security disclosure.
 - [`PRIVACY.md`](PRIVACY.md) — privacy policy.

@@ -36,6 +36,9 @@ from .api.prompt_routes import router as prompt_router
 from .api.skill_routes import router as skill_router
 from .api.stream_routes import router as stream_router
 from .config import settings
+from .data_sources.open_wearables.routes import router as openwearables_router
+from .data_sources.open_wearables.webhook import WEBHOOK_PATH as OPENWEARABLES_WEBHOOK_PATH
+from .data_sources.open_wearables.webhook import router as openwearables_webhook_router
 from .logging_config import setup_logging
 from .services.streaming_service import shutdown_executor
 from .utils import app_timezone, now_utc, parse_db_iso_utc, ts_fmt
@@ -490,6 +493,26 @@ async def lifespan(app: FastAPI):
         if not t.cancelled() and t.exception() else None
     )
 
+    # Start the open-wearables poller — optional/experimental, off by
+    # default. When OPENWEARABLES_ENABLED=False this block is a no-op: no
+    # task is created, no network call is made.
+    _openwearables_task: asyncio.Task | None = None
+    if settings.OPENWEARABLES_ENABLED:
+        try:
+            from .data_sources.open_wearables.poller import openwearables_poll_loop
+            _openwearables_task = asyncio.create_task(openwearables_poll_loop(), name="openwearables_poll")
+            _openwearables_task.add_done_callback(
+                lambda t: logger.error("open-wearables poll loop crashed: %s", t.exception(), exc_info=t.exception())
+                if not t.cancelled() and t.exception() else None
+            )
+            logger.info(
+                "[Startup] open-wearables poller started (interval=%ss)",
+                settings.OPENWEARABLES_POLL_INTERVAL,
+            )
+        except Exception as e:
+            logger.warning("open-wearables poller failed to start: %s", e, exc_info=True)
+            _openwearables_task = None
+
     logger.info("[Startup] All services ready — binding HTTP server on port %s", settings.API_PORT)
     yield
 
@@ -517,6 +540,14 @@ async def lifespan(app: FastAPI):
         await _retention_task
     except asyncio.CancelledError:
         pass
+
+    # Cancel the open-wearables poller (only ever set when it was started above)
+    if _openwearables_task:
+        _openwearables_task.cancel()
+        try:
+            await _openwearables_task
+        except asyncio.CancelledError:
+            pass
 
     # Stop all background ingestions
     await stop_all_ingestions()
@@ -630,6 +661,13 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         # whenever API_AUTH_TOKEN is set. Exempt it — the gateway verifies it.
         if path == getattr(settings, "FEISHU_WEBHOOK_PATH", "/api/feishu/webhook"):
             return await call_next(request)
+        # Same precedent for the open-wearables webhook — it authenticates
+        # inbound provider events with its own Svix signature (see
+        # backend/data_sources/open_wearables/webhook.py), not the API
+        # bearer token. The route itself 404s when the feature is disabled,
+        # so this exemption is safe to leave unconditional.
+        if path == OPENWEARABLES_WEBHOOK_PATH:
+            return await call_next(request)
         # Guard the API surface plus the docs that describe it; everything
         # else (static assets) is left alone.
         if not path.startswith("/api/") and path not in self._DOCS_PATHS:
@@ -666,6 +704,8 @@ app.include_router(stream_router)
 app.include_router(device_router)
 app.include_router(prompt_router)
 app.include_router(skill_router)
+app.include_router(openwearables_router)
+app.include_router(openwearables_webhook_router)
 
 @app.get("/")
 async def root():

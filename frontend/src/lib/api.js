@@ -420,4 +420,29 @@ export const api = {
         }
         return data
       }),
+
+  // ------------------------------------------------------------------ //
+  // Open-wearables integration (Devices page)
+  // ------------------------------------------------------------------ //
+  // Optional/experimental — every endpoint 503s with a clear `detail` when
+  // OPENWEARABLES_ENABLED is off, and `_get`/`_post` already surface that as
+  // `{ success: false, error }`, so callers just render the error state.
+
+  /** Integration health snapshot — enabled/reachable/connections/last poll/webhook. */
+  getOpenWearablesStatus: () => _get('/integrations/openwearables/status'),
+
+  /** Returns { success, providers: [...] } — each annotated with requires_public_https. */
+  getOpenWearablesProviders: () => _get('/integrations/openwearables/providers'),
+
+  /** Returns { authorization_url, ... } to open in a new tab, or { success: false, error }. */
+  connectOpenWearablesProvider: (provider, redirectUri = null) => {
+    const qs = redirectUri ? `?redirect_uri=${encodeURIComponent(redirectUri)}` : ''
+    return _post(`/integrations/openwearables/connect/${encodeURIComponent(provider)}${qs}`, {})
+  },
+
+  /** Trigger a provider-side sync (optional) + one local poll pass. */
+  syncOpenWearables: (provider = null) => {
+    const qs = provider ? `?provider=${encodeURIComponent(provider)}` : ''
+    return _post(`/integrations/openwearables/sync${qs}`, {})
+  },
 }

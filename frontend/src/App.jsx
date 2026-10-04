@@ -1,6 +1,6 @@
 import { BrowserRouter, NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import {
-  Activity, BarChart3, Bot, FileText, Database, HardDrive, MessageSquare, AppWindow, Sparkles
+  Activity, BarChart3, Bot, FileText, Database, HardDrive, MessageSquare, AppWindow, Sparkles, Watch
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
@@ -15,6 +15,7 @@ import PromptEditor from './pages/PromptEditor'
 import KnowledgeBase from './pages/KnowledgeBase'
 import PersonalisedPages from './pages/PersonalisedPages'
 import Skills from './pages/Skills'
+import Devices from './pages/Devices'
 
 // -----------------------------------------------------------------------
 // Navigation config
@@ -26,6 +27,7 @@ const NAV_ITEMS = [
   { to: '/reports', icon: FileText, labelKey: 'nav.reports' },
   { to: '/prompts', icon: MessageSquare, labelKey: 'nav.prompts' },
   { to: '/skills', icon: Sparkles, labelKey: 'nav.skills' },
+  { to: '/devices', icon: Watch, labelKey: 'nav.devices' },
   { to: '/knowledge', icon: Database, labelKey: 'nav.knowledge' },
   { to: '/pages', icon: AppWindow, labelKey: 'nav.personalised_pages' },
 ]
@@ -55,6 +57,9 @@ function PersistentViews() {
       </div>
       <div className={path === '/skills' ? 'block' : 'hidden'}>
         <Skills />
+      </div>
+      <div className={path === '/devices' ? 'block' : 'hidden'}>
+        <Devices />
       </div>
       <div className={path === '/knowledge' ? 'block' : 'hidden'}>
         <KnowledgeBase />

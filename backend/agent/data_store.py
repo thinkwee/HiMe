@@ -254,7 +254,12 @@ class DataStore:
                 value = record.get('value')
                 if value is None:
                     continue
-                rows.append((timestamp, feature_type, value, None))
+                # Optional pre-built metadata (JSON string) — used by sources
+                # that need to record provenance (e.g. open-wearables:
+                # {"src":"ow","provider":"garmin",...}). Absent for the
+                # legacy watch.db live-ingest path, which keeps inserting
+                # NULL exactly as before.
+                rows.append((timestamp, feature_type, value, record.get('metadata')))
             else:
                 metadata_suffixes = ('__device', '__source', '__unit')
                 for key, val in record.items():
@@ -277,11 +282,47 @@ class DataStore:
                 VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%S', 'now'))
                 ON CONFLICT(timestamp, feature_type) DO UPDATE SET
                     value = excluded.value,
-                    metadata = excluded.metadata,
+                    metadata = COALESCE(excluded.metadata, samples.metadata),
                     updated_at = strftime('%Y-%m-%dT%H:%M:%S', 'now')
                 WHERE excluded.value != samples.value
                 """,
                 rows,
+            )
+            conn.commit()
+
+    def delete_daily_total_anchors(self, keys: list[tuple[str, str]]) -> None:
+        """Delete stored ``is_daily_total`` anchor rows for the given
+        ``(feature_type, day)`` pairs (``day`` as ``"YYYY-MM-DD"``).
+
+        Open-wearables mapping (see
+        :mod:`backend.data_sources.open_wearables.mapper`) writes a
+        pre-aggregated daily total at a deterministic day-anchor timestamp
+        (``"<day>T00:00:00"``) with a ``{"daily_total": true}`` metadata
+        marker whenever no granular sample was seen for that (feature, day)
+        yet. Once granular samples for that same (feature, day) DO arrive
+        (possibly in a later poll), the anchor row is stale and would
+        double-count alongside them — this deletes it.
+
+        Narrowly scoped on purpose: matches only rows carrying the
+        daily-total marker, within the anchor day's timestamp range, for
+        the given feature_type — never touches granular samples (which
+        don't carry the marker) or other features/days. Idempotent: a
+        ``(feature_type, day)`` with no matching anchor row is a no-op.
+        """
+        if not keys:
+            return
+        params = [
+            (feature_type, f"{day}T00:00:00", f"{day}T23:59:59")
+            for feature_type, day in keys
+        ]
+        with sqlite3.connect(self.db_file, timeout=30) as conn:
+            conn.executemany(
+                """
+                DELETE FROM samples
+                WHERE feature_type = ? AND timestamp >= ? AND timestamp <= ?
+                  AND metadata LIKE '%"daily_total":true%'
+                """,
+                params,
             )
             conn.commit()
 
