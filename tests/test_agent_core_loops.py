@@ -846,7 +846,7 @@ class TestTriggerEvaluator:
         trig.ev._last_eval_time = __import__("time").monotonic()   # inside the throttle window
         assert await trig.ev.evaluate_after_ingest(None, {"heart_rate"}) == []
         # next batch only mentions SpO2 — but the skipped HR batch must be evaluated too
-        trig.ev._last_eval_time = 0.0
+        trig.ev._last_eval_time = float("-inf")
         fired = await trig.ev.evaluate_after_ingest(None, {"blood_oxygen"})
         assert {r["name"] for r in fired} == {"hi-hr", "lo-spo2"}
 

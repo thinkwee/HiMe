@@ -73,7 +73,9 @@ class TriggerEvaluator:
         self.memory_db_file = memory_db_path / f"{user_id}.db"
         self.health_db_file = health_db_path
         self.user_id = user_id
-        self._last_eval_time: float = 0.0
+        # -inf = never evaluated. monotonic() counts from boot, so 0.0 would still be
+        # "inside the throttle window" on a freshly booted host.
+        self._last_eval_time: float = float("-inf")
         # Minimum seconds between full evaluations (prevents spam on rapid ingestion)
         self._min_eval_interval: float = 10.0
         # Features from batches skipped by the throttle, evaluated next time.
