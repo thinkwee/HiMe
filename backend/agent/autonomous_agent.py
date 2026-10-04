@@ -31,6 +31,7 @@ from .agent_loops import AgentLoopsMixin, spawn_background
 from .agent_prompts import AgentPromptsMixin
 from .agent_tools import AgentToolsMixin
 from .cancellation import CancellationToken
+from .chat_stream import json_safe
 from .llm_providers import BaseLLMProvider
 from .persistence import AgentStateRepository
 from .skills.registry import SkillRegistry
@@ -373,7 +374,8 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
                 event["thread_id"] = thread_id_from_chat_id(cid, uid)
             elif self._chat_thread_id:
                 event["thread_id"] = self._chat_thread_id
-        await self._event_queue.put(event)
+        # One choke point for every consumer (WS fan-out, activity_log, gateways).
+        await self._event_queue.put(json_safe(event))
 
     def stop_chat(self, thread_id: str | None = None) -> bool:
         """Cancel the in-flight chat run (not the agent, not queued analysis).
@@ -618,12 +620,12 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
 
         def on_progress(tool_name: str, data) -> None:
             try:
-                self._event_queue.put_nowait({
+                self._event_queue.put_nowait(json_safe({
                     "type": "tool_progress",
                     "tool": tool_name,
                     "data": data,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
-                })
+                }))
             except asyncio.QueueFull:
                 pass  # Drop progress events if queue is full
 

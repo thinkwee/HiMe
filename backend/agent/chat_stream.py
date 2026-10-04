@@ -24,12 +24,29 @@ can nest those steps under the orchestrator's analyze/manage step.
 from __future__ import annotations
 
 import json
+import math
 import time
 from collections.abc import Callable
 from typing import Any
 
 PREVIEW_CHARS = 300
 SUMMARY_CHARS = 200
+
+
+def json_safe(value: Any) -> Any:
+    """Copy of ``value`` with non-finite floats (NaN / ±Infinity) as ``None``.
+
+    Tool results carry pandas / sql cells, and NaN is valid for Python's json
+    module but not for strict JSON: Starlette's JSONResponse raises on it and
+    browsers' ``JSON.parse`` rejects the whole WebSocket frame.
+    """
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(v) for v in value]
+    return value
 
 _SIMPLE_ESCAPES = {
     '"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f",

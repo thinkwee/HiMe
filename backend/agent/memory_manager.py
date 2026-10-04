@@ -314,7 +314,11 @@ class MemoryManager:
         events = []
         for row in rows:  # already in chronological order
             try:
-                data = json.loads(row["event_data"]) if row["event_data"] else {}
+                # Rows written before events were sanitised may hold NaN: read as null.
+                data = (
+                    json.loads(row["event_data"], parse_constant=lambda _c: None)
+                    if row["event_data"] else {}
+                )
             except json.JSONDecodeError:
                 data = {"raw": row["event_data"]}
             events.append(
