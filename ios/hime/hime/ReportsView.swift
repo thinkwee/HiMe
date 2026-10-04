@@ -25,7 +25,7 @@ struct ReportsView: View {
             viewModel.stopRefreshing()
         }
         .refreshable {
-            viewModel.fetchAll()
+            await viewModel.refreshAll()
         }
     }
 }
@@ -82,6 +82,19 @@ struct ReportsListSection: View {
                 }
             }
         }
+        // A deep-link to a report that isn't in the loaded list (deleted, or a
+        // stale id) would otherwise sit in the router forever and could
+        // re-expand a different row later. Once a fetch has finished without
+        // the target, drop it.
+        .onChange(of: viewModel.isLoadingReports) { _, loading in
+            if !loading { clearStaleReportTarget() }
+        }
+    }
+
+    private func clearStaleReportTarget() {
+        guard let id = expandTargetId,
+              !viewModel.reports.contains(where: { $0.id == id }) else { return }
+        AppRouter.shared.pendingReportId = nil
     }
 }
 

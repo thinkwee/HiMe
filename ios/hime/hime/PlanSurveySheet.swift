@@ -19,6 +19,7 @@ struct PlanSurveySheet: View {
     @StateObject private var survey = SurveyModel()
     @State private var submitting = false
     @State private var submitted = false
+    @State private var errorMessage: String? = nil
 
     var body: some View {
         NavigationStack {
@@ -44,6 +45,12 @@ struct PlanSurveySheet: View {
 
     private var bottomBar: some View {
         VStack(spacing: 8) {
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.footnote)
+                    .foregroundColor(.red)
+                    .multilineTextAlignment(.center)
+            }
             Button {
                 if survey.isLast {
                     Task { await submit() }
@@ -55,7 +62,7 @@ struct PlanSurveySheet: View {
                     if submitting {
                         ProgressView().tint(.white)
                     } else {
-                        Text(survey.isLast ? "Redesign My Plan" : "Next")
+                        Text(survey.isLast ? (errorMessage == nil ? "Redesign My Plan" : "Retry") : "Next")
                             .font(.headline)
                     }
                 }
@@ -94,20 +101,31 @@ struct PlanSurveySheet: View {
     private func submit() async {
         guard survey.hasAnyAnswer else { dismiss(); return }
         submitting = true
+        errorMessage = nil
         let p = survey.payload()
-        await postSurvey(goals: p.goals, answers: p.answers)
+        let ok = await postSurvey(goals: p.goals, answers: p.answers)
         submitting = false
-        withAnimation { submitted = true }
+        if ok {
+            withAnimation { submitted = true }
+        } else {
+            // Stay on the survey (answers intact) so the user can retry —
+            // showing "HiMe is redesigning your plan" for a request the server
+            // never accepted left them waiting for a plan that was never coming.
+            errorMessage = String(localized: "Couldn't reach your server. Check the address and token in Settings, then try again.")
+        }
     }
 
     /// POST the survey with `trigger_now` so the backend redesigns immediately.
-    private func postSurvey(goals: [String], answers: [String: Any]) async {
+    /// Returns true only on a 2xx response.
+    private func postSurvey(goals: [String], answers: [String: Any]) async -> Bool {
         let cfg = ServerConfig.load()
-        guard let url = URL(string: "\(cfg.apiBaseURL)/api/agent/onboarding-survey") else { return }
+        guard let url = URL(string: "\(cfg.apiBaseURL)/api/agent/onboarding-survey") else { return false }
         var req = APIClient.request(url, method: "POST")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let body: [String: Any] = ["goals": goals, "answers": answers, "trigger_now": true]
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        _ = try? await URLSession.shared.data(for: req)
+        guard let (_, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse else { return false }
+        return (200...299).contains(http.statusCode)
     }
 }

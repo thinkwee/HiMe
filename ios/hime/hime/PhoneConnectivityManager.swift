@@ -78,13 +78,16 @@ class PhoneConnectivityManager: NSObject, ObservableObject {
         }
     }
 
-    /// Push server config to Watch so it can upload directly
+    /// Push server config (ingest URL + bearer token) to Watch so it can upload
+    /// directly. The token travels over the paired-device WatchConnectivity
+    /// link and is stored in the watch Keychain; without it a server running
+    /// with API_AUTH_TOKEN rejects every direct upload with 401.
     @MainActor
     func syncServerConfigToWatch() {
         guard WCSession.default.activationState == .activated else { return }
         let config = WebSocketClient.shared.serverConfig
         let ingestURL = config.watchHTTPBaseURL + "/ingest"
-        mergeApplicationContext(["ingest_url": ingestURL])
+        mergeApplicationContext(["ingest_url": ingestURL, "auth_token": ServerConfig.authToken])
     }
 
     /// Process health data received from Watch

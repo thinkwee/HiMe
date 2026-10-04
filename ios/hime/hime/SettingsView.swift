@@ -80,21 +80,14 @@ struct SettingsView: View {
                         .foregroundColor(.secondary)
                         .onSubmit {
                             saveTask?.cancel()
-                            let cleaned = ServerConfig.extractBase(from: serverAddress)
-                            serverAddress = cleaned
-                            let cfg = ServerConfig(baseAddress: cleaned)
-                            cfg.save()
-                            ws.serverConfig = cfg
+                            serverAddress = applyServerAddress()
                         }
                         .onChange(of: serverAddress) {
                             saveTask?.cancel()
                             saveTask = Task { @MainActor in
                                 try? await Task.sleep(for: .milliseconds(500))
                                 guard !Task.isCancelled else { return }
-                                let cleaned = ServerConfig.extractBase(from: serverAddress)
-                                let cfg = ServerConfig(baseAddress: cleaned)
-                                cfg.save()
-                                ws.serverConfig = cfg
+                                applyServerAddress()
                             }
                         }
                 }
@@ -109,21 +102,18 @@ struct SettingsView: View {
                         .foregroundColor(.secondary)
                         .onSubmit {
                             tokenSaveTask?.cancel()
-                            ServerConfig.authToken = authToken
-                            // A survey captured during onboarding (before the
-                            // token existed) is stashed locally — flush it now.
-                            Task { await ServerConfig.flushPendingSurvey() }
+                            Task { await applyAuthToken(authToken) }
                         }
                         .onChange(of: authToken) { _, newValue in
                             // Debounced: this fires on every keystroke, and
-                            // firing a survey flush per character is what made
-                            // the single-flight guard race in the first place.
+                            // saving / reconnecting / flushing the survey per
+                            // character is what made the single-flight guard
+                            // race in the first place.
                             tokenSaveTask?.cancel()
                             tokenSaveTask = Task {
-                                try? await Task.sleep(nanoseconds: 800_000_000)
+                                try? await Task.sleep(nanoseconds: 500_000_000)
                                 guard !Task.isCancelled else { return }
-                                ServerConfig.authToken = newValue
-                                await ServerConfig.flushPendingSurvey()
+                                await applyAuthToken(newValue)
                             }
                         }
                 }
@@ -207,7 +197,13 @@ struct SettingsView: View {
                     ) {
                         Button("Revoke", role: .destructive) {
                             hasConsentedToAI = false
-                            ws.disconnect()
+                            // Stop everything that moves health data off the
+                            // phone: HealthKit observers + queued samples, the
+                            // WebSocket (not a persisted user "Disconnect", so
+                            // re-granting consent reconnects), and push.
+                            hk.stopCollection()
+                            ws.disconnect(userInitiated: false)
+                            DeviceTokenUploader.shared.unregister()
                             hasOnboarded = false
                         }
                     } message: {
@@ -301,10 +297,12 @@ struct SettingsView: View {
                             }
                         }
                         .frame(height: 260)
-                        .onChange(of: lm.logs.count) {
-                            if let last = lm.logs.last {
+                        // LogManager keeps logs newest-first, so the latest
+                        // line is at the TOP of the list.
+                        .onChange(of: lm.logs.first?.id) {
+                            if let first = lm.logs.first {
                                 withAnimation {
-                                    proxy.scrollTo(last.id, anchor: .bottom)
+                                    proxy.scrollTo(first.id, anchor: .top)
                                 }
                             }
                         }
@@ -314,7 +312,8 @@ struct SettingsView: View {
 
                 if !lm.logs.isEmpty {
                     Button {
-                        UIPasteboard.general.string = lm.logs.map(\.text).joined(separator: "\n")
+                        // Logs are stored newest-first; copy oldest-first.
+                        UIPasteboard.general.string = lm.logs.reversed().map(\.text).joined(separator: "\n")
                         showCopiedToast = true
                         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                             showCopiedToast = false
@@ -384,26 +383,58 @@ struct SettingsView: View {
         connectionTestSuccess = false
         defer { isTestingConnection = false }
 
-        let cleaned = ServerConfig.extractBase(from: serverAddress)
-        let cfg = ServerConfig(baseAddress: cleaned)
-        guard let url = URL(string: "\(cfg.apiBaseURL)/health") else {
+        // Commit what is typed (the fields save on a debounce) so the probe
+        // runs with the token and address the user is actually looking at.
+        tokenSaveTask?.cancel()
+        saveTask?.cancel()
+        let cfg = ServerConfig(baseAddress: applyServerAddress())
+        await applyAuthToken(authToken)
+
+        switch await APIClient.probe(cfg) {
+        case .ok:
+            let fmt = String(localized: "OK — connected to %@")
+            connectionTestResult = String(format: fmt, cfg.baseAddress)
+            connectionTestSuccess = true
+        case .unauthorized:
+            connectionTestResult = String(localized: "Server rejected the auth token (401)")
+        case .invalidAddress:
             connectionTestResult = String(localized: "Invalid address")
-            return
-        }
-        var req = URLRequest(url: url)
-        req.timeoutInterval = 6
-        do {
-            let (_, response) = try await URLSession.shared.data(for: req)
-            if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
-                let fmt = String(localized: "OK — connected to %@")
-                connectionTestResult = String(format: fmt, cfg.baseAddress)
-                connectionTestSuccess = true
-            } else {
-                connectionTestResult = String(localized: "Server returned an error")
-            }
-        } catch {
+        case .serverError:
+            connectionTestResult = String(localized: "Server returned an error")
+        case .unreachable:
             connectionTestResult = String(localized: "Could not reach server")
         }
+    }
+
+    // MARK: - Apply settings
+
+    /// Persist the typed server address and, if it actually changed, reconnect
+    /// the WebSocket and refresh the watch / APNs registration. An empty
+    /// address falls back to the default instead of producing "wss://watch.".
+    /// Returns the normalised address.
+    @discardableResult
+    private func applyServerAddress() -> String {
+        let cleaned = ServerConfig.normalized(ServerConfig.extractBase(from: serverAddress))
+        guard cleaned != ws.serverConfig.baseAddress else { return cleaned }
+        let cfg = ServerConfig(baseAddress: cleaned)
+        cfg.save()
+        ws.serverConfig = cfg
+        ws.serverSettingsDidChange()
+        return cleaned
+    }
+
+    /// Persist the auth token; on a real change reconnect (the WS handshake
+    /// carries the token), push it to the watch, retry the APNs token upload,
+    /// and flush any survey that was waiting for it.
+    private func applyAuthToken(_ raw: String) async {
+        let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if token != ServerConfig.authToken {
+            ServerConfig.authToken = token
+            ws.serverSettingsDidChange()
+        }
+        // A survey captured during onboarding (before the token existed) is
+        // stashed locally — flush it now.
+        await ServerConfig.flushPendingSurvey()
     }
 }
 

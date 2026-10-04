@@ -455,7 +455,7 @@ struct OnboardingView: View {
 
     private func testServerConnection() async {
         serverTestState = .testing
-        let cleaned = ServerConfig.extractBase(from: serverAddress)
+        let cleaned = ServerConfig.normalized(ServerConfig.extractBase(from: serverAddress))
         serverAddress = cleaned
         let cfg = ServerConfig(baseAddress: cleaned)
         cfg.save()
@@ -466,28 +466,26 @@ struct OnboardingView: View {
         // upload silently targets a dead address — see SettingsView for the
         // same pattern.
         WebSocketClient.shared.serverConfig = cfg
-        guard let url = URL(string: "\(cfg.apiBaseURL)/health") else {
+        switch await APIClient.probe(cfg) {
+        case .ok:
+            let fmt = String(localized: "Connected to %@")
+            serverTestState = .success(String(format: fmt, cfg.baseAddress))
+            // Open the WebSocket now — the user still has several pages
+            // to tap through (consent, HK auth, cat picker) before the
+            // first observer burst. By the time HealthKit starts firing
+            // samples, WS is already established and the initial 1000s
+            // of records drain over WS instead of racing a
+            // half-initialised HTTP fallback. Not user-initiated: a stored
+            // "user disconnected" choice is respected. Also refreshes the
+            // watch's copy of the server config.
+            WebSocketClient.shared.serverSettingsDidChange()
+        case .unauthorized:
+            serverTestState = .failure(String(localized: "Server rejected the auth token (401). Check it in Settings."))
+        case .invalidAddress:
             serverTestState = .failure(String(localized: "Invalid server address"))
-            return
-        }
-        var req = URLRequest(url: url)
-        req.timeoutInterval = 6
-        do {
-            let (_, response) = try await URLSession.shared.data(for: req)
-            if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
-                let fmt = String(localized: "Connected to %@")
-                serverTestState = .success(String(format: fmt, cfg.baseAddress))
-                // Open the WebSocket now — the user still has several pages
-                // to tap through (consent, HK auth, cat picker) before the
-                // first observer burst. By the time HealthKit starts firing
-                // samples, WS is already established and the initial 1000s
-                // of records drain over WS instead of racing a
-                // half-initialised HTTP fallback.
-                WebSocketClient.shared.connect()
-            } else {
-                serverTestState = .failure(String(localized: "Server responded with an error"))
-            }
-        } catch {
+        case .serverError:
+            serverTestState = .failure(String(localized: "Server responded with an error"))
+        case .unreachable:
             serverTestState = .failure(String(localized: "Could not reach server"))
         }
     }

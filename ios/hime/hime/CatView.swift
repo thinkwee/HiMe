@@ -5,6 +5,7 @@ import UIKit
 
 struct CatMainView: View {
     @StateObject private var vm = CatViewModel()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         let _ = vm.animFrame
@@ -154,15 +155,12 @@ struct CatMainView: View {
         }
         .ignoresSafeArea()
         .background(Color(red: 0.82, green: 0.78, blue: 0.72).ignoresSafeArea())
-        .alert("Chat Not Configured", isPresented: $vm.showNoChatAlert) {
-            Button("Setup Guide") {
-                if let url = URL(string: "https://github.com/thinkwee/HiMe") {
-                    UIApplication.shared.open(url)
-                }
-            }
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("No messaging gateway is enabled on your server. Configure Telegram or Feishu by following the setup guide on GitHub.")
+        // Pause the 60 Hz animation timer when this screen is off-screen or
+        // the app is not active.
+        .onAppear { vm.setAnimationActive(scenePhase == .active) }
+        .onDisappear { vm.setAnimationActive(false) }
+        .onChange(of: scenePhase) { _, phase in
+            vm.setAnimationActive(phase == .active)
         }
     }
 }

@@ -33,6 +33,9 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
 
         UNUserNotificationCenter.current().delegate = self
         registerForPushIfConsented(application)
+        // A token captured on an earlier run may never have reached the server
+        // (offline, wrong address, bad token) — retry until it gets a 2xx.
+        DeviceTokenUploader.shared.uploadIfNeeded()
         return true
     }
 
@@ -56,7 +59,7 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
     ) {
         let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
-        Task { await uploadDeviceToken(hex) }
+        DeviceTokenUploader.shared.setToken(hex)
     }
 
     func application(
@@ -64,24 +67,6 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         didFailToRegisterForRemoteNotificationsWithError error: Error
     ) {
         print("APNs registration failed: \(error.localizedDescription)")
-    }
-
-    private func uploadDeviceToken(_ token: String) async {
-        guard let url = URL(string: "\(ServerConfig.load().apiBaseURL)/api/devices/register") else { return }
-        var req = APIClient.request(url, method: "POST")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        #if DEBUG
-        let env = "sandbox"
-        #else
-        let env = "production"
-        #endif
-        let body: [String: Any] = [
-            "device_token": token,
-            "bundle_id": Bundle.main.bundleIdentifier ?? "",
-            "environment": env,
-        ]
-        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        _ = try? await URLSession.shared.data(for: req)
     }
 
     // MARK: - UNUserNotificationCenterDelegate
@@ -133,7 +118,9 @@ struct himeApp: App {
             // triggers a flush; if WS isn't up yet, those flushes have
             // nowhere to go (foreground is WS-only by policy). Opening WS
             // here ensures it's ready by the time setup() finishes.
-            WebSocketClient.shared.connect()
+            // Not user-initiated: a Disconnect the user chose in Settings is
+            // persisted and must survive relaunches.
+            WebSocketClient.shared.connect(userInitiated: false)
             Task {
                 await HealthKitManager.shared.setup()
             }
@@ -199,7 +186,92 @@ struct himeApp: App {
                     HealthKitManager.bgLog("📱 LIFECYCLE: → FOREGROUND (pending=\(pending))")
                     WebSocketClient.shared.reconnectIfNeeded()
                     WebSocketClient.shared.flushPending(appState: "foreground")
+                    DeviceTokenUploader.shared.uploadIfNeeded()
                 }
         }
+    }
+}
+
+// MARK: - APNs device token upload
+
+/// Persists the APNs device token and uploads it to the server until the
+/// server answers 2xx. The registration used to be a single fire-and-forget
+/// POST, so a transient failure (server down, token not yet entered, wrong
+/// address) meant proactive push never worked until iOS happened to hand out
+/// the token again. Retried on launch, on becoming active, and after the
+/// server address / auth token are saved in Settings.
+@MainActor
+final class DeviceTokenUploader {
+    static let shared = DeviceTokenUploader()
+
+    private let tokenKey = "hime.apnsDeviceToken"
+    /// "<token>|<apiBaseURL>" of the last upload the server accepted, so a new
+    /// token OR a different server triggers a fresh registration.
+    private let uploadedKey = "hime.apnsUploadedTo"
+    private var isUploading = false
+
+    private init() {}
+
+    private var consented: Bool {
+        UserDefaults.standard.bool(forKey: "hime.hasConsentedToAIDataSharing")
+    }
+
+    func setToken(_ token: String) {
+        UserDefaults.standard.set(token, forKey: tokenKey)
+        uploadIfNeeded()
+    }
+
+    func uploadIfNeeded() {
+        Task { await upload() }
+    }
+
+    private func upload() async {
+        guard !isUploading, consented,
+              let token = UserDefaults.standard.string(forKey: tokenKey), !token.isEmpty else { return }
+        let base = ServerConfig.load().apiBaseURL
+        let marker = "\(token)|\(base)"
+        guard UserDefaults.standard.string(forKey: uploadedKey) != marker else { return }
+        guard let url = URL(string: "\(base)/api/devices/register") else { return }
+        isUploading = true
+        defer { isUploading = false }
+
+        var req = APIClient.request(url, method: "POST")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 15
+        #if DEBUG
+        let env = "sandbox"
+        #else
+        let env = "production"
+        #endif
+        let body: [String: Any] = [
+            "device_token": token,
+            "bundle_id": Bundle.main.bundleIdentifier ?? "",
+            "environment": env,
+        ]
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        guard let (_, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            HealthKitManager.bgLog("APNs: device token upload failed — will retry")
+            return
+        }
+        UserDefaults.standard.set(marker, forKey: uploadedKey)
+        HealthKitManager.bgLog("APNs: device token registered")
+    }
+
+    /// Consent revoked: stop receiving pushes — tell the server to forget the
+    /// token (best effort), unregister from APNs and forget it locally.
+    func unregister() {
+        let token = UserDefaults.standard.string(forKey: tokenKey) ?? ""
+        UserDefaults.standard.removeObject(forKey: tokenKey)
+        UserDefaults.standard.removeObject(forKey: uploadedKey)
+        UIApplication.shared.unregisterForRemoteNotifications()
+        guard !token.isEmpty,
+              let url = URL(string: "\(ServerConfig.load().apiBaseURL)/api/devices/unregister") else { return }
+        var req = APIClient.request(url, method: "POST")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 15
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["device_token": token])
+        let request = req
+        Task { _ = try? await URLSession.shared.data(for: request) }
     }
 }

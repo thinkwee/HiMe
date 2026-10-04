@@ -197,6 +197,22 @@ def local_ip() -> str:
         return "127.0.0.1"
 
 
+def _with_id(reply: dict, batch_id) -> dict:
+    """Echo the client's batch id (when it sent one) so it can match replies."""
+    if batch_id is not None:
+        reply["id"] = batch_id
+    return reply
+
+
+async def _ws_reply(ws: web.WebSocketResponse, reply: dict) -> None:
+    """Send a protocol reply; a dead socket must not abort message handling."""
+    try:
+        await ws.send_json(reply)
+    except Exception as e:
+        log.debug(f"WS reply failed: {e}")
+
+
+
 # ---------------------------------------------------------------------------
 # WebSocket handler
 # ---------------------------------------------------------------------------
@@ -210,24 +226,55 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
     await ws.prepare(request)
 
     _log_connection(f"iPhone connected (WS)  {request.remote}")
+    # Capability negotiation: tell the client this server acknowledges every
+    # data frame ("ack"/"nack"), so it can keep a batch queued until it is
+    # confirmed. Old clients ignore unknown server frames; old servers never
+    # send this, which tells new clients to fall back to fire-and-forget.
+    try:
+        await ws.send_json({"type": "hello", "ack": 1})
+    except Exception as e:
+        log.warning(f"WS hello send failed: {e}")
     try:
         async for msg in ws:
             # NOTE: the sync-enabled gate lives inside the data branches only.
             # Checking it here would also swallow protocol frames (PING/CLOSE),
             # leaving the socket looking alive while nothing is handled.
             if msg.type in (aiohttp.WSMsgType.TEXT, aiohttp.WSMsgType.BINARY):
-                if not _sync_enabled:
-                    continue
+                batch_id = None
                 try:
                     recv_time = _ts_fmt(time.time())
                     # json.loads works for both str and bytes
-                    data = json.loads(msg.data)
-                    items = data if isinstance(data, list) else [data]
+                    try:
+                        data = json.loads(msg.data)
+                    except (ValueError, TypeError) as e:
+                        # Unparseable frame: retrying can never succeed, so ack
+                        # (n=0) rather than nack — a nack would make the client
+                        # keep re-sending the same poison batch forever.
+                        log.warning(f"WS bad JSON frame dropped: {e}")
+                        await _ws_reply(ws, {"type": "ack", "n": 0, "error": "bad_payload"})
+                        continue
+                    # Ack-capable clients wrap the batch as {"id": ..., "items": [...]};
+                    # legacy clients send a bare list / object.
+                    if isinstance(data, dict) and isinstance(data.get("items"), list):
+                        batch_id = data.get("id")
+                        items = data["items"]
+                    else:
+                        items = data if isinstance(data, list) else [data]
+
+                    if not _sync_enabled:
+                        # Never drop silently: the client keeps the batch queued
+                        # and pauses until sync is re-enabled.
+                        await _ws_reply(ws, _with_id({"type": "nack", "reason": "sync_disabled"}, batch_id))
+                        continue
+
                     lock: asyncio.Lock = request.app["db_lock"]
                     async with lock:
                         n = await asyncio.to_thread(insert_batch, con, items)
-                    
+                    await _ws_reply(ws, _with_id({"type": "ack", "n": len(items), "inserted": n}, batch_id))
+
                     for item in items:
+                        if not isinstance(item, dict):
+                            continue
                         if "f" in item and "v" in item:
                             f, v = item["f"], item["v"]
                         else:
@@ -235,10 +282,10 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                             if not keys:
                                 continue
                             f, v = keys[0], item[keys[0]]
-                        
+
                         if not isinstance(v, (int, float)):
                             continue
-                            
+
                         ts = item.get("ts")
                         if isinstance(ts, (int, float)):
                             ts_sec = ts / 1000.0 if ts > MS_THRESHOLD else ts
@@ -249,6 +296,9 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                             _log_foreground(f"{f:20} = {v:>8.2f}  │  recv {recv_time}  from {request.remote}")
                 except Exception as e:
                     log.warning(f"WS message error: {e}")
+                    # Commit/processing failed: tell ack-capable clients to keep
+                    # the batch and retry (best effort — the socket may be gone).
+                    await _ws_reply(ws, _with_id({"type": "nack", "reason": "server_error"}, batch_id))
             elif msg.type == aiohttp.WSMsgType.PING:
                 await ws.pong()
                 _log_connection(f"WS ping from {request.remote}")

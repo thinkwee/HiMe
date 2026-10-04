@@ -299,7 +299,10 @@ class WatchHealthManager: ObservableObject {
         let threeDaysAgo = Calendar.current.date(byAdding: .day, value: -3, to: Date())!
         let predicate = HKQuery.predicateForSamples(withStart: threeDaysAgo, end: nil, options: .strictStartDate)
 
-        let payloads: [[String: Any]] = await withCheckedContinuation { continuation in
+        // The new anchor is returned with the payloads and only persisted once
+        // the batch is safely queued for the iPhone — saving it inside the query
+        // handler lost the samples for good if the hand-off then failed.
+        let (payloads, newAnchor): ([[String: Any]], HKQueryAnchor?) = await withCheckedContinuation { continuation in
             let query = HKAnchoredObjectQuery(
                 type: sampleType, predicate: predicate, anchor: anchor,
                 limit: HKObjectQueryNoLimit
@@ -324,15 +327,13 @@ class WatchHealthManager: ObservableObject {
                     }
                 }
 
-                if let newAnchor {
-                    Self.saveAnchor(newAnchor, key: anchorKey)
-                }
-                continuation.resume(returning: results)
+                continuation.resume(returning: (results, newAnchor))
             }
             healthStore.execute(query)
         }
 
         guard !payloads.isEmpty else {
+            if let newAnchor { Self.saveAnchor(newAnchor, key: anchorKey) }
             watchHealthLog("⌚ FETCH: \(feature) — 0 new samples (anchor up-to-date)")
             WatchConnectivityManager.shared.flushLogs()
             return
@@ -344,9 +345,17 @@ class WatchHealthManager: ObservableObject {
         // 1. WatchConnectivity → iPhone → Server (backup, handles cat state sync etc.)
         // 2. Direct HTTP POST → Server (primary, works even when iPhone app is suspended)
         let wc = WatchConnectivityManager.shared
-        async let wcResult: () = wc.sendHealthData(payloads)
+        async let wcResult: Bool = wc.sendHealthData(payloads)
         async let httpResult: () = wc.sendHealthDataHTTP(payloads)
-        _ = await (wcResult, httpResult)
+        let (queued, _) = await (wcResult, httpResult)
+
+        // Advance the anchor only when the WC hand-off is queued/persisted; the
+        // direct HTTP path is best-effort and has no retry of its own.
+        if queued, let newAnchor {
+            Self.saveAnchor(newAnchor, key: anchorKey)
+        } else if !queued {
+            watchHealthLog("⌚ FETCH: \(feature) — not queued, anchor NOT advanced (will re-fetch)")
+        }
 
         watchHealthLog("⌚ SEND: \(feature) — both WC and HTTP paths completed")
         WatchConnectivityManager.shared.flushLogs()
@@ -410,7 +419,7 @@ class WatchHealthManager: ObservableObject {
         let threeDaysAgo = Calendar.current.date(byAdding: .day, value: -3, to: Date())!
         let predicate = HKQuery.predicateForSamples(withStart: threeDaysAgo, end: nil, options: .strictStartDate)
 
-        let payloads: [[String: Any]] = await withCheckedContinuation { continuation in
+        let (payloads, newAnchor): ([[String: Any]], HKQueryAnchor?) = await withCheckedContinuation { continuation in
             let query = HKAnchoredObjectQuery(
                 type: HKWorkoutType.workoutType(), predicate: predicate, anchor: anchor,
                 limit: HKObjectQueryNoLimit
@@ -431,15 +440,13 @@ class WatchHealthManager: ObservableObject {
                     }
                 }
 
-                if let newAnchor {
-                    Self.saveAnchor(newAnchor, key: anchorKey)
-                }
-                continuation.resume(returning: results)
+                continuation.resume(returning: (results, newAnchor))
             }
             healthStore.execute(query)
         }
 
         guard !payloads.isEmpty else {
+            if let newAnchor { Self.saveAnchor(newAnchor, key: anchorKey) }
             watchHealthLog("⌚ FETCH: workouts — 0 new samples")
             WatchConnectivityManager.shared.flushLogs()
             return
@@ -448,9 +455,15 @@ class WatchHealthManager: ObservableObject {
         watchHealthLog("⌚ FETCH: workouts — \(payloads.count) new samples, sending via WC + HTTP")
 
         let wc = WatchConnectivityManager.shared
-        async let wcResult: () = wc.sendHealthData(payloads)
+        async let wcResult: Bool = wc.sendHealthData(payloads)
         async let httpResult: () = wc.sendHealthDataHTTP(payloads)
-        _ = await (wcResult, httpResult)
+        let (queued, _) = await (wcResult, httpResult)
+
+        if queued, let newAnchor {
+            Self.saveAnchor(newAnchor, key: anchorKey)
+        } else if !queued {
+            watchHealthLog("⌚ FETCH: workouts — not queued, anchor NOT advanced (will re-fetch)")
+        }
 
         watchHealthLog("⌚ SEND: workouts — both WC and HTTP paths completed")
         WatchConnectivityManager.shared.flushLogs()
