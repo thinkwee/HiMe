@@ -70,7 +70,7 @@ class IOSGateway(BaseGateway):
         self.allowed_chat_ids = {user_id}
         self.sender = None  # no external sender handle
         self._apns = apns_sender
-        self._last_apns_ts = 0.0
+        self._last_apns_ts: float | None = None  # monotonic; None = never sent
         # Set by send_photo to the durable image id of the most recent photo so
         # the chat loop can persist it on the assistant's chat_history turn
         # (enables history replay, not just live delivery). reply_user reads it
@@ -127,18 +127,24 @@ class IOSGateway(BaseGateway):
                 self.user_id,
             )
             return
-        # Coalesce rapid alerts (multi-reply turn) into one banner.
+        # Coalesce rapid alerts (multi-reply turn) into one banner. ``None``
+        # (not 0.0) means "never sent": time.monotonic() can be smaller than
+        # the window shortly after boot, which would wrongly suppress the
+        # first push.
         now = time.monotonic()
-        if now - self._last_apns_ts < _APNS_COALESCE_S:
+        last = self._last_apns_ts
+        if last is not None and now - last < _APNS_COALESCE_S:
             return
+        # Claim the window before awaiting so two concurrent replies can't
+        # both pass the check; release it if the send fails so one failure
+        # doesn't suppress the whole burst.
+        self._last_apns_ts = now
         try:
             await self._apns.send(self.user_id, title=_APP_NAME, body=body, data=data)
         except Exception as e:  # pragma: no cover — network/credential errors
             logger.warning("IOSGateway[user=%s]: APNs send failed: %s", self.user_id, e)
-        else:
-            # Only start the coalescing window on a send that actually went out —
-            # otherwise one failure silently suppresses the whole burst.
-            self._last_apns_ts = now
+            if self._last_apns_ts == now:
+                self._last_apns_ts = last
 
     # ------------------------------------------------------------------
     # Outbound messaging
