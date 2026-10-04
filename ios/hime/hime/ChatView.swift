@@ -180,19 +180,26 @@ struct ChatView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                VStack(spacing: 1) {
-                    Text(title).font(.headline).lineLimit(1)
-                    if connection.showReconnecting {
-                        HStack(spacing: 4) {
-                            PulsingDot()
-                            Text("Reconnecting…")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
+                HStack(spacing: 8) {
+                    // Live avatar: follows the agent (thinking / working / replying…).
+                    ChatNavAvatar(live: vm.live,
+                                  agentStarting: vm.agentStarting,
+                                  reconnecting: connection.showReconnecting,
+                                  hasError: vm.errorBanner != nil)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(title).font(.headline).lineLimit(1)
+                        if connection.showReconnecting {
+                            HStack(spacing: 4) {
+                                PulsingDot()
+                                Text("Reconnecting…")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                            }
+                            .transition(.opacity)
                         }
-                        .transition(.opacity)
                     }
+                    .animation(.easeInOut(duration: 0.2), value: connection.showReconnecting)
                 }
-                .animation(.easeInOut(duration: 0.2), value: connection.showReconnecting)
             }
             if let onShowThreads {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -401,7 +408,7 @@ private struct ChatEmptyState: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            HimeAvatar(size: 72)
+            HimeAvatar(size: 104, activity: .idle)
             Text("Hi, I'm Hime")
                 .font(.title3.weight(.semibold))
                 .foregroundColor(HimeColor.ink)
@@ -484,9 +491,9 @@ private struct ChatBubble: View, Equatable {
             if isUser {
                 Spacer(minLength: 44)
             } else if showAvatar {
-                HimeAvatar(size: 28)
+                HimeAvatar(size: 36)
             } else {
-                Color.clear.frame(width: 28, height: 1)
+                Color.clear.frame(width: 36, height: 1)
             }
             VStack(alignment: isUser ? .trailing : .leading, spacing: 6) {
                 if let data = message.localImage {

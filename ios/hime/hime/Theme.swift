@@ -87,15 +87,4 @@ enum HimeRadius {
 
 // MARK: - Avatar
 
-/// Small pixel-cat head used as the agent's avatar. Standalone: needs no view
-/// model. `state` takes the same mood strings as `CatHeadView`.
-struct HimeAvatar: View {
-    var size: CGFloat = 28
-    var state: String = "relaxed"
-
-    var body: some View {
-        CatHeadView(catState: state)
-            .frame(width: size, height: size)
-            .accessibilityHidden(true)
-    }
-}
+// `HimeAvatar` (static or animated pixel-cat head) lives in HimeAvatarAnimation.swift.

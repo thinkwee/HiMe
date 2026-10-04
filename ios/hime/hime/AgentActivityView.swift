@@ -78,9 +78,9 @@ struct LiveBubble: View {
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             if showAvatar {
-                HimeAvatar(size: 28)
+                HimeAvatar(size: 36, activity: live.avatarActivity)
             } else {
-                Color.clear.frame(width: 28, height: 1)
+                Color.clear.frame(width: 36, height: 1)
             }
             content
                 .padding(.horizontal, 14)
