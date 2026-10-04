@@ -156,3 +156,63 @@ final class ImageSaver: NSObject {
         // Best-effort; a denied Photos permission surfaces the system prompt.
     }
 }
+
+// MARK: - Decoded-image cache
+
+/// Process-wide cache of decoded chat images. Rows in a `LazyVStack` are
+/// recycled constantly while scrolling; without this every re-appearance
+/// re-downloaded / re-decoded its image (and flashed a spinner).
+enum ChatImageCache {
+    private static let cache: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.countLimit = 80
+        c.totalCostLimit = 128 * 1024 * 1024
+        return c
+    }()
+
+    static func image(for key: String) -> UIImage? {
+        cache.object(forKey: key as NSString)
+    }
+
+    static func store(_ image: UIImage, for key: String) {
+        let cost = Int(image.size.width * image.size.height * image.scale * image.scale * 4)
+        cache.setObject(image, forKey: key as NSString, cost: cost)
+    }
+
+    /// Decode (and pre-render) image bytes off the main actor.
+    static func decode(_ data: Data) async -> UIImage? {
+        await Task.detached(priority: .userInitiated) { () -> UIImage? in
+            guard let ui = UIImage(data: data) else { return nil }
+            return ui.preparingForDisplay() ?? ui
+        }.value
+    }
+
+    /// Decode a `data:<mime>;base64,<payload>` URI off the main actor.
+    static func decodeDataURI(_ src: String) async -> UIImage? {
+        await Task.detached(priority: .userInitiated) { () -> UIImage? in
+            guard let comma = src.firstIndex(of: ","),
+                  let data = Data(base64Encoded: String(src[src.index(after: comma)...])),
+                  let ui = UIImage(data: data) else { return nil }
+            return ui.preparingForDisplay() ?? ui
+        }.value
+    }
+
+    /// Whether `url` points at the configured API server. The bearer token must
+    /// only ever be sent there — agent-written markdown can reference any URL.
+    static func isAPIHost(_ url: URL) -> Bool {
+        guard let base = URL(string: ServerConfig.load().apiBaseURL),
+              let host = url.host?.lowercased(), let baseHost = base.host?.lowercased()
+        else { return false }
+        return host == baseHost && url.port == base.port
+    }
+
+    /// Download + decode `url`, attaching the bearer token only when `authed`.
+    /// Returns nil on any network error, non-2xx status, or undecodable body.
+    static func fetch(_ url: URL, authed: Bool) async -> UIImage? {
+        let req = authed ? APIClient.request(url) : URLRequest(url: url)
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode)
+        else { return nil }
+        return await decode(data)
+    }
+}
