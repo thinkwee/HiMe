@@ -73,13 +73,30 @@ class EventHub:
         return len(self._subscribers)
 
 
+def _absorb_backlog(source_queue: asyncio.Queue, hub: EventHub) -> int:
+    """Move events already sitting in ``source_queue`` into the hub's replay
+    buffer without delivering them to anyone (there are no subscribers yet)."""
+    n = 0
+    while True:
+        try:
+            hub.broadcast(source_queue.get_nowait())
+            n += 1
+        except asyncio.QueueEmpty:
+            return n
+
+
 async def _fanout_pump(user_id: str, source_queue: asyncio.Queue, hub: EventHub) -> None:
     """Sole reader of the agent's ``event_queue``; fans every event out to all
     subscribers. Self-terminates shortly after the agent is removed from
     ``active_agents`` (e.g. stop/restart) so it never leaks."""
     from .agent_state import active_agents
     try:
-        while user_id in active_agents:
+        while True:
+            # Exit when this agent is gone *or replaced* (restart): a fast
+            # stop/start would otherwise leave this pump alive on a dead queue.
+            current = active_agents.get(user_id)
+            if current is None or current.get("event_queue") is not source_queue:
+                break
             try:
                 event = await asyncio.wait_for(source_queue.get(), timeout=1.0)
             except asyncio.TimeoutError:
@@ -101,6 +118,14 @@ def ensure_hub(user_id: str, agent_info: dict) -> EventHub:
     if hub is None:
         hub = EventHub()
         event_queue = agent_info.get("event_queue")
+        # The hub is created lazily, so events emitted before the first
+        # subscriber connected are piled up in the raw queue. If the pump
+        # drained them *after* the caller subscribed, a replay=False (iOS)
+        # subscriber would receive that stale backlog as "live" events.
+        # Absorb them synchronously into the replay buffer first (web
+        # dashboard still sees them via replay=True).
+        if event_queue is not None:
+            _absorb_backlog(event_queue, hub)
         agent_info["event_hub"] = hub
         agent_info["fanout_task"] = asyncio.create_task(
             _fanout_pump(user_id, event_queue, hub),
