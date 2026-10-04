@@ -185,6 +185,42 @@ function ThoughtRow({ entry }) {
   )
 }
 
+const DRAFT_LABEL = {
+  verification: 'agent.draft_held',
+  rejected: 'agent.draft_held_rejected',
+  retry: 'agent.draft_held_retry',
+}
+
+/** A reply the fact check (or the validator) held back: shown muted, expandable, never as a reply bubble. */
+function DraftRow({ entry }) {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const label = t(DRAFT_LABEL[entry.reason] || DRAFT_LABEL.verification)
+  const canOpen = !!(entry.text || entry.detail)
+  return (
+    <li className="relative pl-7" data-testid="draft-held">
+      <span className="absolute left-[6px] top-1.5 flex h-[13px] w-[13px] items-center justify-center rounded-full border border-warn/50 bg-panel text-[9px] font-bold text-warn-ink" aria-hidden="true">!</span>
+      <button
+        type="button"
+        onClick={() => canOpen && setOpen((o) => !o)}
+        aria-expanded={canOpen ? open : undefined}
+        disabled={!canOpen}
+        className="flex w-full items-baseline gap-2 py-0.5 text-left text-xs text-warn-ink disabled:cursor-default"
+      >
+        {canOpen && <ChevronRight className={`h-3 w-3 shrink-0 self-center text-ink-3 transition-transform ${open ? 'rotate-90' : ''}`} aria-hidden="true" />}
+        <span className="font-medium">{label}</span>
+        {!open && entry.detail && <span className="min-w-0 flex-1 truncate text-ink-3" title={entry.detail}>{entry.detail}</span>}
+      </button>
+      {open && (
+        <div className="mb-1 space-y-1">
+          {entry.detail && <p className="text-xs text-ink-2">{entry.detail}</p>}
+          {entry.text && <OutputBlock text={entry.text} maxH="max-h-40" />}
+        </div>
+      )}
+    </li>
+  )
+}
+
 function RunMeta({ run }) {
   const { t } = useTranslation()
   const dur = formatDuration((run.endTs ?? run.lastTs) - run.startTs)
@@ -244,7 +280,11 @@ function StepsCard({ run, seg, footer, badge, title }) {
       </button>
       {open && (
         <ul className="relative mx-3 mb-2 mt-0.5 space-y-0.5 before:absolute before:bottom-2 before:left-[9px] before:top-1 before:border-l before:border-dashed before:border-line-2 before:content-['']">
-          {seg.entries.map((e) => (e.kind === 'step' ? <StepRow key={e.id} step={e} /> : <ThoughtRow key={e.id} entry={e} />))}
+          {seg.entries.map((e) => {
+            if (e.kind === 'step') return <StepRow key={e.id} step={e} />
+            if (e.kind === 'draft') return <DraftRow key={e.id} entry={e} />
+            return <ThoughtRow key={e.id} entry={e} />
+          })}
         </ul>
       )}
       {footer && run.warnings.length > 0 && open && (
@@ -261,13 +301,22 @@ function StepsCard({ run, seg, footer, badge, title }) {
 // Bubbles
 // ---------------------------------------------------------------------------
 
+const USER_CLAMP = 600
+
 function UserBubble({ user }) {
   const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const long = user.content.length > USER_CLAMP + 80
   const meta = [user.sender, user.channel && user.channel !== 'ios' ? user.channel : ''].filter(Boolean).join(' · ')
   return (
     <div className="flex flex-col items-end">
       <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-card rounded-br-chip border border-accent/40 bg-accent/25 px-3.5 py-2 text-sm text-ink">
-        {user.content}
+        {long && !open ? `${user.content.slice(0, USER_CLAMP).trimEnd()}…` : user.content}
+        {long && (
+          <button type="button" onClick={() => setOpen((o) => !o)} className="mt-1 block text-xs font-medium text-primary-700 hover:underline">
+            {open ? t('agent.show_less') : t('agent.show_more')}
+          </button>
+        )}
       </div>
       <div className="mt-0.5 px-1 text-[11px] text-ink-3">
         {meta || t('agent.evt_user')} · {fmtTime(user.ts)}
@@ -364,6 +413,7 @@ const BackgroundRunView = memo(function BackgroundRunView({ run }) {
       {run.quickState && (
         <div className="px-1 text-xs text-ink-2">{t('agent.evt_quick_complete', { state: run.quickState })}</div>
       )}
+      {run.reply && <ReplyBubble seg={{ content: run.reply.content, reportId: null, ts: run.reply.ts }} />}
       {run.report && (
         <div className="flex items-center gap-2 rounded-control border border-ok/30 bg-ok/10 px-3 py-1.5 text-sm text-ok-ink">
           <FileText className="h-4 w-4" aria-hidden="true" />
@@ -443,12 +493,17 @@ function LiveBubble({ store, stepText }) {
 // Timeline
 // ---------------------------------------------------------------------------
 
+/** Blocks rendered initially / revealed per "show earlier" click. */
+const PAGE_SIZE = 60
+
 export default function RunTimeline({ items, store, liveStepText, isLive, loading, isRunning, threadTitles = null }) {
   const { t } = useTranslation()
   const scrollRef = useRef(null)
   const innerRef = useRef(null)
   const atBottomRef = useRef(true)
   const [showJump, setShowJump] = useState(false)
+  const [startId, setStartId] = useState(null)
+  const anchorRef = useRef(null)
 
   const scrollToBottom = useCallback(() => {
     const el = scrollRef.current
@@ -485,9 +540,29 @@ export default function RunTimeline({ items, store, liveStepText, isLive, loadin
     scrollToBottom()
   }
 
+  // Lazy history: render the newest PAGE_SIZE blocks; "show earlier" reveals
+  // PAGE_SIZE more. The window is anchored to an item id so new arrivals do not
+  // push the top block out from under a reader scrolled into history.
+  const startAt = startId ? items.findIndex((it) => it.id === startId) : -1
+  const from = startAt >= 0 ? startAt : Math.max(0, items.length - PAGE_SIZE)
+  const shown = from > 0 ? items.slice(from) : items
+  const showEarlier = () => {
+    const el = scrollRef.current
+    if (el) anchorRef.current = { height: el.scrollHeight, top: el.scrollTop }
+    const next = Math.max(0, from - PAGE_SIZE)
+    setStartId(next > 0 ? items[next].id : items[0]?.id ?? null)
+  }
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    const a = anchorRef.current
+    if (!el || !a) return
+    anchorRef.current = null
+    el.scrollTop = a.top + (el.scrollHeight - a.height)
+  }, [from])
+
   const rows = []
   let prevDay = null
-  for (const it of items) {
+  for (const it of shown) {
     const ts = it.kind === 'run' ? it.startTs : it.ts
     const dk = dayKey(ts)
     if (dk !== prevDay) {
@@ -520,6 +595,13 @@ export default function RunTimeline({ items, store, liveStepText, isLive, loadin
             <div className="card mx-auto my-8 max-w-md text-center">
               <h4 className="section-title">{t('agent.empty_title')}</h4>
               <p className="mt-1 text-sm text-ink-2">{isRunning ? t('agent.empty_hint_running') : t('agent.empty_hint')}</p>
+            </div>
+          )}
+          {from > 0 && (
+            <div className="flex justify-center">
+              <button type="button" onClick={showEarlier} className="btn-secondary !rounded-full !px-3 !py-1 text-xs">
+                {t('agent.show_earlier', { count: Math.min(PAGE_SIZE, from) })}
+              </button>
             </div>
           )}
           {rows}
