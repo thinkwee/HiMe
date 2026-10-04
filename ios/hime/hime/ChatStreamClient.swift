@@ -250,7 +250,10 @@ final class ChatStreamClient: NSObject {
         guard let data = text.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return true }
-        if (obj["type"] as? String) == "error" {
+        // Only an `error` before the socket is confirmed live is a connection
+        // failure (e.g. an old server rejecting the stream). Once open, `error`
+        // also carries ordinary LLM/agent errors, which must not drop the socket.
+        if (obj["type"] as? String) == "error", !isOpen {
             socketFailed(generation)
             return false
         }
