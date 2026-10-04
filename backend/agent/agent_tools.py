@@ -177,7 +177,8 @@ class AgentToolsMixin:
     @staticmethod
     def _load_tool_json(tool_name: str) -> dict:
         """Load a single tool definition from tools.json (parsed once, cached)."""
-        return load_tool_definitions().get(tool_name, {})
+        import copy
+        return copy.deepcopy(load_tool_definitions().get(tool_name, {}))
 
     def _feed_evidence_to_tool(
         self, tool_name: str, tool_results: list, user_message: str = "",

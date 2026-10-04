@@ -1133,7 +1133,10 @@ async def _run_sub_analysis_loop(
             # Recovery: context overflow → emergency truncate and retry once
             if agent_error.category == ErrorCategory.CONTEXT_OVERFLOW:
                 from .context_manager import ContextManager
+                before = len(messages)
                 messages, _ = ContextManager().emergency_truncate(messages, 2)
+                if len(messages) >= before:
+                    return _failure(e)  # nothing left to drop - a retry can't help
                 try:
                     text, tool_calls, sig = await _llm_call(
                         self, messages, sub_tools,
@@ -1327,7 +1330,10 @@ async def _run_chat_manage_loop(self, goal: str, chat_id: str) -> dict:
             logger.error("Sub-manage LLM error (%s): %s", agent_error.category.value, e)
             if agent_error.category == ErrorCategory.CONTEXT_OVERFLOW:
                 from .context_manager import ContextManager
+                before = len(messages)
                 messages, _ = ContextManager().emergency_truncate(messages, 2)
+                if len(messages) >= before:
+                    return _failure(e)  # nothing left to drop - a retry can't help
                 try:
                     text, tool_calls, sig = await _llm_call(
                         self, messages, sub_tools,
