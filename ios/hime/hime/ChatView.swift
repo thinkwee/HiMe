@@ -15,8 +15,21 @@
 import SwiftUI
 import PhotosUI
 
+/// One conversation. Thread-scoped: the view model is supplied (and cached) by
+/// `ChatHub`, which also owns the shared event stream, so this view only
+/// renders and reports when it is on screen.
 struct ChatView: View {
-    @StateObject private var vm = ChatViewModel()
+    @ObservedObject var vm: ChatViewModel
+    /// Reconnect marker; a separate observable so thread-list churn in
+    /// `ChatHub` never re-renders the message list.
+    @ObservedObject var connection: ChatConnectionState
+    let title: String
+    /// Open the thread list / start a new thread. nil on old servers without
+    /// thread support (the buttons are then hidden).
+    var onShowThreads: (() -> Void)?
+    var onNewThread: (() -> Void)?
+    /// Show a dot on the list button when another thread has unread messages.
+    var hasUnreadElsewhere = false
     @FocusState private var inputFocused: Bool
     /// Whether the viewport is at (or near) the newest message — gates whether
     /// incoming messages pull the list down.
@@ -149,13 +162,13 @@ struct ChatView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: vm.errorBanner)
-        .navigationTitle("Chat")
+        .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
                 VStack(spacing: 1) {
-                    Text("Chat").font(.headline)
-                    if vm.showReconnecting {
+                    Text(title).font(.headline).lineLimit(1)
+                    if connection.showReconnecting {
                         HStack(spacing: 4) {
                             PulsingDot()
                             Text("Reconnecting…")
@@ -165,7 +178,30 @@ struct ChatView: View {
                         .transition(.opacity)
                     }
                 }
-                .animation(.easeInOut(duration: 0.2), value: vm.showReconnecting)
+                .animation(.easeInOut(duration: 0.2), value: connection.showReconnecting)
+            }
+            if let onShowThreads {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: onShowThreads) {
+                        Image(systemName: "list.bullet")
+                            .overlay(alignment: .topTrailing) {
+                                if hasUnreadElsewhere {
+                                    Circle().fill(HimeColor.accent)
+                                        .frame(width: 8, height: 8)
+                                        .offset(x: 4, y: -3)
+                                }
+                            }
+                    }
+                    .accessibilityLabel(Text("Chats"))
+                }
+            }
+            if let onNewThread {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: onNewThread) {
+                        Image(systemName: "square.and.pencil")
+                    }
+                    .accessibilityLabel(Text("New chat"))
+                }
             }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
@@ -177,17 +213,16 @@ struct ChatView: View {
                 }
             }
         }
-        .onAppear { vm.onAppear() }
-        .onDisappear { vm.disconnectStream() }
-        .onReceive(NotificationCenter.default.publisher(
-            for: UIApplication.didBecomeActiveNotification)) { _ in
-            // The live socket won't replay anything that arrived while we were
-            // backgrounded (e.g. a proactive report pushed via APNs): reconnect
-            // and pull history to append the missed tail.
-            vm.foregrounded()
+        .onAppear {
+            ChatHub.shared.screenAppeared()
+            ChatHub.shared.threadOpened(vm.threadId)
+            vm.onAppear()
         }
-        .onReceive(NotificationCenter.default.publisher(
-            for: UIApplication.didEnterBackgroundNotification)) { _ in vm.disconnectStream() }
+        .onDisappear {
+            vm.onDisappear()
+            ChatHub.shared.threadClosed(vm.threadId)
+            ChatHub.shared.screenDisappeared()
+        }
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool) {

@@ -194,3 +194,66 @@ struct EvidenceResponse: Decodable {
     let found: Bool
     let formatted: String
 }
+
+// MARK: - Threads
+
+/// Id of the permanent main conversation. It receives every proactive message
+/// (reports, reminders, trigger alerts) and cannot be renamed, archived or deleted.
+let chatMainThreadId = "main"
+
+/// Last message of a thread, as shown in the thread list preview.
+struct ChatThreadPreview: Equatable {
+    var role: String
+    var content: String
+    var date: Date?
+}
+
+/// One conversation in `GET /api/agent/chat/threads`.
+struct ChatThread: Identifiable, Equatable {
+    let id: String
+    /// Empty until the server auto-titles it (or the user renames it).
+    var title: String
+    var createdAt: Date?
+    var updatedAt: Date?
+    var pinned: Bool
+    var archived: Bool
+    var last: ChatThreadPreview?
+
+    var isMain: Bool { id == chatMainThreadId }
+
+    /// Placeholder used before the first list fetch lands.
+    static let main = ChatThread(id: chatMainThreadId, title: "", createdAt: nil, updatedAt: nil,
+                                 pinned: true, archived: false, last: nil)
+
+    /// Decode one thread from a JSON object (REST response or WS event).
+    static func from(_ any: Any?) -> ChatThread? {
+        guard let d = any as? [String: Any], let id = d["id"] as? String, !id.isEmpty else { return nil }
+        var preview: ChatThreadPreview?
+        if let lm = d["last_message"] as? [String: Any] {
+            preview = ChatThreadPreview(role: (lm["role"] as? String) ?? "",
+                                        content: (lm["content"] as? String) ?? "",
+                                        date: parseServerDate(lm["created_at"] as? String))
+        }
+        return ChatThread(id: id,
+                          title: (d["title"] as? String) ?? "",
+                          createdAt: parseServerDate(d["created_at"] as? String),
+                          updatedAt: parseServerDate(d["updated_at"] as? String),
+                          pinned: (d["pinned"] as? Bool) ?? (id == chatMainThreadId),
+                          archived: (d["archived"] as? Bool) ?? false,
+                          last: preview)
+    }
+
+    /// Most recent activity, used to order the list.
+    var activityDate: Date { last?.date ?? updatedAt ?? createdAt ?? .distantPast }
+}
+
+/// Server timestamps are naive UTC `YYYY-MM-DDTHH:MM:SS` strings (SQLite);
+/// anything after the seconds (fraction, offset) is ignored.
+func parseServerDate(_ s: String?) -> Date? {
+    guard let s, s.count >= 19 else { return nil }
+    let f = DateFormatter()
+    f.locale = Locale(identifier: "en_US_POSIX")
+    f.timeZone = TimeZone(identifier: "UTC")
+    f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+    return f.date(from: String(s.replacingOccurrences(of: " ", with: "T").prefix(19)))
+}

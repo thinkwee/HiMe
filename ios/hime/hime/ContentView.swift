@@ -214,7 +214,8 @@ struct ContentView: View {
             }
             .navigationDestination(for: AppRoute.self) { route in
                 switch route {
-                case .chat: ChatView()
+                case .chat: ChatScreen()
+                case .thread(let id): ChatScreen(threadId: id)
                 // .report is handled by switching tabs (not a pushed
                 // destination), so this branch is never reached — kept for
                 // exhaustiveness.
@@ -242,10 +243,10 @@ struct ContentView: View {
         .onReceive(router.$pendingRoute) { route in
             guard let route else { return }
             switch route {
-            case .chat:
+            case .chat, .thread:
                 selectedTab = 2
                 path = NavigationPath()
-                path.append(AppRoute.chat)
+                path.append(route)
             case .report:
                 // Reports live inside the Dashboard tab. First pop any pushed
                 // screen (e.g. the Chat view this "view full report" tap came

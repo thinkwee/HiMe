@@ -35,15 +35,17 @@ final class ChatViewModel: ObservableObject {
     @Published private(set) var isBusy = false
     /// False once the server answered 404 to `/chat/stop` (old server).
     @Published private(set) var stopAvailable = true
-    /// True when the event stream has been down for a few seconds.
-    @Published private(set) var showReconnecting = false
     @Published var agentStarting = false
     /// Short, self-clearing error shown above the composer.
     @Published var errorBanner: String?
     /// True once a history fetch has succeeded (drives the initial jump-to-bottom).
     @Published private(set) var didLoadHistory = false
 
-    private let stream = ChatStreamClient()
+    /// Conversation this view model is scoped to ("main" or a thread id).
+    let threadId: String
+    /// True while this thread's screen is on display. Set by the view; the hub
+    /// only reconciles visible threads on reconnect / foreground.
+    private(set) var isVisible = false
     /// Accumulates the model's streamed reasoning for the live thought line.
     private var thinkingBuffer = ""
     /// Model text output since the last tool call. Shown as streaming text, and
@@ -57,8 +59,6 @@ final class ChatViewModel: ObservableObject {
     private var runSerial = 0
     private var lastEventAt = Date()
     private var watchdogTask: Task<Void, Never>?
-    private var wantStream = false
-    private var reconnectIndicatorTask: Task<Void, Never>?
     private static let maxRuns = 40
     /// Ids of user messages the server didn't accept because the agent wasn't
     /// running; re-posted once it starts (`agent_started` / reconnect / watchdog).
@@ -70,58 +70,30 @@ final class ChatViewModel: ObservableObject {
 
     private var apiBase: String { ServerConfig.load().apiBaseURL }
 
+    init(threadId: String) {
+        self.threadId = threadId
+    }
+
     // MARK: - Lifecycle
 
+    /// The thread's screen appeared. The shared event stream is owned by
+    /// `ChatHub`; here we only (re)load the persisted transcript.
     func onAppear() {
-        stream.onEvent = { [weak self] event in self?.handle(event) }
-        stream.onConnected = { [weak self] in self?.streamConnected() }
-        stream.onLiveChange = { [weak self] isLive in self?.streamLiveChanged(isLive) }
-        startStream()
-        if !didLoadHistory { Task { await reconcile() } }
+        isVisible = true
+        Task { await reconcile() }
     }
 
-    func connectStream() { startStream() }
+    func onDisappear() { isVisible = false }
 
-    func disconnectStream() {
-        wantStream = false
-        reconnectIndicatorTask?.cancel()
-        reconnectIndicatorTask = nil
-        if showReconnecting { showReconnecting = false }
-        stream.disconnect()
-    }
-
-    private func startStream() {
-        wantStream = true
-        stream.connect()
-        streamLiveChanged(stream.isLive)
-    }
-
-    /// Show "Reconnecting…" only when the socket stays down for a few seconds,
-    /// so brief blips and the initial connect never flash the indicator.
-    private func streamLiveChanged(_ isLive: Bool) {
-        reconnectIndicatorTask?.cancel()
-        reconnectIndicatorTask = nil
-        if isLive {
-            if showReconnecting { showReconnecting = false }
-            return
-        }
-        guard wantStream else { return }
-        reconnectIndicatorTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            guard !Task.isCancelled, let self, self.wantStream else { return }
-            self.showReconnecting = true
-        }
-    }
-
-    /// App returned to the foreground: make sure the socket is alive and pull
-    /// anything (e.g. an APNs-delivered report) that landed while away.
+    /// App returned to the foreground: pull anything (e.g. an APNs-delivered
+    /// report) that landed while away.
     func foregrounded() {
-        startStream()
         Task { await reconcile() }
     }
 
-    private func streamConnected() {
-        Task { await reconcile() }
+    /// The shared socket (re)connected: pull history and re-post held messages.
+    func streamConnected() {
+        if isVisible { Task { await reconcile() } }
         if !pendingResend.isEmpty { Task { await flushPending() } }
     }
 
@@ -144,6 +116,7 @@ final class ChatViewModel: ObservableObject {
                               clientMsgId: UUID().uuidString, delivery: .sending)
         messages.append(msg)
         beginRun(newTurn: true)
+        ChatHub.shared.noteOutgoing(threadId: threadId, text: text.isEmpty ? String(localized: "Image") : text)
         Task { await deliver(messageId: msg.id) }
     }
 
@@ -204,7 +177,8 @@ final class ChatViewModel: ObservableObject {
         }
         var req = APIClient.request(url, method: "POST")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        var body: [String: Any] = ["text": text, "client_msg_id": clientMsgId]
+        var body: [String: Any] = ["text": text, "client_msg_id": clientMsgId,
+                                   "thread_id": threadId]
         if let image {
             body["image_base64"] = image.base64EncodedString()
             body["image_mime"] = "image/jpeg"
@@ -269,7 +243,8 @@ final class ChatViewModel: ObservableObject {
 
     /// Fetch the recent server transcript. Returns nil on any failure.
     private func fetchHistory() async -> [ChatHistoryRow]? {
-        guard let url = URL(string: "\(apiBase)/api/agent/chat-history?limit=100") else { return nil }
+        let tid = threadId.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? threadId
+        guard let url = URL(string: "\(apiBase)/api/agent/chat-history?limit=100&thread_id=\(tid)") else { return nil }
         do {
             let (data, resp) = try await URLSession.shared.data(for: APIClient.request(url))
             if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { return nil }
@@ -578,7 +553,7 @@ final class ChatViewModel: ObservableObject {
             guard let url = URL(string: "\(apiBase)/api/agent/chat/stop") else { return }
             var req = APIClient.request(url, method: "POST")
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = Data("{}".utf8)
+            req.httpBody = try? JSONSerialization.data(withJSONObject: ["thread_id": threadId])
             do {
                 let (data, resp) = try await URLSession.shared.data(for: req)
                 if let http = resp as? HTTPURLResponse {
@@ -607,7 +582,8 @@ final class ChatViewModel: ObservableObject {
 
     // MARK: - Event handling
 
-    private func handle(_ event: [String: Any]) {
+    /// Handle one agent event already routed to this thread by `ChatHub`.
+    func handle(_ event: [String: Any]) {
         guard let type = event["type"] as? String else { return }
         switch type {
         case "status_update", "pong", "monitor_connected":
