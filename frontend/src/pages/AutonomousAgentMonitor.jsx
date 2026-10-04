@@ -832,6 +832,9 @@ function StartupModal({ currentStep, error, onClose }) {
 
 /** Max log entries kept on screen. */
 const MAX_LOG_ITEMS = 500
+// History fetched on (re)mount. The server keeps 2000 rows, and a single run emits
+// ~4 rows per tool step (call, result, 2x progress), so 500 only covered the last run or two.
+const ACTIVITY_FETCH_LIMIT = 2000
 /** Right after a (re)connect the server replays its recent backlog; events seen in this window are de-duplicated. */
 const REPLAY_WINDOW_MS = 3000
 const EMPTY_LIVE = { thinking: '', content: '' }
@@ -1084,7 +1087,7 @@ export default function AutonomousAgentMonitor({ active = true }) {
 
   const fetchActivityLog = useCallback(async () => {
     try {
-      const result = await api.getAgentActivity(MAX_LOG_ITEMS)
+      const result = await api.getAgentActivity(ACTIVITY_FETCH_LIMIT)
       if (!result.success) {
         setLogLoadError(result.error || t('common.load_failed'))
         return
