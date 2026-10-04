@@ -621,9 +621,10 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
     the whole authed API surface, so they are guarded too whenever a token is
     configured.
 
-    The token may arrive via the ``Authorization: Bearer`` header or, for
-    header-less clients (e.g. an ``<img>`` tag loading an authed ``/api/``
-    URL), a ``?token=...`` query string parameter. WebSocket handshakes are
+    The token may arrive via the ``Authorization: Bearer`` header or, only for
+    clients that cannot set headers, a ``?token=...`` query parameter — accepted
+    on ``/api/personalised-pages/*`` (any method) and on ``GET
+    /api/agent/chat-image/*``; everywhere else it is ignored. WebSocket handshakes are
     authenticated separately in the stream routes (``_ws_token_ok``), since
     Starlette's ``BaseHTTPMiddleware`` never runs for ``websocket`` scopes.
     """
