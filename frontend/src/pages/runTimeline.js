@@ -74,6 +74,19 @@ export function mergeChrono(prev, fetched, max = 1500) {
   return merged.length > max ? merged.slice(merged.length - max) : merged
 }
 
+/**
+ * Thread filter for the timeline. 'all' keeps everything; a thread id keeps
+ * only that thread's chat runs. Background runs and notices belong to the main
+ * thread (every proactive message lands there), so 'main' keeps them too.
+ */
+export function filterByThread(items, threadId) {
+  if (!threadId || threadId === 'all') return items
+  return items.filter((it) => {
+    if (it.kind === 'run' && it.runType === 'chat') return (it.threadId || 'main') === threadId
+    return threadId === 'main'
+  })
+}
+
 /** Task-type of a background run (matches the badge meaning of the raw log). */
 export function backgroundRunType(type, d) {
   if (d.task === 'quick_analysis' || d.source === 'quick' || type.startsWith('quick_')) return 'quick'
@@ -166,6 +179,7 @@ export function buildTimeline(records, { now = Date.now(), idle = false } = {}) 
       id: `run:${init.runId || init.runType}:${init.ts}:${seq++}`,
       runType: init.runType,
       runId: init.runId || null,
+      threadId: null,
       startTs: init.ts,
       lastTs: init.ts,
       endTs: null,
@@ -203,6 +217,12 @@ export function buildTimeline(records, { now = Date.now(), idle = false } = {}) 
   }
 
   const chatRunFor = (rec, create = true) => {
+    const run = chatRunForInner(rec, create)
+    if (run && rec.d.thread_id && !run.threadId) run.threadId = rec.d.thread_id
+    return run
+  }
+
+  const chatRunForInner = (rec, create = true) => {
     const rid = rec.d.run_id
     if (rid) {
       let run = chatById.get(rid)
@@ -463,7 +483,7 @@ export function buildTimeline(records, { now = Date.now(), idle = false } = {}) 
     }
     it.stepCount = visible
     it.hiccups = errors + it.warnings.length
-    it.sig = `${it.n}:${it.status}:${it.stepIndex.length}`
+    it.sig = `${it.n}:${it.status}:${it.stepIndex.length}:${it.threadId || ''}`
   }
 
   return items

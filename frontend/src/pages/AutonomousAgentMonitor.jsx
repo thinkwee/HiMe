@@ -12,7 +12,7 @@ import {
   eventKey, eventTimeMs, eventToMessage, formatTokenUsage, mergeActivity, unwrapEvent,
 } from './agentEvents'
 import {
-  buildTimeline, currentStep, findLiveRun, mergeChrono, stepObject, toTimelineRecord,
+  buildTimeline, currentStep, filterByThread, findLiveRun, mergeChrono, stepObject, toTimelineRecord,
 } from './runTimeline'
 import { Play, Square, Brain, Activity, Database, Wifi, WifiOff, X, Clock, Plus, Pause, Trash2, Zap, RotateCcw, Pencil, Check, Loader2, CheckCircle2, AlertCircle, Server, HardDrive, Cpu, ListChecks, Rocket } from 'lucide-react'
 
@@ -866,6 +866,8 @@ export default function AutonomousAgentMonitor({ active = true }) {
   const [timeline, setTimeline] = useState([])
   const [activityLoaded, setActivityLoaded] = useState(false)
   const [view, setView] = useState('activity') // 'activity' | 'raw'
+  const [threads, setThreads] = useState([]) // in-app chat threads (main first)
+  const [threadFilter, setThreadFilter] = useState('all') // 'all' | thread id
   const [lastError, setLastError] = useState('')
   const [stoppingReply, setStoppingReply] = useState(false)
   // Streaming text (latest thought, reply being typed) lives outside React state
@@ -1517,7 +1519,30 @@ export default function AutonomousAgentMonitor({ active = true }) {
     const id = setInterval(() => setNow(Date.now()), 30000)
     return () => clearInterval(id)
   }, [active, visible])
-  const items = useMemo(() => buildTimeline(timeline, { idle, now }), [timeline, idle, now])
+  const allItems = useMemo(() => buildTimeline(timeline, { idle, now }), [timeline, idle, now])
+  const items = useMemo(() => filterByThread(allItems, threadFilter), [allItems, threadFilter])
+  // Thread titles for badges / the filter. Refetch when a run mentions a thread we do not know yet.
+  const knownThreadIds = threads.map((th) => th.id).join(',')
+  const unknownThreadKey = useMemo(() => {
+    const known = new Set(knownThreadIds.split(','))
+    const ids = new Set()
+    for (const it of allItems) {
+      if (it.kind === 'run' && it.threadId && !known.has(it.threadId)) ids.add(it.threadId)
+    }
+    return [...ids].sort().join(',')
+  }, [allItems, knownThreadIds])
+  useEffect(() => {
+    let cancelled = false
+    Promise.resolve(api.getChatThreads(true)).then((res) => {
+      if (!cancelled && res?.success && Array.isArray(res.threads)) setThreads(res.threads)
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [unknownThreadKey])
+  const threadTitles = useMemo(() => {
+    const m = {}
+    for (const th of threads) m[th.id] = th.title || ''
+    return m
+  }, [threads])
   const liveRun = useMemo(() => (isRunning ? findLiveRun(items) : null), [items, isRunning])
   const liveStep = useMemo(() => currentStep(liveRun), [liveRun])
   const liveStepText = liveStep ? stepVerb(liveStep, t) : ''
@@ -1655,6 +1680,21 @@ export default function AutonomousAgentMonitor({ active = true }) {
               </div>
             </div>
             <div className="flex items-center gap-2">
+              {view === 'activity' && threads.length > 1 && (
+                <select
+                  value={threadFilter}
+                  onChange={(e) => setThreadFilter(e.target.value)}
+                  aria-label={t('agent.thread_filter')}
+                  className="rounded-chip border border-line bg-panel px-2 py-0.5 text-xs text-ink-2"
+                >
+                  <option value="all">{t('agent.thread_all')}</option>
+                  {threads.filter((th) => !th.archived || th.id === threadFilter).map((th) => (
+                    <option key={th.id} value={th.id}>
+                      {th.id === 'main' ? 'Hime' : (th.title || t('agent.thread_untitled'))}
+                    </option>
+                  ))}
+                </select>
+              )}
               {view === 'raw' && ['all', 'analysis', 'chat'].map((f) => (
                 <button
                   type="button"
@@ -1684,6 +1724,7 @@ export default function AutonomousAgentMonitor({ active = true }) {
           {view === 'activity' ? (
             <RunTimeline
               items={items}
+              threadTitles={threadTitles}
               store={liveStore}
               liveStepText={liveStepText}
               isLive={showLive}

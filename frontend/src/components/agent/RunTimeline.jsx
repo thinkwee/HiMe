@@ -318,11 +318,16 @@ function StreamingReply({ store, runKey }) {
 // Runs
 // ---------------------------------------------------------------------------
 
-const ChatRunView = memo(function ChatRunView({ run, store }) {
+const ChatRunView = memo(function ChatRunView({ run, store, threadLabel }) {
   const { t } = useTranslation()
   const lastStepsIdx = run.segments.reduce((acc, s, i) => (s.kind === 'steps' ? i : acc), -1)
   return (
     <section className="msg-in space-y-2" aria-label={t('agent.badge_chat')}>
+      {threadLabel && (
+        <div className="px-1">
+          <span className="inline-block rounded-chip border border-line bg-sunken px-2 py-0.5 text-[11px] font-medium text-ink-3" data-testid="thread-badge">{threadLabel}</span>
+        </div>
+      )}
       {run.user && <UserBubble user={run.user} />}
       {run.segments.map((seg, i) => {
         if (seg.kind === 'steps') return <StepsCard key={seg.id} run={run} seg={seg} footer={i === lastStepsIdx} />
@@ -344,7 +349,7 @@ const ChatRunView = memo(function ChatRunView({ run, store }) {
       {lastStepsIdx < 0 && <RunMeta run={run} />}
     </section>
   )
-}, (a, b) => a.run.id === b.run.id && a.run.sig === b.run.sig && a.store === b.store)
+}, (a, b) => a.run.id === b.run.id && a.run.sig === b.run.sig && a.store === b.store && a.threadLabel === b.threadLabel)
 
 const BackgroundRunView = memo(function BackgroundRunView({ run }) {
   const { t } = useTranslation()
@@ -438,7 +443,7 @@ function LiveBubble({ store, stepText }) {
 // Timeline
 // ---------------------------------------------------------------------------
 
-export default function RunTimeline({ items, store, liveStepText, isLive, loading, isRunning }) {
+export default function RunTimeline({ items, store, liveStepText, isLive, loading, isRunning, threadTitles = null }) {
   const { t } = useTranslation()
   const scrollRef = useRef(null)
   const innerRef = useRef(null)
@@ -491,7 +496,7 @@ export default function RunTimeline({ items, store, liveStepText, isLive, loadin
     }
     if (it.kind === 'run') {
       rows.push(it.runType === 'chat'
-        ? <ChatRunView key={it.id} run={it} store={store} />
+        ? <ChatRunView key={it.id} run={it} store={store} threadLabel={it.threadId && it.threadId !== 'main' ? (threadTitles?.[it.threadId] || t('agent.thread_untitled')) : ''} />
         : <BackgroundRunView key={it.id} run={it} />)
     } else {
       rows.push(<Notice key={it.id} item={it} />)

@@ -26,8 +26,10 @@ from .agent_state import (  # noqa: F401  — re-exported for main.py
     require_valid_ids,
 )
 from .agent_tasks import tasks_router
+from .agent_threads import threads_router
 
 router = APIRouter(prefix="/api/agent", tags=["agent"], dependencies=[Depends(require_valid_ids)])
 router.include_router(lifecycle_router)
 router.include_router(diagnostics_router)
 router.include_router(tasks_router)
+router.include_router(threads_router)
