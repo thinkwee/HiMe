@@ -14,10 +14,12 @@ import Foundation
 ///                                   and for entries that could not be replaced
 ///                                   in place because they were already peeked)
 ///   {"pop":N}                       drop the N oldest entries
-final class PendingStore: @unchecked Sendable {
+// Internally synchronised (NSLock) and used from HealthKit/URLSession background
+// callbacks, so it opts out of the target's MainActor default isolation.
+nonisolated final class PendingStore: @unchecked Sendable {
     static let shared = PendingStore()
 
-    private struct JournalLine: Codable {
+    private nonisolated struct JournalLine: Codable {
         var ts: Double?
         var v: Double?
         var f: String?
@@ -25,7 +27,7 @@ final class PendingStore: @unchecked Sendable {
         var pop: Int?
     }
 
-    private struct Key: Hashable {
+    private nonisolated struct Key: Hashable {
         let ts: Double
         let f: String
     }
@@ -305,7 +307,7 @@ final class PendingStore: @unchecked Sendable {
             journalLines += lines.count
             return true
         } catch {
-            LogManager.shared.log("PendingStore journal write failed: \(error.localizedDescription)")
+            HealthKitManager.bgLog("PendingStore journal write failed: \(error.localizedDescription)")
             return false
         }
     }
@@ -321,7 +323,7 @@ final class PendingStore: @unchecked Sendable {
             journalLines = lines.count
             return true
         } catch {
-            LogManager.shared.log("PendingStore snapshot failed: \(error.localizedDescription)")
+            HealthKitManager.bgLog("PendingStore snapshot failed: \(error.localizedDescription)")
             return false
         }
     }

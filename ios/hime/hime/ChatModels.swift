@@ -5,6 +5,7 @@
 //  In-app chat with the agent (replaces the external IM gateways).
 //
 
+import Combine
 import Foundation
 
 /// One message in the in-app conversation.

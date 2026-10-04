@@ -7,10 +7,10 @@ import HealthKit
 import Combine
 import os
 
-private let watchLog = Logger(subsystem: "com.hime.watch", category: "HealthSync")
+private nonisolated let watchLog = Logger(subsystem: "com.hime.watch", category: "HealthSync")
 
 /// Log to both os.Logger and buffer for iPhone forwarding.
-func watchHealthLog(_ msg: String) {
+nonisolated func watchHealthLog(_ msg: String) {
     watchLog.info("\(msg)")
     Task { @MainActor in
         WatchConnectivityManager.shared.bufferLog(msg)

@@ -84,8 +84,8 @@ enum HimeWatchWidgetStore {
 /// Mirrors the iPhone's `TokenKeychain` (AfterFirstUnlock so a background
 /// complication/observer wake can still read it; never included in backups).
 private enum WatchTokenKeychain {
-    private static let service = "com.hime.watch.serverAuth"
-    private static let account = "serverAuthToken"
+    private nonisolated static let service = "com.hime.watch.serverAuth"
+    private nonisolated static let account = "serverAuthToken"
 
     private nonisolated static var baseQuery: [String: Any] {
         [
@@ -123,10 +123,10 @@ private enum WatchTokenKeychain {
     }
 }
 
-private let wcLog = Logger(subsystem: "com.hime.watch", category: "WCSync")
+private nonisolated let wcLog = Logger(subsystem: "com.hime.watch", category: "WCSync")
 
 /// Log to both os.Logger and buffer for iPhone forwarding.
-func watchSyncLog(_ msg: String) {
+nonisolated func watchSyncLog(_ msg: String) {
     wcLog.info("\(msg)")
     Task { @MainActor in
         WatchConnectivityManager.shared.bufferLog(msg)
