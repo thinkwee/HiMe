@@ -166,3 +166,15 @@ Before returning from `create_page`, verify:
 - If using `HimeUI.drawChart`, every chart container is a `<div>` (not a `<canvas>`) and the spec contains only `{type, labels, datasets:[{label, data, color?, type?, axis?}]}` — no Chart.js `options`/`backgroundColor`/`yAxisID`/etc.
 - Every `query_memory` / `write_memory` on a page-owned table is preceded by `ensure_table(...)` inside the same handler.
 - `route_handler` returns a plain dict — not a string, tuple, coroutine, or response object.
+
+## Reading tables you created yourself
+
+`query_memory` reaches the *same* `memory.db` your `sql` tool writes to, so any table
+you created there is readable from a page. Two things to keep in mind:
+
+- **Name the table explicitly in `route.py`.** `sqlite_master` and `PRAGMA` are blocked
+  inside pages, so a page cannot discover tables at runtime — it can only query names you
+  hard-code when you write it.
+- **Wrap the read in `try/except` and degrade gracefully.** The page may be opened before
+  the table exists, or after the user wipes it. A missing table should render an empty
+  state, not a 500.

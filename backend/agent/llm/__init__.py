@@ -408,7 +408,7 @@ async def retry_async(
       - Rate-limit (429) vs capacity (529) distinction
       - Optional on_retry callback for logging/notification
     """
-    from ..errors import FallbackTriggered, _extract_retry_after
+    from ..errors import FallbackTriggered, _extract_retry_after, _extract_status_code
 
     last_exc: Exception | None = None
     capacity_retries = 0
@@ -418,6 +418,11 @@ async def retry_async(
             return await coro()
         except Exception as exc:
             last_exc = exc
+            # 402 Payment Required = out of credit; retrying cannot help, so
+            # hand the call to FALLBACK_LLM_PROVIDER straight away.
+            if _extract_status_code(exc) == 402:
+                logger.warning("LLM returned 402 (%s) — switching to fallback provider", exc)
+                raise FallbackTriggered("", "") from exc
             if not _is_retryable(exc) or attempt == max_retries - 1:
                 raise
 
