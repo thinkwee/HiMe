@@ -332,6 +332,20 @@ class TestStopMechanics:
         await agent._run_chat_envelope("next")
         assert done == ["next"]
 
+    async def test_run_done_event_carries_run_id(self):
+        agent = _stop_agent()
+
+        async def _handle(env):
+            agent._chat_run_id = "r1"
+
+        agent._handle_chat_message = _handle
+        await agent._run_chat_envelope("x")
+        events = []
+        while not agent._event_queue.empty():
+            events.append(agent._event_queue.get_nowait())
+        assert [e["type"] for e in events] == ["chat_run_done"]
+        assert events[0]["run_id"] == "r1"
+
     async def test_shutdown_cancellation_propagates(self):
         agent = _stop_agent()
         started = asyncio.Event()
@@ -498,9 +512,35 @@ class TestHandleChatStop:
         assert agent._chat_run_id  # one id per handled message
         resets = [e for e in agent.events if e["type"] == "chat_reply_delta"]
         assert resets and resets[0]["reset"] is True and resets[0]["text"] == ""
+        assert resets[0]["reason"] == "rejected"
         res = next(e for e in agent.events if e["type"] == "chat_tool_result")
         assert res["status"] == "error" and res["call_id"] == "r1"
         assert len(res["result_preview"]) <= 300
+
+
+class TestResetReason:
+    async def test_verification_block_labels_reset(self):
+        agent = _chat_agent()
+        agent._execute_tool = AsyncMock(return_value={
+            "success": False, "error": "Message blocked by fact verification",
+            "blocked": "verification", "verification_detail": "no data backs the claim",
+        })
+        agent._reply_streamed = True
+        script = iter([
+            ("", [{"name": "reply_user", "id": "r1", "arguments": {"message": "bad"}}], "s"),
+            ("done", [], "s"),
+        ])
+
+        async def _llm(self_ref, messages, tools, **kw):
+            return next(script)
+
+        with patch.object(agent_loops, "_llm_call", _llm), \
+             patch.object(agent_loops, "settings") as st:
+            st.CHAT_MAX_TURNS = 8
+            await agent._handle_chat_message(_envelope())
+        reset = next(e for e in agent.events if e["type"] == "chat_reply_delta")
+        assert reset["reset"] is True and reset["reason"] == "verification"
+        assert reset["detail"] == "no data backs the claim"
 
 
 # ---------------------------------------------------------------------------

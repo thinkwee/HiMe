@@ -515,14 +515,26 @@ def _trim_history(hist: list[dict], limit: int) -> list[dict]:
     return hist
 
 
-async def _clear_reply_stream(agent, chat_id: str) -> None:
-    """Tell clients to discard a streamed reply that was not delivered."""
+async def _clear_reply_stream(
+    agent, chat_id: str, reason: str = "rejected", detail: str = "",
+) -> None:
+    """Tell clients to discard a streamed reply that was not delivered.
+
+    ``reason`` labels the held-back draft for clients: "verification" (blocked
+    by the fact verifier, ``detail`` is a short why), "retry" (provider retry /
+    fallback re-streamed the turn) or "rejected" (anything else). Old clients
+    ignore both extra fields.
+    """
     if not getattr(agent, "_reply_streamed", False):
         return
     agent._reply_streamed = False
-    await agent._emit({
-        "type": "chat_reply_delta", "text": "", "reset": True, "chat_id": chat_id,
-    })
+    event: dict = {
+        "type": "chat_reply_delta", "text": "", "reset": True,
+        "reason": reason, "chat_id": chat_id,
+    }
+    if detail:
+        event["detail"] = detail[:300]
+    await agent._emit(event)
 
 
 async def _llm_call(
@@ -577,7 +589,7 @@ async def _llm_call(
         if streamer is not None and streamer.emitted:
             # Retry / provider fallback after partial output: drop it client-side.
             streamer = ReplyDeltaStreamer()
-            await _clear_reply_stream(agent, chat_id)
+            await _clear_reply_stream(agent, chat_id, "retry")
         async for chunk in llm.complete(
             messages=messages,
             tools=tools,
@@ -2515,7 +2527,13 @@ class AgentLoopsMixin:
                     if tool_name == "reply_user" and not result.get("success"):
                         # Blocked (fact verifier / gateway): the streamed text was
                         # never delivered, so tell clients to clear it.
-                        await _clear_reply_stream(self, str(chat_id))
+                        if result.get("blocked") == "verification":
+                            await _clear_reply_stream(
+                                self, str(chat_id), "verification",
+                                str(result.get("verification_detail") or ""),
+                            )
+                        else:
+                            await _clear_reply_stream(self, str(chat_id))
                     elif tool_name == "reply_user":
                         self._reply_streamed = False
 
