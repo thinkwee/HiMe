@@ -540,6 +540,14 @@ class DeepSeekProvider(OpenAIProvider):
 
     _is_deepseek: bool = True
 
+    def supports_vision(self) -> bool:
+        """Return whether the selected DeepSeek model accepts image blocks."""
+        return self.model.lower() in {
+            "deepseek-flash",
+            "deepseek-v4-flash",
+            "deepseek-v4-flash-vision-exp",
+        }
+
     def __init__(self, model: str = "deepseek-flash", api_key: str | None = None, **kwargs) -> None:
         super().__init__(model=model, api_key=api_key, base_url="https://api.deepseek.com", **kwargs)
 
