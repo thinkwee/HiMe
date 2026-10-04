@@ -16,7 +16,12 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from aiohttp.test_utils import TestClient, TestServer
+
+# The WatchExporter has its own dependencies (ios/Server/requirements); CI only
+# installs backend/requirements.txt, so skip cleanly when aiohttp is absent.
+pytest.importorskip("aiohttp")
+pytest.importorskip("rich")
+from aiohttp.test_utils import TestClient, TestServer  # noqa: E402
 
 SERVER_PY = Path(__file__).resolve().parent.parent / "ios" / "Server" / "server.py"
 
