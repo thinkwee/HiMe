@@ -80,23 +80,80 @@ struct ChatMessage: Identifiable, Equatable {
     }
 }
 
-/// A message plus its precomputed layout flag, so the list never has to
-/// rebuild `Array(enumerated())` or index neighbours during render.
-struct ChatRow: Identifiable, Equatable {
-    let message: ChatMessage
-    /// Only the first Hime message in a consecutive run shows the avatar.
-    let showAvatar: Bool
-    var id: String { message.id }
+/// One tool invocation inside an agent run, shown as a row in the run card.
+struct RunStep: Identifiable, Equatable {
+    enum Status: Equatable { case running, ok, failed, stopped }
+
+    let id: String
+    /// Backend tool name (`analyze`, `sql`, `code`, ...). Mapped to a plain verb
+    /// by `ChatStepStyle`.
+    let tool: String
+    /// True for steps run by a sub-agent underneath `analyze` / `manage`.
+    let nested: Bool
+    /// Short object of the step (the goal / query), already truncated.
+    var detail: String?
+    var status: Status
+    /// Short, truncated result preview shown when the row is tapped.
+    var preview: String?
 }
 
-/// What the agent is doing right now — drives the lively status pill under the
-/// conversation (Claude-Code-style "thinking" / "using a tool" indicator).
-enum AgentActivity: Equatable {
-    case idle
-    /// Reasoning in progress; the associated value is a short live preview
-    /// (first sentence of the streamed thinking, possibly empty).
-    case thinking(String)
-    case tool(String)
+/// The collapsible "steps" card of one agent run. Anchored to the message that
+/// preceded it so it sits in the timeline before the reply it produced.
+struct RunCard: Identifiable, Equatable {
+    let id: String
+    /// Id of the message this card renders directly after.
+    let anchorId: String
+    var steps: [RunStep]
+    var isLive: Bool
+}
+
+/// A timeline entry: a message bubble or a run card, with its precomputed
+/// layout flag so the list never has to index neighbours during render.
+struct ChatRow: Identifiable, Equatable {
+    enum Item: Equatable {
+        case message(ChatMessage)
+        case run(RunCard)
+    }
+
+    let item: Item
+    /// Only the first Hime message in a consecutive run shows the avatar.
+    let showAvatar: Bool
+
+    var id: String {
+        switch item {
+        case .message(let m): return m.id
+        case .run(let r): return "run-" + r.id
+        }
+    }
+
+    /// True for rows that visually belong to Hime (assistant bubbles, run cards).
+    var isAssistantSide: Bool {
+        switch item {
+        case .message(let m): return m.role == .assistant
+        case .run: return true
+        }
+    }
+}
+
+/// Everything the single live bubble at the bottom of the conversation shows.
+/// Deliberately a separate observable so token-rate updates re-render only that
+/// bubble, never the message list.
+@MainActor
+final class LiveState: ObservableObject {
+    @Published var active = false
+    /// Latest reasoning / demoted narration, already trimmed for display.
+    @Published var thought = ""
+    /// Tool currently running (nil = just thinking).
+    @Published var tool: String?
+    /// Reply text streaming in (full text so far).
+    @Published var streamText = ""
+
+    func reset() {
+        if active { active = false }
+        if !thought.isEmpty { thought = "" }
+        if tool != nil { tool = nil }
+        if !streamText.isEmpty { streamText = "" }
+    }
 }
 
 /// A row returned by `GET /api/agent/chat-history`.
