@@ -49,6 +49,23 @@ class AgentStateRepository:
         except Exception as e:
             logger.error(f"Failed to save agent state: {e}")
 
+    def save_state_json(self, user_id: str, state_json: str) -> None:
+        """Write an already-serialised state snapshot (atomic temp + rename).
+
+        The caller serialises on the event loop (a consistent snapshot) and
+        hands the string to a worker thread, so the fsync never blocks it.
+        """
+        file_path = self._get_state_file(user_id)
+        try:
+            temp_path = file_path.with_suffix('.json.tmp')
+            with open(temp_path, 'w') as f:
+                f.write(state_json)
+                f.flush()
+                os.fsync(f.fileno())
+            temp_path.replace(file_path)
+        except Exception as e:
+            logger.error(f"Failed to save agent state: {e}")
+
     def load_state(self, user_id: str) -> dict | None:
         """
         Load agent state from disk.

@@ -8,6 +8,7 @@ import json
 import logging
 import re
 
+from .tools.base import load_tool_definitions
 from .tools.result_manager import truncate_result
 
 logger = logging.getLogger(__name__)
@@ -175,14 +176,9 @@ class AgentToolsMixin:
 
     @staticmethod
     def _load_tool_json(tool_name: str) -> dict:
-        """Load a single tool definition from tools.json."""
-        from pathlib import Path
-        path = Path(__file__).parent / "tools" / "tools.json"
-        try:
-            with open(path, encoding="utf-8") as f:
-                return json.load(f).get(tool_name, {})
-        except Exception:
-            return {}
+        """Load a single tool definition from tools.json (parsed once, cached)."""
+        import copy
+        return copy.deepcopy(load_tool_definitions().get(tool_name, {}))
 
     def _feed_evidence_to_tool(
         self, tool_name: str, tool_results: list, user_message: str = "",
@@ -229,11 +225,10 @@ class AgentToolsMixin:
 
         try:
             if tool_name == "push_report":
-                if self.pushed_report_in_cycle:
-                    return {
-                        "success": False,
-                        "error": "Already pushed a report in this analysis run. This ends the analysis.",
-                    }
+                # NB: the "one report per analysis run" rule is enforced by the
+                # run itself (``_run_sub_analysis`` ends at the first published
+                # report). A flag on the shared agent would leak between
+                # concurrent flows (quick check vs cron vs plan designer).
                 current_sim_time = getattr(self, "current_simulation_timestamp", None)
                 if current_sim_time:
                     meta = arguments.get("metadata")

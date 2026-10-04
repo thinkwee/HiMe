@@ -20,6 +20,7 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
+from ..errors import FallbackTriggered  # noqa: E402
 from . import (
     BaseLLMProvider,
     parse_image_data_uri,
@@ -113,17 +114,24 @@ class GeminiProvider(BaseLLMProvider):
 
             # Gemini SDK is synchronous — run in thread pool
             # 120s timeout prevents indefinite hangs when Gemini API is overloaded
-            response = await asyncio.wait_for(
-                retry_async(
-                    lambda: asyncio.to_thread(
-                        self._client.models.generate_content,
-                        model=self.model,
-                        contents=contents,
-                        config=config,
-                    )
-                ),
-                timeout=120.0,
-            )
+            try:
+                response = await asyncio.wait_for(
+                    retry_async(
+                        lambda: asyncio.to_thread(
+                            self._client.models.generate_content,
+                            model=self.model,
+                            contents=contents,
+                            config=config,
+                        )
+                    ),
+                    timeout=120.0,
+                )
+            except asyncio.TimeoutError as te:
+                # An overloaded Gemini that never answers is a capacity
+                # problem — hand over to the fallback provider if configured.
+                raise FallbackTriggered(
+                    "", self.model, reason="Gemini request timed out after 120s",
+                ) from te
 
             # Handle blocked prompt
             if not response.candidates:
@@ -218,6 +226,22 @@ class GeminiProvider(BaseLLMProvider):
                 response_texts=response_texts,
             )
 
+        except FallbackTriggered as exc:
+            # Capacity / out-of-credit exhaustion: let the agent loop switch to
+            # the fallback provider instead of turning it into an error chunk.
+            logger.warning("Gemini fallback triggered: %s", exc)
+            provider_write_log(
+                provider="gemini",
+                model=self.model,
+                prompt_tokens=None,
+                completion_tokens=None,
+                duration_ms=int((time.perf_counter() - _t0) * 1000),
+                tools=tools,
+                messages=messages,
+                tool_calls_list=[],
+                response_texts=[f"ERROR: fallback — {exc}"],
+            )
+            raise
         except Exception as exc:
             logger.error("Gemini API error: %s", exc, exc_info=True)
             provider_write_log(

@@ -85,6 +85,10 @@ class ContextManager:
         by advancing the cut point past any orphaned tool result messages.
         """
         body = messages[preamble_size:]
+        if not body:
+            # Nothing but the preamble: there is nothing to drop (and indexing
+            # ``body[cut_idx]`` below would raise IndexError).
+            return list(messages), "[Context emergency-truncate: nothing to drop]"
         keep_count = max(1, len(body) * 3 // 4)  # Keep 75%
         cut_idx = len(body) - keep_count
 

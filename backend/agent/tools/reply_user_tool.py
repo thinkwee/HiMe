@@ -6,13 +6,15 @@ on the envelope the agent is currently handling (Telegram, Feishu, …).
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
 from ...i18n import t
 from ...messaging.base import BaseGateway, MessageEnvelope
 from ...messaging.registry import GatewayRegistry
-from .base import BaseTool
+from .base import BaseTool, _FlowVar
+from .paths import ChartPathError, resolve_chart_path
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,10 @@ class ReplyUserTool(BaseTool):
     """
 
     name = "reply_user"
+
+    # Envelope of the user message being answered -- per-flow (ContextVar), so a
+    # concurrent proactive flow can't redirect a reply to the wrong chat.
+    _current_envelope: MessageEnvelope | None = _FlowVar(None)
 
     def __init__(
         self,
@@ -119,13 +125,22 @@ class ReplyUserTool(BaseTool):
             }
         reply_markup = verification["reply_markup"]
 
-        # Send image first (if provided), then text message
+        # Send image first (if provided), then text message.  The path is
+        # LLM-supplied, so it must pass the shared chart-path gate (temp dir,
+        # image extension + magic bytes, size cap, no symlink escape) before
+        # any gateway sees it.
         sent_image_id: str | None = None
+        image_note = ""
+        safe_image: str | None = None
         if image_path:
-            import os
-            if os.path.isfile(image_path):
+            try:
+                safe_image = str(await asyncio.to_thread(resolve_chart_path, image_path))
+            except ChartPathError as exc:
+                logger.warning("reply_user: rejected image_path %r: %s", image_path, exc)
+        if image_path:
+            if safe_image is not None:
                 photo_ok = await gateway.send_photo(
-                    photo_path=image_path,
+                    photo_path=safe_image,
                     caption=message[:1024] if message else "",
                     chat_id=target,
                     reply_markup=reply_markup,
@@ -155,7 +170,11 @@ class ReplyUserTool(BaseTool):
                 else:
                     logger.warning("Photo send failed, falling back to text-only")
             else:
-                logger.warning("image_path not found: %s", image_path)
+                image_note = (
+                    "image_path was rejected: it must be an existing PNG/JPEG/GIF/WebP "
+                    "file saved under /tmp (e.g. plt.savefig('/tmp/chart.png')). "
+                    "The text was sent without the image."
+                )
 
         ok = await gateway.send_message(
             text=message,
@@ -168,11 +187,14 @@ class ReplyUserTool(BaseTool):
                 "reply_user sent via %s to %s: %s",
                 gateway.channel.value, target, message[:80],
             )
-            return {
+            result: dict[str, Any] = {
                 "success": True,
                 "message": "Reply sent successfully.",
                 "image_id": sent_image_id,
             }
+            if image_note:
+                result["image_warning"] = image_note
+            return result
         logger.warning(
             "reply_user failed on %s for chat %s (preview: %s)",
             gateway.channel.value, target, message[:100],

@@ -23,6 +23,33 @@ _STATUS_CODE_RES = {
 # substring test on the pattern ``max.*token`` can never match anything.
 _MAX_TOKEN_RE = re.compile(r"max\w*[\s_-]*(?:\w+[\s_-]+)?tokens?")
 
+# Provider phrasings for "the prompt does not fit the context window".  These
+# are deterministic: retrying (or switching provider) cannot help, only
+# shrinking the conversation can, so they must classify as CONTEXT_OVERFLOW.
+_CONTEXT_OVERFLOW_PATTERNS = (
+    "prompt is too long",
+    "prompt too long",
+    "input token count",
+    "exceeds the maximum number of tokens",
+    "maximum context length",
+    "context_length_exceeded",
+    "context length exceeded",
+    "context window",
+    "reduce the length of the messages",
+    "input is too long",
+)
+
+
+def is_context_overflow_message(msg: str) -> bool:
+    """True when *msg* (any case) looks like a context-window overflow."""
+    low = (msg or "").lower()
+    if any(p in low for p in _CONTEXT_OVERFLOW_PATTERNS):
+        return True
+    return (
+        any(kw in low for kw in ("context", "prompt too long", "token limit"))
+        or bool(_MAX_TOKEN_RE.search(low))
+    ) and any(kw in low for kw in ("long", "length", "exceed", "limit", "overflow"))
+
 
 class ErrorCategory(Enum):
     """Error classification — determines recovery strategy."""
@@ -69,12 +96,21 @@ class AgentError:
 
 
 class FallbackTriggered(Exception):
-    """Raised when retry exhaustion triggers a provider fallback."""
+    """Raised when retry exhaustion triggers a provider fallback.
 
-    def __init__(self, provider: str, model: str = "") -> None:
+    ``reason`` carries the original error text so that, when no fallback
+    provider is configured, the caller can surface the *real* problem
+    instead of an empty ``Fallback triggered: /`` message.
+    """
+
+    def __init__(self, provider: str, model: str = "", reason: str = "") -> None:
         self.provider = provider
         self.model = model
-        super().__init__(f"Fallback triggered: {provider}/{model}")
+        self.reason = reason
+        text = f"Fallback triggered: {provider}/{model}"
+        if reason:
+            text += f" ({reason})"
+        super().__init__(text)
 
 
 def _extract_status_code(exc: Exception) -> int | None:
@@ -152,6 +188,15 @@ def classify_error(error: Exception, context: str = "") -> AgentError:
             original=error,
         )
 
+    # Deterministic context overflow beats the substring heuristics below
+    # ("capacity", "rate limit"...) unless the server explicitly said 429/5xx.
+    if status not in (429, 503, 529) and is_context_overflow_message(msg):
+        return AgentError(
+            ErrorCategory.CONTEXT_OVERFLOW,
+            "Context window exceeded",
+            original=error,
+        )
+
     # Rate limiting (429)
     if status == 429 or any(kw in msg for kw in ("rate limit", "rate_limit", "quota exceeded")):
         return AgentError(
@@ -163,7 +208,7 @@ def classify_error(error: Exception, context: str = "") -> AgentError:
         )
 
     # Capacity / overloaded (529, 503)
-    if status in (529, 503) or any(kw in msg for kw in ("overloaded", "capacity", "529")):
+    if status in (529, 503) or any(kw in msg for kw in ("overloaded", "capacity")):
         return AgentError(
             ErrorCategory.CAPACITY,
             "Service overloaded",
@@ -173,16 +218,12 @@ def classify_error(error: Exception, context: str = "") -> AgentError:
         )
 
     # Context overflow
-    if (
-        any(kw in msg for kw in ("context", "prompt too long", "token limit"))
-        or _MAX_TOKEN_RE.search(msg)
-    ):
-        if any(kw in msg for kw in ("long", "length", "exceed", "limit", "overflow")):
-            return AgentError(
-                ErrorCategory.CONTEXT_OVERFLOW,
-                "Context window exceeded",
-                original=error,
-            )
+    if is_context_overflow_message(msg):
+        return AgentError(
+            ErrorCategory.CONTEXT_OVERFLOW,
+            "Context window exceeded",
+            original=error,
+        )
 
     # Transient server errors (500, 502, 504)
     if status in (500, 502, 504) or any(kw in msg for kw in (
