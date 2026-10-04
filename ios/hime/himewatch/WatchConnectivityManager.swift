@@ -7,6 +7,7 @@ import WatchConnectivity
 import Combine
 import Foundation
 import os
+import Security
 import WidgetKit
 
 // MARK: - Widget snapshot (App Group bridge to HimeWatchWidgets extension)
@@ -79,6 +80,49 @@ enum HimeWatchWidgetStore {
     }
 }
 
+/// Keychain-backed copy of the server bearer token pushed from the iPhone.
+/// Mirrors the iPhone's `TokenKeychain` (AfterFirstUnlock so a background
+/// complication/observer wake can still read it; never included in backups).
+private enum WatchTokenKeychain {
+    private static let service = "com.hime.watch.serverAuth"
+    private static let account = "serverAuthToken"
+
+    private nonisolated static var baseQuery: [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+    }
+
+    nonisolated static func read() -> String {
+        var query = baseQuery
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data,
+              let str = String(data: data, encoding: .utf8) else { return "" }
+        return str
+    }
+
+    nonisolated static func write(_ value: String) {
+        let query = baseQuery
+        guard !value.isEmpty else {
+            SecItemDelete(query as CFDictionary)
+            return
+        }
+        let attributes: [String: Any] = [
+            kSecValueData as String: Data(value.utf8),
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+        ]
+        if SecItemUpdate(query as CFDictionary, attributes as CFDictionary) == errSecSuccess { return }
+        var insert = query
+        insert.merge(attributes) { _, new in new }
+        SecItemAdd(insert as CFDictionary, nil)
+    }
+}
+
 private let wcLog = Logger(subsystem: "com.hime.watch", category: "WCSync")
 
 /// Log to both os.Logger and buffer for iPhone forwarding.
@@ -98,13 +142,50 @@ class WatchConnectivityManager: NSObject, ObservableObject {
     @Published var catMessage: String = ""
     @Published var lastNotification: String = ""
 
-    private var pendingBatches: [[[String: Any]]] = []
-    private let maxPendingBatches = 50
+    /// Batches that could not be handed to WatchConnectivity yet (session not
+    /// activated). Persisted to disk: the HealthKit anchor advances once a batch
+    /// is queued here, so losing this array on a relaunch would lose the samples.
+    private var pendingBatches: [[[String: Any]]] = WatchConnectivityManager.loadPendingBatches() {
+        didSet { WatchConnectivityManager.savePendingBatches(pendingBatches) }
+    }
+    private let maxPendingBatches = 200
+
+    private nonisolated static var pendingBatchesURL: URL? {
+        FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("watch_pending_batches.json")
+    }
+
+    private nonisolated static func loadPendingBatches() -> [[[String: Any]]] {
+        guard let url = pendingBatchesURL,
+              let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [[[String: Any]]] else { return [] }
+        return obj
+    }
+
+    private nonisolated static func savePendingBatches(_ batches: [[[String: Any]]]) {
+        guard let url = pendingBatchesURL else { return }
+        if batches.isEmpty {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let data = try? JSONSerialization.data(withJSONObject: batches) {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
 
     // MARK: - Server URL for direct HTTP upload
 
     /// The server ingest URL received from iPhone (e.g. "https://watch.example.com/ingest")
     @Published var serverIngestURL: String? = UserDefaults.standard.string(forKey: "serverIngestURL")
+
+    /// Bearer token for the direct upload, pushed from the iPhone alongside the
+    /// ingest URL. Kept in the Keychain (not UserDefaults) and read per request.
+    nonisolated static var serverAuthToken: String {
+        get { WatchTokenKeychain.read() }
+        set { WatchTokenKeychain.write(newValue) }
+    }
 
     /// Accumulated log lines to be forwarded to iPhone on next health data send.
     private var logBuffer: [String] = []
@@ -159,7 +240,12 @@ class WatchConnectivityManager: NSObject, ObservableObject {
 
     // MARK: - Send health data to iPhone via WatchConnectivity
 
-    nonisolated func sendHealthData(_ payloads: [[String: Any]]) async {
+    /// Returns true once the batch is safely handed off — queued with
+    /// WatchConnectivity (transferUserInfo / sendMessage with a queued
+    /// fallback) or persisted to `pendingBatches`. Callers advance their
+    /// HealthKit anchor only on true.
+    @discardableResult
+    nonisolated func sendHealthData(_ payloads: [[String: Any]]) async -> Bool {
         guard WCSession.default.activationState == .activated else {
             watchSyncLog("⌚ WC-SEND: session not activated, queuing \(payloads.count) samples to pendingBatches")
             await MainActor.run {
@@ -168,7 +254,7 @@ class WatchConnectivityManager: NSObject, ObservableObject {
                     self.pendingBatches.removeFirst()
                 }
             }
-            return
+            return true
         }
 
         let message: [String: Any] = ["type": "health_data", "payloads": payloads, "source": "watch"]
@@ -189,9 +275,11 @@ class WatchConnectivityManager: NSObject, ObservableObject {
             watchSyncLog("⌚ WC-SEND: phone NOT reachable, using transferUserInfo for \(payloads.count) samples")
             WCSession.default.transferUserInfo(message)
         }
+        return true
     }
 
     nonisolated func flushPending() async {
+        guard WCSession.default.activationState == .activated else { return }
         let batches = await MainActor.run { () -> [[[String: Any]]] in
             let b = self.pendingBatches
             self.pendingBatches.removeAll()
@@ -217,6 +305,10 @@ class WatchConnectivityManager: NSObject, ObservableObject {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("watch-background", forHTTPHeaderField: "X-Sync-Mode")
+        let token = WatchConnectivityManager.serverAuthToken
+        if !token.isEmpty {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
         request.timeoutInterval = 30
 
         let wireData = payloads.map { p -> [String: Any] in
@@ -305,6 +397,10 @@ extension WatchConnectivityManager: WCSessionDelegate {
                 self.serverIngestURL = ingestURL
                 UserDefaults.standard.set(ingestURL, forKey: "serverIngestURL")
             }
+            // An empty string is meaningful: the user cleared the token.
+            if let token = data["auth_token"] as? String, token != WatchConnectivityManager.serverAuthToken {
+                WatchConnectivityManager.serverAuthToken = token
+            }
             if catChanged { self.publishWatchSnapshot() }
         case "cat_state":
             self.catState = data["state"] as? String ?? "relaxed"
@@ -316,6 +412,9 @@ extension WatchConnectivityManager: WCSessionDelegate {
             if let ingestURL = data["ingest_url"] as? String {
                 self.serverIngestURL = ingestURL
                 UserDefaults.standard.set(ingestURL, forKey: "serverIngestURL")
+            }
+            if let token = data["auth_token"] as? String {
+                WatchConnectivityManager.serverAuthToken = token
             }
         default:
             break

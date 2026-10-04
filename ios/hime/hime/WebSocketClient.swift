@@ -83,13 +83,41 @@ private final class SessionDelegate: NSObject, URLSessionWebSocketDelegate, URLS
 /// path ever fires. Used by _sendWS. Touched only from @MainActor.
 @MainActor
 private final class ContinuationGuard {
-    private var continuation: CheckedContinuation<Void, Never>?
-    init(_ c: CheckedContinuation<Void, Never>) { continuation = c }
+    private var continuation: CheckedContinuation<Bool, Never>?
+    init(_ c: CheckedContinuation<Bool, Never>) { continuation = c }
+    /// `ok` is whether the frame was handed to the socket successfully.
     @discardableResult
-    func resume() -> Bool {
+    func resume(_ ok: Bool) -> Bool {
         guard let c = continuation else { return false }
         continuation = nil
-        c.resume()
+        c.resume(returning: ok)
+        return true
+    }
+}
+
+/// Server reply to one WS data frame (see `server.py` — hello / ack / nack).
+private enum WSAckResult {
+    case acked
+    case nacked(String)
+    /// Timeout or the socket went away before a reply arrived.
+    case failed
+}
+
+/// One in-flight WS batch waiting for the server's ack. Same once-only
+/// discipline as ContinuationGuard: reply, timeout and teardown race.
+@MainActor
+private final class AckWaiter {
+    let id: String
+    private var continuation: CheckedContinuation<WSAckResult, Never>?
+    init(id: String, continuation: CheckedContinuation<WSAckResult, Never>) {
+        self.id = id
+        self.continuation = continuation
+    }
+    @discardableResult
+    func resolve(_ result: WSAckResult) -> Bool {
+        guard let c = continuation else { return false }
+        continuation = nil
+        c.resume(returning: result)
         return true
     }
 }
@@ -135,6 +163,29 @@ final class WebSocketClient: ObservableObject {
     
     private let chunkSize = 500 // Max records per batch to avoid timeouts
     private var _isFlushing = false // Guard against concurrent flush calls
+
+    // WS application-level ack protocol (capability-negotiated per connection).
+    // A new server sends {"type":"hello","ack":1} right after the upgrade; from
+    // then on every data frame is answered with {"type":"ack"} (committed) or
+    // {"type":"nack"} (e.g. sync disabled) and the batch is popped from
+    // PendingStore ONLY on ack. Without a hello (old server) we keep the legacy
+    // behaviour of popping once the frame is handed to the socket.
+    private var wsServerAcks = false
+    /// True once the hello arrived or the grace period after connect elapsed;
+    /// WS drains wait for it so the first batch isn't sent un-acked by mistake.
+    private var wsHelloSettled = false
+    private var wsAckWaiter: AckWaiter?
+    private let wsAckTimeout: TimeInterval = 15.0
+    /// After a nack the WS drain pauses (data stays queued) and retries later.
+    private var wsPausedUntil: Date = .distantPast
+    private var wsResumeTask: Task<Void, Never>?
+    private let wsNackPause: TimeInterval = 60.0
+
+    // HTTP poison-batch protection: after this many consecutive non-retryable
+    // 4xx answers the head batch is moved to a quarantine file so it can't
+    // block the queue forever.
+    private var httpConsecutiveClientErrors = 0
+    private let maxHttpClientErrors = 5
 
     // HTTP retry backoff: if an upload fails the queue has no natural pump,
     // so we must re-kick _flush ourselves. Exponential, resets on any success.
@@ -193,17 +244,38 @@ final class WebSocketClient: ObservableObject {
 
     // MARK: - Public API
 
-    func connect() {
-        self.isSyncActive = true
+    /// Open (or re-open) the WebSocket.
+    ///
+    /// `userInitiated: true` (the default — Settings "Connect") clears the
+    /// persisted "user disconnected" flag. Automatic paths (app launch,
+    /// onboarding, server-settings changes) pass `false` so a Disconnect the
+    /// user chose survives relaunches instead of being silently undone.
+    func connect(userInitiated: Bool = true) {
+        if userInitiated {
+            self.isSyncActive = true
+        } else if !isSyncActive {
+            return
+        }
         queue.async { [weak self] in
             guard let self else { return }
             Task { @MainActor in
                 // Explicitly kill any zombie task waiting for old IP connectivity
                 self.wsTask?.cancel(with: .normalClosure, reason: nil)
                 self.wsTask = nil
+                self._resetWSProtocolState()
+                self.isConnected = false
                 self._openWS()
             }
         }
+    }
+
+    /// The server address or auth token changed (Settings). The live socket
+    /// still points at the old address / carries the old token, and the watch
+    /// and APNs registration hold stale copies — refresh all three.
+    func serverSettingsDidChange() {
+        connect(userInitiated: false)
+        PhoneConnectivityManager.shared.syncServerConfigToWatch()
+        DeviceTokenUploader.shared.uploadIfNeeded()
     }
 
     func reconnectIfNeeded() {
@@ -227,6 +299,7 @@ final class WebSocketClient: ObservableObject {
                 self._stopHeartbeat()
                 self.wsTask?.cancel(with: .normalClosure, reason: nil)
                 self.wsTask = nil
+                self._resetWSProtocolState()
                 self.isConnected = false
                 HealthKitManager.bgLog("WS: User disconnected")
             }
@@ -255,13 +328,18 @@ final class WebSocketClient: ObservableObject {
     // MARK: - Transports
 
     private func _flush(appState: String = "foreground") async {
+        // Every drain chain (WS loop, HTTP success/failure re-kicks,
+        // onWSOpened) funnels through here, so the sync gate lives here: a
+        // user "Disconnect" must stop uploads on all of them.
+        guard isSyncEnabled else { return }
         guard !_isFlushing else { return }
         _isFlushing = true
         defer { _isFlushing = false }
 
-        // Transport policy:
+        // Transport policy. `appState` is the real UIApplication state of the
+        // caller: "active" / "foreground", "inactive", or "background".
         //
-        //   Foreground → WS exclusively.
+        //   Active → WS exclusively.
         //     If WS isn't up yet, return. PendingStore is file-backed and
         //     loss-proof; samples sit there until onWSOpened re-kicks
         //     _flush and drains them over WS. HTTP was a fallback in the
@@ -270,9 +348,11 @@ final class WebSocketClient: ObservableObject {
         //     upload tasks that never completed (iOS "waiting for
         //     connectivity"). WS-only in foreground eliminates the race.
         //
-        //   Background → HTTP exclusively.
-        //     WebSocket tasks don't survive app suspension, so bgSession
-        //     (URLSessionConfiguration.background) carries the drain.
+        //   Not active → WS if it happens to be connected (burst mode keeps
+        //     it alive), otherwise the HTTP background session. WebSocket
+        //     tasks don't survive app suspension, so bgSession
+        //     (URLSessionConfiguration.background) carries the drain. An
+        //     explicit "background" always uses HTTP.
         //
         // This function drains in a loop rather than via recursive calls.
         // Previously _sendWS's success callback called _flush() again, but
@@ -282,6 +362,7 @@ final class WebSocketClient: ObservableObject {
         // a dead end; the pipeline only limped forward when an external
         // event (observer fire, WS reconnect) happened to call _flush with
         // _isFlushing = false.
+        let isActive = (appState == "foreground" || appState == "active")
         while true {
             // Callers wrap this in a UIBackgroundTask whose expiration handler
             // cancels the Task; honour that so we release the background
@@ -290,14 +371,11 @@ final class WebSocketClient: ObservableObject {
                 HealthKitManager.bgLog("📤 FLUSH: cancelled — \(PendingStore.shared.count) records kept")
                 return
             }
+            guard isSyncEnabled else { return }
             let storeCount = PendingStore.shared.count
             guard storeCount > 0 else { return }
 
-            if appState != "background" {
-                guard isConnected else {
-                    HealthKitManager.bgLog("📤 FLUSH: deferred — WS not connected, \(storeCount) queued (will drain on onWSOpened)")
-                    return
-                }
+            if appState != "background" && isConnected && wsHelloSettled {
                 // An HTTP upload started while backgrounded can still be in
                 // flight when the user foregrounds the app. Sending the same
                 // top-N over WS would pop it, and the HTTP completion would
@@ -307,19 +385,36 @@ final class WebSocketClient: ObservableObject {
                     HealthKitManager.bgLog("📤 FLUSH: deferred — \(pendingHTTPTasks.count) HTTP upload(s) still in flight")
                     return
                 }
+                guard Date() >= wsPausedUntil else {
+                    HealthKitManager.bgLog("📤 FLUSH: paused — server refused data, \(storeCount) records kept")
+                    return
+                }
                 let payloads = PendingStore.shared.peek(limit: chunkSize)
                 guard !payloads.isEmpty else { return }
                 HealthKitManager.bgLog("📤 FLUSH: \(payloads.count)/\(storeCount) records via WS (appState=\(appState))")
-                await _sendWS(payloads)
-                // If _sendWS hit an error, isConnected is now false and the
-                // next iteration returns via the guard above. PendingStore
-                // keeps the unsent top-N until WS reconnects.
-                continue
+                switch await _sendWS(payloads) {
+                case .sent:
+                    // Next iteration peeks the next chunk itself.
+                    continue
+                case .paused:
+                    _scheduleWSResume()
+                    return
+                case .failed:
+                    // isConnected is now false (or the batch is retained for
+                    // the next attempt); PendingStore keeps the unsent top-N.
+                    return
+                }
             }
 
-            // Background HTTP path. De-dup in-flight tasks so bg refresh events
-            // don't fire duplicates for the same top-N while an upload is still
-            // outstanding; the delegate re-kicks _flush when it completes.
+            if isActive {
+                HealthKitManager.bgLog("📤 FLUSH: deferred — WS not ready, \(storeCount) queued (will drain on onWSOpened)")
+                return
+            }
+
+            // HTTP path (background / inactive with no live WS). De-dup
+            // in-flight tasks so bg refresh events don't fire duplicates for
+            // the same top-N while an upload is still outstanding; the
+            // delegate re-kicks _flush when it completes.
             if !pendingHTTPTasks.isEmpty { return }
             let payloads = PendingStore.shared.peek(limit: chunkSize)
             guard !payloads.isEmpty else { return }
@@ -331,18 +426,38 @@ final class WebSocketClient: ObservableObject {
         }
     }
 
-    private func _sendWS(_ payloads: [HealthPayload]) async {
-        let wireData = payloads.map { ["ts": $0.ts, "f": $0.f, "v": $0.v] }
-        guard let data = try? JSONSerialization.data(withJSONObject: wireData) else { return }
+    private enum WSSendOutcome {
+        case sent       // batch confirmed (or, on an old server, handed to the socket) and popped
+        case paused     // server explicitly refused (nack): data kept, drain paused
+        case failed     // transport failure / timeout: data kept
+    }
 
-        return await withCheckedContinuation { continuation in
+    private func _sendWS(_ payloads: [HealthPayload]) async -> WSSendOutcome {
+        let wireItems = payloads.map { ["ts": $0.ts, "f": $0.f, "v": $0.v] }
+        // Only an ack-capable server understands the {"id","items"} wrapper; an
+        // old server would parse it as one flattened payload and store bogus
+        // "id"/"items" rows. So the wrapper is sent strictly after a hello.
+        let useAck = wsServerAcks
+        let batchID = UUID().uuidString
+        let body: Any
+        if useAck {
+            body = ["id": batchID, "items": wireItems] as [String: Any]
+        } else {
+            body = wireItems
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else {
+            HealthKitManager.bgLog("WS: payload serialization failed — batch kept")
+            return .failed
+        }
+
+        let sent: Bool = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             guard let task = wsTask else {
                 // isConnected can be true while wsTask is nil (e.g. connect()
                 // bailed on an invalid URL). Without clearing it here, _flush's
                 // `while true` loop would spin forever on the MainActor —
                 // nothing is popped and the isConnected guard never trips.
                 isConnected = false
-                continuation.resume()
+                continuation.resume(returning: false)
                 return
             }
 
@@ -354,11 +469,13 @@ final class WebSocketClient: ObservableObject {
             let timeoutTask = Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
                 guard !Task.isCancelled else { return }
-                if guardBox.resume() {
+                if guardBox.resume(false) {
                     HealthKitManager.bgLog("WS: Send timeout — forcing resume")
                     self.isConnected = false
                     self.wsTask?.cancel(with: .abnormalClosure, reason: nil)
                     self.wsTask = nil
+                    self._resetWSProtocolState()
+                    if self.shouldReconnect { self._scheduleReconnect() }
                 }
             }
 
@@ -366,31 +483,127 @@ final class WebSocketClient: ObservableObject {
                 guard let self else {
                     Task { @MainActor in
                         timeoutTask.cancel()
-                        guardBox.resume()
+                        guardBox.resume(false)
                     }
                     return
                 }
-                if let error = error {
-                    Task { @MainActor in
-                        timeoutTask.cancel()
+                Task { @MainActor in
+                    timeoutTask.cancel()
+                    if let error = error {
                         HealthKitManager.bgLog("WS: Send ERR — \(error.localizedDescription)")
                         self.isConnected = false
-                        guardBox.resume()
-                    }
-                } else {
-                    Task { @MainActor in
-                        timeoutTask.cancel()
-                        PendingStore.shared.pop(count: payloads.count)
-                        HealthKitManager.shared.markOldestAsSynced(count: payloads.count)
-                        HealthKitManager.bgLog("WS: Sent \(payloads.count) records")
-                        // Don't call _flush here. The enclosing _flush is
-                        // looping and will peek the next chunk itself.
-                        // Calling _flush here would recurse while
-                        // _isFlushing is still true and just trip the guard.
-                        guardBox.resume()
+                        guardBox.resume(false)
+                    } else {
+                        guardBox.resume(true)
                     }
                 }
             }
+        }
+        guard sent else { return .failed }
+
+        guard useAck else {
+            // Legacy server: no confirmation available — pop on successful send.
+            _commitWSBatch(payloads.count)
+            return .sent
+        }
+
+        switch await _awaitAck(id: batchID) {
+        case .acked:
+            _commitWSBatch(payloads.count)
+            return .sent
+        case .nacked(let reason):
+            HealthKitManager.bgLog("WS: server NACK (\(reason)) — \(payloads.count) records kept, pausing \(Int(wsNackPause))s")
+            wsPausedUntil = Date().addingTimeInterval(wsNackPause)
+            return .paused
+        case .failed:
+            HealthKitManager.bgLog("WS: no ack within \(Int(wsAckTimeout))s — \(payloads.count) records kept, reconnecting")
+            if let ws = wsTask {
+                _stopHeartbeat()
+                ws.cancel(with: .abnormalClosure, reason: nil)
+                wsTask = nil
+                isConnected = false
+                _resetWSProtocolState()
+                if shouldReconnect { _scheduleReconnect() }
+            }
+            return .failed
+        }
+    }
+
+    private func _commitWSBatch(_ count: Int) {
+        PendingStore.shared.pop(count: count)
+        HealthKitManager.shared.markOldestAsSynced(count: count)
+        HealthKitManager.bgLog("WS: Sent \(count) records")
+    }
+
+    /// Wait for the server's reply to the batch `id` (or time out).
+    private func _awaitAck(id: String) async -> WSAckResult {
+        await withCheckedContinuation { (continuation: CheckedContinuation<WSAckResult, Never>) in
+            let waiter = AckWaiter(id: id, continuation: continuation)
+            wsAckWaiter = waiter
+            let timeout = wsAckTimeout
+            Task { @MainActor [weak self, weak waiter] in
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                guard let waiter, waiter.resolve(.failed) else { return }
+                if self?.wsAckWaiter === waiter { self?.wsAckWaiter = nil }
+            }
+        }
+    }
+
+    /// Route a decoded server frame (hello / ack / nack) from the receive loop.
+    private func _handleWSMessage(_ message: URLSessionWebSocketTask.Message, from ws: URLSessionWebSocketTask) {
+        guard wsTask === ws else { return }
+        let raw: Data?
+        switch message {
+        case .string(let text): raw = text.data(using: .utf8)
+        case .data(let d):      raw = d
+        @unknown default:       raw = nil
+        }
+        guard let raw,
+              let obj = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
+              let type = obj["type"] as? String else { return }
+
+        switch type {
+        case "hello":
+            if let level = obj["ack"] as? Int, level >= 1 { wsServerAcks = true }
+            wsHelloSettled = true
+            HealthKitManager.bgLog("WS: server hello (ack=\(wsServerAcks))")
+        case "ack":
+            _deliverAck(.acked, id: obj["id"] as? String)
+        case "nack":
+            _deliverAck(.nacked(obj["reason"] as? String ?? "unknown"), id: obj["id"] as? String)
+        default:
+            break
+        }
+    }
+
+    private func _deliverAck(_ result: WSAckResult, id: String?) {
+        guard let waiter = wsAckWaiter else { return }
+        // A reply echoing a different id belongs to an earlier, abandoned
+        // batch — ignore it. A reply without an id is matched in order.
+        if let id, id != waiter.id { return }
+        wsAckWaiter = nil
+        waiter.resolve(result)
+    }
+
+    /// Forget everything negotiated with the previous socket and fail any
+    /// batch still waiting for its ack (its data stays in PendingStore).
+    private func _resetWSProtocolState() {
+        wsServerAcks = false
+        wsHelloSettled = false
+        if let waiter = wsAckWaiter {
+            wsAckWaiter = nil
+            waiter.resolve(.failed)
+        }
+    }
+
+    /// Re-kick the drain once the nack pause has elapsed.
+    private func _scheduleWSResume() {
+        wsResumeTask?.cancel()
+        let delay = max(1.0, wsPausedUntil.timeIntervalSinceNow)
+        wsResumeTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled, let self else { return }
+            await self._flush()
         }
     }
 
@@ -402,14 +615,15 @@ final class WebSocketClient: ObservableObject {
         var request = APIClient.request(url, method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(appState, forHTTPHeaderField: "X-Sync-Mode")
- 
+
         let wireData = payloads.map { ["ts": $0.ts, "f": $0.f, "v": $0.v] }
         guard let data = try? JSONSerialization.data(withJSONObject: wireData) else { return }
-        
+
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
         try? data.write(to: tmp)
 
-        let session = (appState == "foreground" ? fgSession : bgSession)
+        let useFG = (appState == "foreground" || appState == "active")
+        let session = useFG ? fgSession : bgSession
         let task = session.uploadTask(with: request, fromFile: tmp)
         task.taskDescription = tmp.absoluteString
         pendingHTTPTasks[SessionDelegate.taskKey(session: session, task: task)] = payloads.count
@@ -426,6 +640,7 @@ final class WebSocketClient: ObservableObject {
                 guard self.wsTask?.taskIdentifier == task.taskIdentifier else { return }
                 self._stopHeartbeat()
                 self.wsTask = nil
+                self._resetWSProtocolState()
                 self.isConnected = false
                 HealthKitManager.bgLog("WS: Error — \(error.localizedDescription)")
                 if self.shouldReconnect { self._scheduleReconnect() }
@@ -437,9 +652,20 @@ final class WebSocketClient: ObservableObject {
         self.isConnected = true
         self.reconnectDelay = 1.0
         HealthKitManager.bgLog("WS: Connected")
-        if let ws = wsTask {
-            _startHeartbeat(ws)
+        guard let ws = wsTask else { return }
+        _startHeartbeat(ws)
+        // A new server announces ack support in its first frame. Give it a
+        // short grace period before the first drain so the batch isn't sent in
+        // legacy (un-acked) mode on a server that would have acknowledged it.
+        // An old server never says hello; we just proceed after the grace.
+        if !wsHelloSettled {
+            for _ in 0..<20 {
+                if wsHelloSettled || wsTask !== ws { break }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
         }
+        guard wsTask === ws else { return }
+        wsHelloSettled = true
         await _flush()
     }
 
@@ -452,6 +678,7 @@ final class WebSocketClient: ObservableObject {
                 HealthKitManager.shared.markOldestAsSynced(count: count)
                 HealthKitManager.bgLog("HTTP: Success (\(count) records)")
                 self.httpRetryDelay = 2.0
+                self.httpConsecutiveClientErrors = 0
                 // HTTP tasks only fire from bgSession under the current
                 // transport policy, so keep the drain on the HTTP path.
                 // If this dispatched to foreground, the WS-only rule would
@@ -469,6 +696,7 @@ final class WebSocketClient: ObservableObject {
                 // The data remains in PendingStore so the next flush cycle retries it.
                 if let count = self.pendingHTTPTasks.removeValue(forKey: key) {
                     HealthKitManager.bgLog("HTTP: Task failed (\(count) records kept for retry) — \(error.localizedDescription)")
+                    self._noteHTTPFailure(error, batchCount: count)
                 } else {
                     HealthKitManager.bgLog("HTTP: Task failed — \(error.localizedDescription)")
                 }
@@ -483,6 +711,36 @@ final class WebSocketClient: ObservableObject {
                 await self._flush(appState: "background")
             }
         }
+    }
+
+    /// Track consecutive "this batch will never be accepted" answers (4xx other
+    /// than auth / sync-disabled / timeout / rate-limit). After
+    /// `maxHttpClientErrors` the head batch is parked in a quarantine file and
+    /// popped, so one malformed batch can't block every later upload forever.
+    private func _noteHTTPFailure(_ error: Error, batchCount: Int) {
+        let ns = error as NSError
+        let isPoisonStatus = ns.domain == "hime.http"
+            && (400..<500).contains(ns.code)
+            && ![401, 403, 408, 429].contains(ns.code)
+        guard isPoisonStatus else {
+            httpConsecutiveClientErrors = 0
+            return
+        }
+        httpConsecutiveClientErrors += 1
+        guard httpConsecutiveClientErrors >= maxHttpClientErrors else { return }
+        httpConsecutiveClientErrors = 0
+
+        let batch = PendingStore.shared.peek(limit: batchCount)
+        guard !batch.isEmpty else { return }
+        let fm = FileManager.default
+        if let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let file = dir.appendingPathComponent("quarantine_\(Int(Date().timeIntervalSince1970)).json")
+            if let data = try? JSONEncoder().encode(batch) {
+                try? data.write(to: file, options: .atomic)
+            }
+        }
+        PendingStore.shared.pop(count: batch.count)
+        HealthKitManager.bgLog("HTTP: quarantined \(batch.count) records after \(maxHttpClientErrors) consecutive rejections (HTTP \(ns.code))")
     }
 
     // MARK: - WS Lifecycle
@@ -508,6 +766,7 @@ final class WebSocketClient: ObservableObject {
         }
 
         shouldReconnect = true
+        _resetWSProtocolState()
         // Do NOT reset reconnectDelay here: _scheduleReconnect doubles it and
         // then calls back into _openWS, so resetting would pin the backoff at
         // 1s and reconnect once per second forever while the server is down.
@@ -527,12 +786,14 @@ final class WebSocketClient: ObservableObject {
             self.queue.async {
                 Task { @MainActor in
                     switch result {
-                    case .success:
+                    case .success(let message):
+                        self._handleWSMessage(message, from: ws)
                         self._receiveLoop(ws)
                     case .failure:
                         guard self.wsTask === ws else { return }
                         self._stopHeartbeat()
                         self.wsTask = nil
+                        self._resetWSProtocolState()
                         self.isConnected = false
                         if self.shouldReconnect { self._scheduleReconnect() }
                     }
@@ -551,6 +812,7 @@ final class WebSocketClient: ObservableObject {
         _stopHeartbeat()
         wsTask?.cancel(with: .abnormalClosure, reason: nil)
         wsTask = nil
+        _resetWSProtocolState()
         isConnected = false
         if shouldReconnect { _scheduleReconnect() }
     }

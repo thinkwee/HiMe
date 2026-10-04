@@ -333,7 +333,11 @@ struct TasksView: View {
         }
         .onAppear { vm.startPolling() }
         .onDisappear { vm.stopPolling() }
-        .refreshable { vm.fetchAll() }
+        .refreshable {
+            async let tasks: () = vm.fetchTasks()
+            async let rules: () = vm.fetchRules()
+            _ = await (tasks, rules)
+        }
     }
 }
 

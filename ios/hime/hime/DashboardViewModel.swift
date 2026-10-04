@@ -62,22 +62,27 @@ struct FeatureTypesResponse: Decodable {
 }
 
 // MARK: - Health Metric Models
+//
+// The model types below are `nonisolated`: with the project's default
+// MainActor isolation they would otherwise be main-actor-bound, and the
+// decode / series-building pass in `fetchHealthMetrics` runs on a background
+// task.
 
-struct DataPoint: Identifiable {
+nonisolated struct DataPoint: Identifiable {
     let id = UUID()
     let date: Date
     let value: Double
 }
 
 /// A sleep stage block: start time, duration, and stage type
-struct SleepBlock: Identifiable {
+nonisolated struct SleepBlock: Identifiable {
     let id = UUID()
     let start: Date
     let durationMinutes: Double
     let stage: SleepStage
 }
 
-enum SleepStage: String, CaseIterable {
+nonisolated enum SleepStage: String, CaseIterable {
     case deep = "Deep"
     case core = "Core"
     case rem = "REM"
@@ -86,7 +91,7 @@ enum SleepStage: String, CaseIterable {
 }
 
 /// How a metric should be rendered in the expanded chart card.
-enum ChartStyle {
+nonisolated enum ChartStyle {
     case line       // Continuous line + area fill (heart_rate, blood_oxygen, etc.)
     case bar        // Vertical bars for daily totals (steps, energy, etc.)
     case point      // Scatter dots + optional trend line (mobility metrics)
@@ -94,7 +99,7 @@ enum ChartStyle {
 }
 
 /// Y-axis domain configuration for a metric chart.
-struct YAxisConfig {
+nonisolated struct YAxisConfig {
     let min: Double?   // nil = auto from data
     let max: Double?   // nil = auto from data
     let floor: Double? // absolute minimum for auto-min (e.g. 30 bpm)
@@ -119,7 +124,7 @@ struct YAxisConfig {
     }
 }
 
-struct MetricSeries: Identifiable {
+nonisolated struct MetricSeries: Identifiable {
     var id: String { feature }
     let feature: String
     let displayName: String
@@ -133,13 +138,13 @@ struct MetricSeries: Identifiable {
     var sleepBlocks: [SleepBlock] = []
 }
 
-struct MetricCategoryData: Identifiable {
+nonisolated struct MetricCategoryData: Identifiable {
     var id: String { category.rawValue }
     let category: MetricCategory
     let series: [MetricSeries]
 }
 
-enum MetricTrend {
+nonisolated enum MetricTrend {
     case up, down, stable, unknown
 
     var icon: String {
@@ -161,7 +166,7 @@ enum MetricTrend {
     }
 }
 
-enum MetricCategory: String, CaseIterable {
+nonisolated enum MetricCategory: String, CaseIterable {
     case heart       = "Heart & Vitals"
     case sleep       = "Sleep & Mindfulness"
     case activity    = "Activity & Fitness"
@@ -667,16 +672,20 @@ class DashboardViewModel: ObservableObject {
     // MARK: - Fetch All
 
     func fetchAll() {
+        Task { await refreshAll() }
+    }
+
+    /// Awaitable variant for pull-to-refresh: the spinner stays up until the
+    /// fetches complete instead of vanishing immediately.
+    func refreshAll() async {
         guard !isRefreshing else { return }
         isRefreshing = true
-        Task {
-            await withTaskGroup(of: Void.self) { group in
-                group.addTask { await self.fetchAgentStatus() }
-                group.addTask { await self.fetchReports() }
-                group.addTask { await self.fetchHealthMetrics() }
-            }
-            isRefreshing = false
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { await self.fetchAgentStatus() }
+            group.addTask { await self.fetchReports() }
+            group.addTask { await self.fetchHealthMetrics() }
         }
+        isRefreshing = false
     }
 
     // MARK: - Agent Status
@@ -761,12 +770,12 @@ class DashboardViewModel: ObservableObject {
 
     // MARK: - Health Metrics from Server API (same data as web dashboard)
 
-    private struct DashboardResponse: Decodable {
+    private nonisolated struct DashboardResponse: Decodable {
         let success: Bool
         let features: [String: [ServerDataPoint]]?
     }
 
-    private struct ServerDataPoint: Decodable {
+    private nonisolated struct ServerDataPoint: Decodable {
         let ts: Double
         let v: Double
     }
@@ -784,46 +793,16 @@ class DashboardViewModel: ObservableObject {
             request.cachePolicy = .reloadIgnoringLocalCacheData
             request.timeoutInterval = 30
             let (data, _) = try await URLSession.shared.data(for: request)
-            let response = try JSONDecoder().decode(DashboardResponse.self, from: data)
-            guard let features = response.features else { return }
-
-            let sleepStageKeys = Set(["sleep_in_bed", "sleep_asleep", "sleep_core", "sleep_deep", "sleep_rem", "sleep_awake"])
-            // Pre-register ALL hardcoded keys so dynamic matching never duplicates them.
-            var processedKeys = Set<String>()
-            processedKeys.formUnion(sleepStageKeys)
-            for cat in MetricCategory.allCases {
-                processedKeys.formUnion(cat.featureKeys)
-            }
-
-            var categories: [MetricCategoryData] = []
-
-            for category in MetricCategory.allCases {
-                var seriesList: [MetricSeries] = []
-
-                for key in category.featureKeys {
-                    if key == "sleep_unified" {
-                        if let sleepSeries = self.buildUnifiedSleepSeries(from: features, stageKeys: sleepStageKeys) {
-                            seriesList.append(sleepSeries)
-                        }
-                        continue
-                    }
-
-                    if let s = buildSeries(key: key, points: features[key], category: category) {
-                        seriesList.append(s)
-                    }
-                }
-
-                // Dynamic: server features not in any hardcoded list
-                for (key, points) in features where !processedKeys.contains(key) && !points.isEmpty {
-                    guard MetricCategory.categorise(key) == category else { continue }
-                    processedKeys.insert(key)
-                    if let s = buildSeries(key: key, points: points, category: category) {
-                        seriesList.append(s)
-                    }
-                }
-
-                categories.append(MetricCategoryData(category: category, series: seriesList))
-            }
+            // Decoding up to 30 days of every feature and building all the
+            // series is CPU-heavy and used to run on the main actor every 30 s,
+            // hitching scrolling. Do it on a background task; only the result
+            // is published back here.
+            let categories = try await Task.detached(priority: .userInitiated) { () -> [MetricCategoryData]? in
+                let response = try JSONDecoder().decode(DashboardResponse.self, from: data)
+                guard let features = response.features else { return nil }
+                return DashboardViewModel.buildCategories(from: features)
+            }.value
+            guard let categories else { return }
             metricCategories = categories
             publishMetricsToWidget()
         } catch {
@@ -831,9 +810,52 @@ class DashboardViewModel: ObservableObject {
         }
     }
 
+    /// Build every category's series from the raw server features. Pure and
+    /// `nonisolated`: runs off the main actor (see `fetchHealthMetrics`).
+    nonisolated private static func buildCategories(from features: [String: [ServerDataPoint]]) -> [MetricCategoryData] {
+        let sleepStageKeys = Set(["sleep_in_bed", "sleep_asleep", "sleep_core", "sleep_deep", "sleep_rem", "sleep_awake"])
+        // Pre-register ALL hardcoded keys so dynamic matching never duplicates them.
+        var processedKeys = Set<String>()
+        processedKeys.formUnion(sleepStageKeys)
+        for cat in MetricCategory.allCases {
+            processedKeys.formUnion(cat.featureKeys)
+        }
+
+        var categories: [MetricCategoryData] = []
+
+        for category in MetricCategory.allCases {
+            var seriesList: [MetricSeries] = []
+
+            for key in category.featureKeys {
+                if key == "sleep_unified" {
+                    if let sleepSeries = buildUnifiedSleepSeries(from: features, stageKeys: sleepStageKeys) {
+                        seriesList.append(sleepSeries)
+                    }
+                    continue
+                }
+
+                if let s = buildSeries(key: key, points: features[key], category: category) {
+                    seriesList.append(s)
+                }
+            }
+
+            // Dynamic: server features not in any hardcoded list
+            for (key, points) in features where !processedKeys.contains(key) && !points.isEmpty {
+                guard MetricCategory.categorise(key) == category else { continue }
+                processedKeys.insert(key)
+                if let s = buildSeries(key: key, points: points, category: category) {
+                    seriesList.append(s)
+                }
+            }
+
+            categories.append(MetricCategoryData(category: category, series: seriesList))
+        }
+        return categories
+    }
+
     /// Build a MetricSeries for a single feature key, applying time-window filtering,
     /// daily aggregation (for bar charts), and chart/Y-axis configuration.
-    private func buildSeries(key: String, points: [ServerDataPoint]?, category: MetricCategory) -> MetricSeries? {
+    nonisolated private static func buildSeries(key: String, points: [ServerDataPoint]?, category: MetricCategory) -> MetricSeries? {
         guard let points = points, !points.isEmpty else { return nil }
 
         let windowMinutes = category.timeWindowMinutes(for: key)
@@ -876,7 +898,7 @@ class DashboardViewModel: ObservableObject {
 
     /// Aggregate hourly server data into daily totals for bar charts.
     /// Returns (chart-scale DataPoints, raw daily totals for trend).
-    private func aggregateDaily(_ points: [ServerDataPoint], key: String, category: MetricCategory) -> ([DataPoint], [Double]) {
+    nonisolated private static func aggregateDaily(_ points: [ServerDataPoint], key: String, category: MetricCategory) -> ([DataPoint], [Double]) {
         let calendar = Calendar.current
         var dayBuckets: [Date: Double] = [:]
         for p in points {
@@ -891,7 +913,7 @@ class DashboardViewModel: ObservableObject {
     }
 
     /// Trend for daily totals: compare last day vs previous day.
-    private func computeTrendFromDailyTotals(_ totals: [Double]) -> MetricTrend {
+    nonisolated private static func computeTrendFromDailyTotals(_ totals: [Double]) -> MetricTrend {
         guard totals.count >= 2 else { return .unknown }
         let last = totals[totals.count - 1]
         let prev = totals[totals.count - 2]
@@ -904,7 +926,36 @@ class DashboardViewModel: ObservableObject {
 
     // MARK: - Unified Sleep Builder
 
-    private func buildUnifiedSleepSeries(from features: [String: [ServerDataPoint]], stageKeys: Set<String>) -> MetricSeries? {
+    /// Minimum asleep time for a session to count as a "night" rather than a nap.
+    nonisolated private static let minNightSleepSeconds: Double = 3 * 3600
+
+    /// Split stage blocks (sorted by start) into sessions separated by >2 h
+    /// gaps — the same rule the timeline card uses. `inBed` blocks are
+    /// excluded: they overlap the asleep stages and only describe time in bed.
+    nonisolated private static func sleepSessions(from blocks: [SleepBlock]) -> [[SleepBlock]] {
+        let sorted = blocks.filter { $0.stage != .inBed }.sorted { $0.start < $1.start }
+        guard let first = sorted.first else { return [] }
+        var sessions: [[SleepBlock]] = [[first]]
+        var runningEnd = first.start.addingTimeInterval(first.durationMinutes * 60)
+        for block in sorted.dropFirst() {
+            if block.start.timeIntervalSince(runningEnd) > 7200 {
+                sessions.append([block])
+            } else {
+                sessions[sessions.count - 1].append(block)
+            }
+            // Max, not last: blocks from two sources can overlap.
+            runningEnd = max(runningEnd, block.start.addingTimeInterval(block.durationMinutes * 60))
+        }
+        return sessions
+    }
+
+    /// Seconds actually asleep in a session (awake / in-bed excluded).
+    nonisolated private static func asleepSeconds(_ session: [SleepBlock]) -> Double {
+        session.filter { $0.stage != .awake && $0.stage != .inBed }
+            .reduce(0.0) { $0 + $1.durationMinutes * 60 }
+    }
+
+    nonisolated private static func buildUnifiedSleepSeries(from features: [String: [ServerDataPoint]], stageKeys: Set<String>) -> MetricSeries? {
         let stageMap: [String: SleepStage] = [
             "sleep_core": .core, "sleep_deep": .deep,
             "sleep_rem": .rem, "sleep_awake": .awake,
@@ -929,41 +980,57 @@ class DashboardViewModel: ObservableObject {
         guard !blocks.isEmpty else { return nil }
         let sortedBlocks = blocks.sorted { $0.start < $1.start }
 
-        // Group by the calendar day the block ends on (matches DashboardView logic).
+        // Group by noon-to-noon "sleep day": a block belongs to the day that
+        // started at the noon before its end. Overnight sleep (23:00 → 07:00)
+        // and an afternoon nap that same day land in one group, while the
+        // following night starts a new one. Grouping by the calendar day the
+        // block ends on (the old rule) made a 14:00 nap the newest "night".
+        // Overlap between sources (e.g. iPhone + Watch stage blocks) is NOT
+        // merged here — as before, awake/in-bed are excluded from the totals
+        // and cross-source duplicates are already collapsed server-side on
+        // (timestamp, feature).
         let calendar = Calendar.current
-        var nightGroups: [Date: [SleepBlock]] = [:]
+        var dayGroups: [Date: [SleepBlock]] = [:]
         for block in sortedBlocks {
-            let endDate = block.start.addingTimeInterval(block.durationMinutes * 60)
-            let day = calendar.startOfDay(for: endDate)
-            nightGroups[day, default: []].append(block)
+            let end = block.start.addingTimeInterval(block.durationMinutes * 60)
+            let sleepDay = calendar.startOfDay(for: end.addingTimeInterval(-12 * 3600))
+            dayGroups[sleepDay, default: []].append(block)
         }
 
-        // Find last night: the most recent night key that is before now
-        let sortedNights = nightGroups.keys.sorted()
-        guard let lastNightKey = sortedNights.last else { return nil }
-        let lastNightBlocks = nightGroups[lastNightKey] ?? []
-
-        // Compute last night's actual sleep (exclude awake & inBed)
-        let lastNightSleepSeconds = lastNightBlocks
-            .filter { $0.stage != .awake && $0.stage != .inBed }
-            .reduce(0.0) { $0 + $1.durationMinutes * 60 }
-
-        // Build daily totals for trend
-        var dailyTotals: [(Date, Double)] = []
-        for nightDate in sortedNights {
-            let sleepSec = (nightGroups[nightDate] ?? [])
-                .filter { $0.stage != .awake && $0.stage != .inBed }
-                .reduce(0.0) { $0 + $1.durationMinutes * 60 }
-            dailyTotals.append((nightDate, sleepSec))
+        // One entry per sleep day, represented by its main (longest-asleep)
+        // session. `wakeDay` keeps the chart's x-axis on the day the sleep
+        // ended, as before.
+        var nights: [(wakeDay: Date, asleepSeconds: Double, end: Date)] = []
+        for key in dayGroups.keys.sorted() {
+            let sessions = sleepSessions(from: dayGroups[key] ?? [])
+            guard let main = sessions.max(by: { asleepSeconds($0) < asleepSeconds($1) }),
+                  let lastBlock = main.max(by: {
+                      $0.start.addingTimeInterval($0.durationMinutes * 60) < $1.start.addingTimeInterval($1.durationMinutes * 60)
+                  }) else { continue }
+            let end = lastBlock.start.addingTimeInterval(lastBlock.durationMinutes * 60)
+            nights.append((wakeDay: calendar.startOfDay(for: end), asleepSeconds: asleepSeconds(main), end: end))
         }
-        let dataPoints = dailyTotals.map { DataPoint(date: $0.0, value: $0.1 / 3600.0) }
+        guard let newest = nights.last else { return nil }
+
+        // "Last night" = the main sleep of the most recent sleep day. If that
+        // day only holds a short nap so far (e.g. an afternoon nap before
+        // tonight's sleep), fall back to the latest real night within 48 h.
+        var lastNight = newest
+        if newest.asleepSeconds < minNightSleepSeconds,
+           let real = nights.last(where: {
+               $0.asleepSeconds >= minNightSleepSeconds && newest.end.timeIntervalSince($0.end) <= 48 * 3600
+           }) {
+            lastNight = real
+        }
+
+        let dataPoints = nights.map { DataPoint(date: $0.wakeDay, value: $0.asleepSeconds / 3600.0) }
 
         return MetricSeries(
             feature: "sleep_unified",
             displayName: "Sleep",
             unit: "h",
             dataPoints: dataPoints,
-            latestValue: lastNightSleepSeconds,  // last night's total in seconds
+            latestValue: lastNight.asleepSeconds,  // last night's main sleep in seconds
             trend: dataPoints.count >= 2
                 ? ((dataPoints.last?.value ?? 0) > dataPoints[dataPoints.count - 2].value ? .up : .down)
                 : .unknown,
@@ -975,7 +1042,7 @@ class DashboardViewModel: ObservableObject {
 
     // MARK: - Trend Computation
 
-    private func computeTrendFromPoints(_ points: [ServerDataPoint]) -> MetricTrend {
+    nonisolated private static func computeTrendFromPoints(_ points: [ServerDataPoint]) -> MetricTrend {
         guard points.count >= 2 else { return .unknown }
         let last = points[points.count - 1].v
         let prev = points[points.count - 2].v

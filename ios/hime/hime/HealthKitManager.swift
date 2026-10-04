@@ -144,6 +144,10 @@ final class HealthKitManager: ObservableObject {
 
     nonisolated private let store = HKHealthStore()
     private var workoutSession: HKWorkoutSession?
+    /// Live observer queries, kept so consent revocation can stop them.
+    private var observerQueries: [HKObserverQuery] = []
+    /// A force sweep is running — a second tap is ignored until it finishes.
+    private var isForceFetching = false
     private let maxRecentSamples = 1000
 
     /// Cumulative metrics that must use HKStatisticsCollectionQuery for proper
@@ -282,6 +286,12 @@ final class HealthKitManager: ObservableObject {
             return
         }
 
+        // Burst Mode is a persisted preference, but the workout session it
+        // relies on does not survive a relaunch (the property initialiser does
+        // not fire didSet). Restart it so the flag and the session agree — this
+        // is also what didEnterBackground assumes when it keeps the WS alive.
+        if isBurstModeEnabled { startWorkoutSession() }
+
         if didRegisterObservers {
             HealthKitManager.bgLog("HealthKit observers already registered — skipping duplicate setup()")
             return
@@ -339,11 +349,15 @@ final class HealthKitManager: ObservableObject {
                     completion()
                     return
                 }
-                await self.fetchAndStore(feature: feature, sampleType: sampleType, unit: unit, appState: "foreground")
+                // Real app state, not a hard-coded "foreground": on a
+                // background wake the flush must take the HTTP background
+                // session path, since the WebSocket is not alive.
+                await self.fetchAndStore(feature: feature, sampleType: sampleType, unit: unit, appState: stateStr)
                 completion()
                 await handle.end()
             }
         }
+        observerQueries.append(observer)
         store.execute(observer)
     }
 
@@ -372,12 +386,13 @@ final class HealthKitManager: ObservableObject {
                     return
                 }
                 await self.fetchAndStoreCumulative(
-                    feature: feature, quantityType: quantityType, unit: unit, appState: "foreground"
+                    feature: feature, quantityType: quantityType, unit: unit, appState: stateStr
                 )
                 completion()
                 await handle.end()
             }
         }
+        observerQueries.append(observer)
         store.execute(observer)
     }
 
@@ -392,16 +407,33 @@ final class HealthKitManager: ObservableObject {
             // than using DispatchQueue.main.sync, and why the expiration
             // handler must end the task.
             Task {
+                let stateStr = await BackgroundTaskHandle.appStateDescription()
                 guard let handle = await BackgroundTaskHandle.begin(name: "HKFetch-workouts") else {
                     completion()
                     return
                 }
-                await self.fetchWorkouts(appState: "foreground")
+                await self.fetchWorkouts(appState: stateStr)
                 completion()
                 await handle.end()
             }
         }
+        observerQueries.append(observer)
         store.execute(observer)
+    }
+
+    /// Consent revoked: stop collecting. Observers and background delivery are
+    /// torn down, the upload queue is discarded and the sync cursors reset so a
+    /// later re-consent re-reads the 14-day window instead of resuming mid-way.
+    func stopCollection() {
+        for q in observerQueries { store.stop(q) }
+        observerQueries.removeAll()
+        store.disableAllBackgroundDelivery { _, _ in }
+        didRegisterObservers = false
+        if workoutSession != nil { stopWorkoutSession() }
+        PendingStore.shared.clear()
+        HealthKitManager.resetSyncCursors()
+        recentSamples = []
+        HealthKitManager.bgLog("HK: collection stopped (consent revoked) — queue cleared")
     }
 
     // MARK: - Workout Fetch
@@ -414,7 +446,10 @@ final class HealthKitManager: ObservableObject {
         let predicate = HKQuery.predicateForSamples(withStart: backfillStart, end: nil, options: .strictStartDate)
 
         let healthStore = await MainActor.run { HealthKitManager.shared.store }
-        let payloads: [HealthPayload] = await withCheckedContinuation { continuation in
+        // The anchor comes back with the payloads and is saved only after they
+        // are durably queued: persisting it inside the handler dropped the
+        // samples for good if the app died (or the append failed) before upload.
+        let (payloads, newAnchor): ([HealthPayload], HKQueryAnchor?) = await withCheckedContinuation { continuation in
             let query = HKAnchoredObjectQuery(
                 type: HKWorkoutType.workoutType(), predicate: predicate, anchor: anchor,
                 limit: HKObjectQueryNoLimit
@@ -438,17 +473,20 @@ final class HealthKitManager: ObservableObject {
                     }
                 }
 
-                if let newAnchor {
-                    HealthKitManager.saveAnchorStatic(newAnchor, key: anchorKey)
-                }
-                continuation.resume(returning: results)
+                continuation.resume(returning: (results, newAnchor))
             }
             healthStore.execute(query)
         }
 
-        guard !payloads.isEmpty else { return }
+        guard !payloads.isEmpty else {
+            if let newAnchor { HealthKitManager.saveAnchorStatic(newAnchor, key: anchorKey) }
+            return
+        }
 
-        await PendingStore.shared.append(payloads)
+        let queued = await PendingStore.shared.append(payloads)
+        if queued, let newAnchor {
+            HealthKitManager.saveAnchorStatic(newAnchor, key: anchorKey)
+        }
 
         let ts = Date().formatted(date: .omitted, time: .standard)
         let recents = payloads.map {
@@ -559,10 +597,11 @@ final class HealthKitManager: ObservableObject {
 
         HealthKitManager.bgLog("📱 HK-STATS: \(feature) — \(localPayloads.count) new buckets → PendingStore (appState=\(appState))")
 
-        await PendingStore.shared.append(localPayloads)
+        let queued = await PendingStore.shared.append(localPayloads)
 
         // Advance high-water mark to the latest bucket END time so we don't re-fetch it.
-        if latestEndTs > 0 {
+        // Only once the buckets are durably queued.
+        if queued, latestEndTs > 0 {
             UserDefaults.standard.set(latestEndTs, forKey: hwmKey)
         }
 
@@ -606,7 +645,9 @@ final class HealthKitManager: ObservableObject {
         let predicate = HKQuery.predicateForSamples(withStart: backfillStart, end: nil, options: .strictStartDate)
 
         let healthStore = await MainActor.run { HealthKitManager.shared.store }
-        let localPayloads: [HealthPayload] = await withCheckedContinuation { continuation in
+        // New anchor is returned alongside the payloads and saved only after
+        // PendingStore.append succeeds (see fetchWorkouts).
+        let (localPayloads, newAnchor): ([HealthPayload], HKQueryAnchor?) = await withCheckedContinuation { continuation in
             let query = HKAnchoredObjectQuery(
                 type: sampleType, predicate: predicate, anchor: anchor,
                 limit: HKObjectQueryNoLimit
@@ -638,22 +679,23 @@ final class HealthKitManager: ObservableObject {
                     }
                 }
 
-                if let newAnchor {
-                    HealthKitManager.saveAnchorStatic(newAnchor, key: anchorKey)
-                }
-                continuation.resume(returning: payloads)
+                continuation.resume(returning: (payloads, newAnchor))
             }
             healthStore.execute(query)
         }
 
         guard !localPayloads.isEmpty else {
+            if let newAnchor { HealthKitManager.saveAnchorStatic(newAnchor, key: anchorKey) }
             HealthKitManager.bgLog("📱 HK-FETCH: \(feature) — 0 new samples (appState=\(appState))")
             return
         }
 
         HealthKitManager.bgLog("📱 HK-FETCH: \(feature) — \(localPayloads.count) new samples → PendingStore (appState=\(appState))")
 
-        await PendingStore.shared.append(localPayloads)
+        let queued = await PendingStore.shared.append(localPayloads)
+        if queued, let newAnchor {
+            HealthKitManager.saveAnchorStatic(newAnchor, key: anchorKey)
+        }
 
         let ts = Date().formatted(date: .omitted, time: .standard)
         let recentSlice = localPayloads.suffix(1000)
@@ -719,22 +761,33 @@ final class HealthKitManager: ObservableObject {
     /// fresh Docker volume, a different server) — otherwise history never
     /// re-uploads. Re-sending is safe: the server upserts on (ts, feature).
     func forceFetch(fullResync: Bool = false) {
-        if fullResync {
-            HealthKitManager.resetSyncCursors()
+        // Single-flight: a second tap while a sweep runs would reset the
+        // cursors mid-sweep and start a parallel, duplicate upload pass.
+        guard !isForceFetching else {
+            HealthKitManager.bgLog("HK: Force sweep already running — ignoring")
+            return
         }
-        HealthKitManager.bgLog("HK: Force sweep started\(fullResync ? " (full 14-day resync)" : "")...")
         var bgTaskID: UIBackgroundTaskIdentifier = .invalid
         var sweep: Task<Void, Never>?
-        bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "HKForceFetch") {
+        bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "HKForceFetch") { [weak self] in
             // Guard against ending the same identifier twice (expiration racing
             // the normal completion path) — UIKit treats that as a hard error.
             sweep?.cancel()
+            self?.isForceFetching = false
             if bgTaskID != .invalid {
                 UIApplication.shared.endBackgroundTask(bgTaskID)
                 bgTaskID = .invalid
             }
         }
         guard bgTaskID != .invalid else { return }
+        isForceFetching = true
+        // Forget the cursors only now that the background-task assertion was
+        // granted; resetting them before a refused task left the next normal
+        // sync re-reading everything with no upload pass to match.
+        if fullResync {
+            HealthKitManager.resetSyncCursors()
+        }
+        HealthKitManager.bgLog("HK: Force sweep started\(fullResync ? " (full 14-day resync)" : "")...")
         // FIX: Also fetches categoryMetrics (sleep, mindful, heart events) which was missing before.
         sweep = Task {
             for (f, id, unit) in self.quantityMetrics {
@@ -753,6 +806,7 @@ final class HealthKitManager: ObservableObject {
             }
             await self.fetchWorkouts(appState: "foreground")
             HealthKitManager.bgLog("HK: Force sweep completed.")
+            self.isForceFetching = false
             if bgTaskID != .invalid {
                 UIApplication.shared.endBackgroundTask(bgTaskID)
                 bgTaskID = .invalid
