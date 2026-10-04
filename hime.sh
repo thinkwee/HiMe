@@ -219,6 +219,20 @@ _pid_in_project() {
     return 1
 }
 
+# True when PID is this script or one of its ancestors (the shell / editor
+# terminal that invoked it). The name patterns below also match a caller's
+# command line (e.g. a shell running `... backend.main ...` from inside the
+# checkout), and killing our own caller would abort the restart half-way.
+_is_own_ancestor() {
+    local target="$1" cur="$$" i
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
+        [ "$cur" = "$target" ] && return 0
+        cur="$(ps -o ppid= -p "$cur" 2>/dev/null | tr -d ' ')"
+        case "$cur" in ''|0|1) return 1 ;; esac
+    done
+    return 1
+}
+
 # SIGTERM, wait up to ~5s for a clean exit (SQLite WAL checkpoints, agent
 # state flush), then SIGKILL whatever is left.
 _terminate_pids() {
@@ -260,7 +274,7 @@ _native_kill_processes() {
     # _pid_in_project), so generic patterns are safe here.
     for pat in "backend.main" "ios/Server/server.py" "vite" "npm run dev" "multiprocessing"; do
         for pid in $(pgrep -f "$pat" 2>/dev/null || true); do
-            if [ "$pid" = "$$" ] || [ "$pid" = "$PPID" ]; then continue; fi
+            if _is_own_ancestor "$pid"; then continue; fi
             if _pid_in_project "$pid"; then pids+=("$pid"); fi
         done
     done
