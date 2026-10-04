@@ -105,9 +105,9 @@ struct ChatView: View {
                         scrollToBottom(proxy, animated: true)
                     }
                 }
-                // A grouped backdrop so the (white) assistant cards have contrast
-                // and read as distinct messages rather than blending into the page.
-                .background(HimeColor.cream)
+                // Same page background as every other screen; the white assistant
+                // cards still read as distinct messages against it.
+                .background(HimeColor.paper)
                 .onChange(of: vm.didLoadHistory) { _, loaded in
                     guard loaded else { return }
                     jumpToBottom(proxy)
