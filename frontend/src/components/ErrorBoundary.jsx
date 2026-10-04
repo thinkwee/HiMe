@@ -18,13 +18,13 @@ export default class ErrorBoundary extends Component {
       if (this.props.fallback !== undefined) return this.props.fallback
       const t = i18n.t.bind(i18n)
       return (
-        <div className="flex items-center justify-center h-screen bg-gray-50">
+        <div className="flex items-center justify-center h-screen bg-sunken">
           <div className="text-center p-8">
-            <h2 className="text-xl font-bold text-gray-900 mb-2">{t('common.something_went_wrong')}</h2>
-            <p className="text-gray-500 mb-4">{this.state.error?.message || t('common.unexpected_error')}</p>
+            <h2 className="text-xl font-bold text-ink mb-2">{t('common.something_went_wrong')}</h2>
+            <p className="text-ink-2 mb-4">{this.state.error?.message || t('common.unexpected_error')}</p>
             <button
               onClick={() => window.location.reload()}
-              className="px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700"
+              className="px-4 py-2 bg-primary-600 text-white rounded-control hover:bg-primary-600/90"
             >
               {t('common.reload_page')}
             </button>

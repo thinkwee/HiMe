@@ -2,11 +2,12 @@ import { memo, useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Light as SyntaxHighlighter } from 'react-syntax-highlighter'
 import python from 'react-syntax-highlighter/dist/esm/languages/hljs/python'
-import { githubGist } from 'react-syntax-highlighter/dist/esm/styles/hljs'
+import { githubGist, atomOneDark } from 'react-syntax-highlighter/dist/esm/styles/hljs'
 import { api } from '../lib/api'
 import { formatFullDateTime, parseBackendDate } from '../lib/utils'
 import { useAppActions } from '../context/AppContext'
 import InlineFlash from '../components/InlineFlash'
+import { useTheme } from '../lib/theme'
 import { useDocumentVisible, useFlash, useOnActivate, usePolling } from '../lib/hooks'
 import {
   eventKey, eventTimeMs, eventToMessage, formatTokenUsage, mergeActivity, unwrapEvent,
@@ -51,28 +52,28 @@ const genId = () =>
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`
 
 const TASK_TYPE_BADGE = {
-  analysis: { labelKey: 'agent.badge_analysis', cls: 'bg-emerald-100 text-emerald-700' },
-  chat: { labelKey: 'agent.badge_chat', cls: 'bg-indigo-100 text-indigo-700' },
-  scheduled: { labelKey: 'agent.badge_scheduled', cls: 'bg-amber-100 text-amber-700' },
-  quick: { labelKey: 'agent.badge_quick', cls: 'bg-pink-100 text-pink-700' },
-  plan: { labelKey: 'agent.badge_plan', cls: 'bg-teal-100 text-teal-700' },
+  analysis: { labelKey: 'agent.badge_analysis', cls: 'bg-ok/15 text-ok-ink' },
+  chat: { labelKey: 'agent.badge_chat', cls: 'bg-info/15 text-info-ink' },
+  scheduled: { labelKey: 'agent.badge_scheduled', cls: 'bg-warn/15 text-warn-ink' },
+  quick: { labelKey: 'agent.badge_quick', cls: 'bg-bad/15 text-bad-ink' },
+  plan: { labelKey: 'agent.badge_plan', cls: 'bg-ok/15 text-ok-ink' },
 }
 
 // Per-tool theme colours — avoids clashing with task-type badge colours
 const TOOL_THEME = {
-  sql:            { bg: 'bg-cyan-50/60',   text: 'text-cyan-700',    header: 'bg-cyan-100/60 text-cyan-800',    border: 'border-cyan-200/50',    labelKey: 'agent.tool_sql',         icon: '🔍' },
-  code:           { bg: 'bg-violet-50/60',  text: 'text-violet-700',  header: 'bg-violet-100/60 text-violet-800', border: 'border-violet-200/50', labelKey: 'agent.tool_code',        icon: '⚡' },
-  push_report:    { bg: 'bg-blue-50/60',    text: 'text-blue-700',    header: 'bg-blue-100/60 text-blue-800',    border: 'border-blue-200/50',    labelKey: 'agent.tool_push_report', icon: '📊' },
-  update_md:      { bg: 'bg-slate-50/60',   text: 'text-slate-600',   header: 'bg-slate-100/60 text-slate-700',  border: 'border-slate-200/50',   labelKey: 'agent.tool_update_md',   icon: '📝' },
-  reply_user:     { bg: 'bg-sky-50/60',     text: 'text-sky-700',     header: 'bg-sky-100/60 text-sky-800',      border: 'border-sky-200/50',     labelKey: 'agent.tool_reply_user',  icon: '✉️' },
-  finish_chat:    { bg: 'bg-stone-50/60',   text: 'text-stone-600',   header: 'bg-stone-100/60 text-stone-700',  border: 'border-stone-200/50',   labelKey: 'agent.tool_finish_chat', icon: '💬' },
-  sleep:          { bg: 'bg-stone-50/60',   text: 'text-stone-600',   header: 'bg-stone-100/60 text-stone-700',  border: 'border-stone-200/50',   labelKey: 'agent.tool_sleep',       icon: '💤' },
-  create_page:    { bg: 'bg-rose-50/60',    text: 'text-rose-700',    header: 'bg-rose-100/60 text-rose-800',    border: 'border-rose-200/50',    labelKey: 'agent.tool_create_page', icon: '🧩' },
-  read_skill:     { bg: 'bg-amber-50/60',   text: 'text-amber-700',   header: 'bg-amber-100/60 text-amber-800',  border: 'border-amber-200/50',   labelKey: 'agent.tool_read_skill',  icon: '📖' },
-  analyze:        { bg: 'bg-emerald-50/60', text: 'text-emerald-700', header: 'bg-emerald-100/60 text-emerald-800', border: 'border-emerald-200/50', labelKey: 'agent.tool_analyze',   icon: '🔬' },
-  manage:         { bg: 'bg-orange-50/60',  text: 'text-orange-700',  header: 'bg-orange-100/60 text-orange-800', border: 'border-orange-200/50', labelKey: 'agent.tool_manage',     icon: '🗂️' },
+  sql:            { bg: 'bg-info/10',   text: 'text-info-ink',    header: 'bg-info/15 text-info-ink',    border: 'border-info/30',    labelKey: 'agent.tool_sql',         icon: '🔍' },
+  code:           { bg: 'bg-info/10',  text: 'text-info-ink',  header: 'bg-info/15 text-info-ink', border: 'border-info/30', labelKey: 'agent.tool_code',        icon: '⚡' },
+  push_report:    { bg: 'bg-info/10',    text: 'text-info-ink',    header: 'bg-info/15 text-info-ink',    border: 'border-info/30',    labelKey: 'agent.tool_push_report', icon: '📊' },
+  update_md:      { bg: 'bg-sunken/60',   text: 'text-ink-2',   header: 'bg-sunken/60 text-ink',  border: 'border-line/50',   labelKey: 'agent.tool_update_md',   icon: '📝' },
+  reply_user:     { bg: 'bg-info/10',     text: 'text-info-ink',     header: 'bg-info/15 text-info-ink',      border: 'border-info/30',     labelKey: 'agent.tool_reply_user',  icon: '✉️' },
+  finish_chat:    { bg: 'bg-sunken/60',   text: 'text-ink-2',   header: 'bg-sunken/60 text-ink',  border: 'border-line/50',   labelKey: 'agent.tool_finish_chat', icon: '💬' },
+  sleep:          { bg: 'bg-sunken/60',   text: 'text-ink-2',   header: 'bg-sunken/60 text-ink',  border: 'border-line/50',   labelKey: 'agent.tool_sleep',       icon: '💤' },
+  create_page:    { bg: 'bg-bad/10',    text: 'text-bad-ink',    header: 'bg-bad/15 text-bad-ink',    border: 'border-bad/30',    labelKey: 'agent.tool_create_page', icon: '🧩' },
+  read_skill:     { bg: 'bg-warn/10',   text: 'text-warn-ink',   header: 'bg-warn/15 text-warn-ink',  border: 'border-warn/30',   labelKey: 'agent.tool_read_skill',  icon: '📖' },
+  analyze:        { bg: 'bg-ok/10', text: 'text-ok-ink', header: 'bg-ok/15 text-ok-ink', border: 'border-ok/30', labelKey: 'agent.tool_analyze',   icon: '🔬' },
+  manage:         { bg: 'bg-warn/10',  text: 'text-warn-ink',  header: 'bg-warn/15 text-warn-ink', border: 'border-warn/30', labelKey: 'agent.tool_manage',     icon: '🗂️' },
 }
-const DEFAULT_TOOL_THEME = { bg: 'bg-gray-50/60', text: 'text-gray-600', header: 'bg-gray-100/60 text-gray-700', border: 'border-gray-200/50', labelKey: 'agent.tool_generic', icon: '🔧' }
+const DEFAULT_TOOL_THEME = { bg: 'bg-sunken/60', text: 'text-ink-2', header: 'bg-sunken/60 text-ink', border: 'border-line/50', labelKey: 'agent.tool_generic', icon: '🔧' }
 
 function ToolResultBlock({ text, sqlData, theme }) {
   // SQL table
@@ -89,10 +90,10 @@ function ToolResultBlock({ text, sqlData, theme }) {
           </thead>
           <tbody>
             {sqlData.rows.map((row, ri) => (
-              <tr key={ri} className={ri % 2 === 0 ? 'bg-white/50' : theme.bg}>
+              <tr key={ri} className={ri % 2 === 0 ? 'bg-panel/50' : theme.bg}>
                 {row.map((val, ci) => (
-                  <td key={ci} className={`px-2 py-0.5 border ${theme.border} text-gray-700 max-w-xs`}>
-                    {val == null ? <span className="text-gray-300">null</span> : String(val).length > 200 ? String(val).slice(0, 200) + '…' : String(val)}
+                  <td key={ci} className={`px-2 py-0.5 border ${theme.border} text-ink max-w-xs`}>
+                    {val == null ? <span className="text-ink-3">null</span> : String(val).length > 200 ? String(val).slice(0, 200) + '…' : String(val)}
                   </td>
                 ))}
               </tr>
@@ -106,17 +107,22 @@ function ToolResultBlock({ text, sqlData, theme }) {
   if (!text || (text.length < 80 && !text.includes('\n'))) return null
   // Code tool output — show as plain monospace (output, not source code)
   return (
-    <div className={`mt-1 ${theme.bg} rounded px-2.5 py-1.5 border ${theme.border} font-mono text-[10px] ${theme.text} whitespace-pre-wrap max-h-40 overflow-y-auto`}>
+    <div className={`mt-1 ${theme.bg} rounded-chip px-2.5 py-1.5 border ${theme.border} font-mono text-[10px] ${theme.text} whitespace-pre-wrap max-h-40 overflow-y-auto`}>
       {text}
     </div>
   )
 }
 
 // Syntax-highlighted Python code block
-const codeHighlightStyle = { ...githubGist, hljs: { ...githubGist.hljs, background: 'transparent', padding: 0 } }
+const codeHighlightStyles = {
+  light: { ...githubGist, hljs: { ...githubGist.hljs, background: 'transparent', padding: 0 } },
+  dark: { ...atomOneDark, hljs: { ...atomOneDark.hljs, background: 'transparent', padding: 0 } },
+}
 function PythonBlock({ code, theme, maxH = 'max-h-32' }) {
+  const { resolved } = useTheme()
+  const codeHighlightStyle = codeHighlightStyles[resolved] || codeHighlightStyles.light
   return (
-    <div className={`mt-1 ${theme.bg} rounded px-2.5 py-1.5 border ${theme.border} ${maxH} overflow-y-auto`}>
+    <div className={`mt-1 ${theme.bg} rounded-chip px-2.5 py-1.5 border ${theme.border} ${maxH} overflow-y-auto`}>
       <SyntaxHighlighter language="python" style={codeHighlightStyle} customStyle={{ fontSize: '10px', margin: 0, background: 'transparent' }}>
         {code}
       </SyntaxHighlighter>
@@ -147,9 +153,9 @@ function ChatImage({ url, caption }) {
     }
   }, [url])
   if (!url) return null
-  if (state.error) return <div className="mt-1 text-[10px] text-red-500">{t('agent.image_load_failed')}</div>
-  if (!state.src) return <div className="mt-1 text-[10px] text-gray-400">{t('common.loading')}</div>
-  return <img src={state.src} alt={caption || t('agent.evt_image')} className="mt-1 max-h-64 rounded border border-gray-200" />
+  if (state.error) return <div className="mt-1 text-[10px] text-bad">{t('agent.image_load_failed')}</div>
+  if (!state.src) return <div className="mt-1 text-[10px] text-ink-3">{t('common.loading')}</div>
+  return <img src={state.src} alt={caption || t('agent.evt_image')} className="mt-1 max-h-64 rounded-chip border border-line" />
 }
 
 const LogItem = memo(function LogItem({ update }) {
@@ -173,38 +179,38 @@ const LogItem = memo(function LogItem({ update }) {
     const evidenceCount = isObj ? msg.verifierEvidenceCount : 0
     const verifierTool = isObj ? msg.verifierTool : 'reply_user'
     const VERIFIER_THEME = {
-      verified:           { icon: '🛡️✅', cls: 'bg-emerald-100/70 text-emerald-800 border-emerald-200', textCls: 'text-emerald-700' },
-      fabricated:         { icon: '🛡️🚫', cls: 'bg-red-100/70 text-red-800 border-red-200',             textCls: 'text-red-700 font-semibold' },
-      unverified:         { icon: '🛡️⚠️', cls: 'bg-amber-100/70 text-amber-800 border-amber-200',       textCls: 'text-amber-700 font-medium' },
-      no_evidence_needed: { icon: '🛡️·',  cls: 'bg-gray-100/70 text-gray-700 border-gray-200',         textCls: 'text-gray-600' },
+      verified:           { icon: '🛡️✅', cls: 'bg-ok/15 text-ok-ink border-ok/30', textCls: 'text-ok-ink' },
+      fabricated:         { icon: '🛡️🚫', cls: 'bg-bad/15 text-bad-ink border-bad/30',             textCls: 'text-bad-ink font-semibold' },
+      unverified:         { icon: '🛡️⚠️', cls: 'bg-warn/15 text-warn-ink border-warn/30',       textCls: 'text-warn-ink font-medium' },
+      no_evidence_needed: { icon: '🛡️·',  cls: 'bg-sunken/70 text-ink border-line',         textCls: 'text-ink-2' },
     }
     const vt = VERIFIER_THEME[status] || VERIFIER_THEME.verified
     const statusLabelKey = `agent.verifier_status_${status}`
     return (
-      <div className="mb-1.5 pb-1 border-b border-gray-100/50 last:border-0">
-        <span className="text-gray-400 select-none mr-1.5">[{update.time}]</span>
-        <span className={`inline-block text-[9px] font-bold px-1.5 py-0 rounded mr-1.5 ${badge.cls}`}>{t(badge.labelKey)}</span>
-        <span className={`inline-block text-[9px] font-bold px-1.5 py-0.5 rounded mr-1 border ${vt.cls}`}>
+      <div className="mb-1.5 pb-1 border-b border-line/50 last:border-0">
+        <span className="text-ink-3 select-none mr-1.5">[{update.time}]</span>
+        <span className={`inline-block text-[9px] font-bold px-1.5 py-0 rounded-chip mr-1.5 ${badge.cls}`}>{t(badge.labelKey)}</span>
+        <span className={`inline-block text-[9px] font-bold px-1.5 py-0.5 rounded-chip mr-1 border ${vt.cls}`}>
           {vt.icon} {t('agent.verifier_label')}
         </span>
         <span className={`text-[10px] ${vt.textCls}`}>
           {t(statusLabelKey, t('agent.verifier_status_verified'))}
           {evidenceCount > 0 && (
-            <span className="ml-1.5 text-gray-500 font-normal">
+            <span className="ml-1.5 text-ink-2 font-normal">
               · {t('agent.verifier_evidence_count', { count: evidenceCount })}
             </span>
           )}
           {verifierTool && verifierTool !== 'reply_user' && (
-            <span className="ml-1.5 text-gray-400 font-normal">· {verifierTool}</span>
+            <span className="ml-1.5 text-ink-3 font-normal">· {verifierTool}</span>
           )}
         </span>
         {text && (
-          <div className="mt-1 text-[10px] text-gray-500 pl-4 truncate" title={text}>
+          <div className="mt-1 text-[10px] text-ink-2 pl-4 truncate" title={text}>
             &quot;{text}&quot;
           </div>
         )}
         {detail && (
-          <div className="mt-1 text-[10px] text-gray-600 italic pl-4">{detail}</div>
+          <div className="mt-1 text-[10px] text-ink-2 italic pl-4">{detail}</div>
         )}
       </div>
     )
@@ -213,17 +219,17 @@ const LogItem = memo(function LogItem({ update }) {
   // ── Tool call ──────────────────────────────────────────────────────────
   if (type === 'tool_call' && theme) {
     return (
-      <div className="mb-1.5 pb-1 border-b border-gray-100/50 last:border-0">
-        <span className="text-gray-400 select-none mr-1.5">[{update.time}]</span>
-        <span className={`inline-block text-[9px] font-bold px-1.5 py-0 rounded mr-1.5 ${badge.cls}`}>{t(badge.labelKey)}</span>
-        <span className={`inline-block text-[9px] font-bold px-1.5 py-0.5 rounded mr-1 ${theme.header}`}>{theme.icon} {t(theme.labelKey)}</span>
+      <div className="mb-1.5 pb-1 border-b border-line/50 last:border-0">
+        <span className="text-ink-3 select-none mr-1.5">[{update.time}]</span>
+        <span className={`inline-block text-[9px] font-bold px-1.5 py-0 rounded-chip mr-1.5 ${badge.cls}`}>{t(badge.labelKey)}</span>
+        <span className={`inline-block text-[9px] font-bold px-1.5 py-0.5 rounded-chip mr-1 ${theme.header}`}>{theme.icon} {t(theme.labelKey)}</span>
         {/* Short args inline, long args in a block; code tool gets syntax highlighting */}
         {text && text.length < 100 && !text.includes('\n') ? (
           <span className={`${theme.text} font-mono text-[10px]`}> {text}</span>
         ) : text && toolName === 'code' ? (
           <PythonBlock code={text} theme={theme} />
         ) : text ? (
-          <div className={`mt-1 ${theme.bg} rounded px-2.5 py-1.5 border ${theme.border} font-mono text-[10px] ${theme.text} whitespace-pre-wrap max-h-32 overflow-y-auto`}>
+          <div className={`mt-1 ${theme.bg} rounded-chip px-2.5 py-1.5 border ${theme.border} font-mono text-[10px] ${theme.text} whitespace-pre-wrap max-h-32 overflow-y-auto`}>
             {text}
           </div>
         ) : null}
@@ -237,11 +243,11 @@ const LogItem = memo(function LogItem({ update }) {
     // Will a detail block be rendered below? If so, don't repeat text inline.
     const hasBlock = toolSuccess && (sqlData || (text && text.length >= 80 && text.includes('\n')))
     return (
-      <div className="mb-1.5 pb-1 border-b border-gray-100/50 last:border-0">
-        <span className="text-gray-400 select-none mr-1.5">[{update.time}]</span>
-        <span className={`inline-block text-[9px] font-bold px-1.5 py-0 rounded mr-1.5 ${badge.cls}`}>{t(badge.labelKey)}</span>
-        <span className={`inline-block text-[9px] font-bold px-1.5 py-0.5 rounded mr-1 ${theme.header}`}>{theme.icon} {t(theme.labelKey)}</span>
-        <span className={toolSuccess ? theme.text : 'text-red-600 font-medium'}>
+      <div className="mb-1.5 pb-1 border-b border-line/50 last:border-0">
+        <span className="text-ink-3 select-none mr-1.5">[{update.time}]</span>
+        <span className={`inline-block text-[9px] font-bold px-1.5 py-0 rounded-chip mr-1.5 ${badge.cls}`}>{t(badge.labelKey)}</span>
+        <span className={`inline-block text-[9px] font-bold px-1.5 py-0.5 rounded-chip mr-1 ${theme.header}`}>{theme.icon} {t(theme.labelKey)}</span>
+        <span className={toolSuccess ? theme.text : 'text-bad-ink font-medium'}>
           {icon}{hasBlock ? '' : ` ${text}`}
         </span>
         {toolSuccess && <ToolResultBlock text={text} toolName={toolName} sqlData={sqlData} theme={theme} />}
@@ -250,45 +256,45 @@ const LogItem = memo(function LogItem({ update }) {
   }
 
   // ── Non-tool event types ───────────────────────────────────────────────
-  let textColor = 'text-gray-700'
+  let textColor = 'text-ink'
   let bgColor = ''
 
   if (type === 'thinking') {
-    textColor = 'text-blue-600 italic'
+    textColor = 'text-info-ink italic'
   } else if (type === 'content') {
-    textColor = 'text-indigo-800 font-medium'
-    bgColor = 'bg-indigo-50/50 rounded px-1'
+    textColor = 'text-info-ink font-medium'
+    bgColor = 'bg-info/10 rounded-chip px-1'
   } else if (type === 'reply' || type === 'image') {
-    textColor = 'text-sky-800 font-medium'
-    bgColor = 'bg-sky-50/60 rounded px-1'
+    textColor = 'text-info-ink font-medium'
+    bgColor = 'bg-info/10 rounded-chip px-1'
   } else if (type === 'progress') {
-    textColor = 'text-gray-400 text-[10px]'
+    textColor = 'text-ink-3 text-[10px]'
   } else if (type === 'user_input') {
-    textColor = 'text-amber-700 font-bold'
-    bgColor = 'bg-amber-50 rounded px-1'
+    textColor = 'text-warn-ink font-bold'
+    bgColor = 'bg-warn/10 rounded-chip px-1'
   } else if (type === 'error') {
-    textColor = 'text-red-600 font-medium'
+    textColor = 'text-bad-ink font-medium'
   } else if (type === 'warning') {
-    textColor = 'text-yellow-700 font-medium'
+    textColor = 'text-warn-ink font-medium'
   } else if (type === 'system') {
-    textColor = 'text-gray-500 font-medium'
+    textColor = 'text-ink-2 font-medium'
   } else if (type === 'token_usage') {
-    textColor = 'text-gray-600 font-mono text-xs'
+    textColor = 'text-ink-2 font-mono text-xs'
   }
 
   const tokenLine = (type === 'content' || type === 'token_usage') && tokenUsage ? formatTokenUsage(tokenUsage) : (type === 'token_usage' ? text : null)
 
   return (
-    <div className={`mb-1.5 pb-1 border-b border-gray-100/50 last:border-0 whitespace-pre-wrap ${bgColor}`}>
-      <span className="text-gray-400 select-none mr-1.5">[{update.time}]</span>
+    <div className={`mb-1.5 pb-1 border-b border-line/50 last:border-0 whitespace-pre-wrap ${bgColor}`}>
+      <span className="text-ink-3 select-none mr-1.5">[{update.time}]</span>
       {type !== 'system' && type !== 'token_usage' && (
-        <span className={`inline-block text-[9px] font-bold px-1.5 py-0 rounded mr-1.5 ${badge.cls}`}>
+        <span className={`inline-block text-[9px] font-bold px-1.5 py-0 rounded-chip mr-1.5 ${badge.cls}`}>
           {t(badge.labelKey)}
         </span>
       )}
       <span className={textColor}>{type === 'token_usage' ? (tokenLine || text) : text}</span>
       {type !== 'token_usage' && tokenLine && (
-        <div className="mt-1 text-xs text-gray-500 font-mono">{tokenLine}</div>
+        <div className="mt-1 text-xs text-ink-2 font-mono">{tokenLine}</div>
       )}
       {type === 'image' && isObj && msg.imageUrl && <ChatImage url={msg.imageUrl} caption={text} />}
     </div>
@@ -405,8 +411,8 @@ function ScheduledTasksPanel({ isRunning, active }) {
   return (
     <div className="card">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-          <Clock className="w-5 h-5 text-gray-600" />
+        <h3 className="section-title flex items-center gap-2">
+          <Clock className="w-5 h-5 text-ink-2" />
           {t('agent.scheduled_tasks')}
         </h3>
         <button
@@ -419,19 +425,19 @@ function ScheduledTasksPanel({ isRunning, active }) {
         </button>
       </div>
 
-      <p className="-mt-2 mb-3 text-[11px] text-gray-500">
+      <p className="-mt-2 mb-3 text-[11px] text-ink-2">
         {t('agent.cron_timezone_hint', { tz: serverTz })}
       </p>
       <InlineFlash flash={flash} className="mb-3" />
       {loadError && (
-        <div role="alert" className="mb-3 flex items-center gap-2 text-xs text-red-600">
+        <div role="alert" className="mb-3 flex items-center gap-2 text-xs text-bad-ink">
           <span className="flex-1">{loadError}</span>
           <button type="button" onClick={fetchTasks} className="underline">{t('common.retry')}</button>
         </div>
       )}
 
       {showAdd && (
-        <div className="mb-3 p-3 bg-gray-50 rounded border border-gray-200 space-y-2">
+        <div className="mb-3 p-3 bg-sunken rounded-chip border border-line space-y-2">
           <input
             type="text"
             value={newCron}
@@ -456,45 +462,45 @@ function ScheduledTasksPanel({ isRunning, active }) {
       )}
 
       {tasks.length === 0 ? (
-        <p className="text-sm text-gray-400 text-center py-4">{t('agent.no_scheduled_tasks')}</p>
+        <p className="text-sm text-ink-3 text-center py-4">{t('agent.no_scheduled_tasks')}</p>
       ) : (
         <div className="space-y-2">
           {tasks.map((task) => (
             editingId === task.id ? (
-              <div key={task.id} className="p-2.5 rounded border border-primary-200 bg-primary-50/30 text-sm space-y-2">
+              <div key={task.id} className="p-2.5 rounded-chip border border-primary-200 bg-primary-50/30 text-sm space-y-2">
                 <input type="text" value={editCron} onChange={(e) => setEditCron(e.target.value)} className="input w-full text-sm font-mono" placeholder={t('agent.cron_expression')} aria-label={t('agent.cron_expression')} />
                 <textarea value={editGoal} onChange={(e) => setEditGoal(e.target.value)} className="input w-full text-sm" rows={2} placeholder={t('agent.analysis_goal_placeholder')} aria-label={t('agent.analysis_goal_placeholder')} />
                 <div className="flex gap-1">
-                  <button onClick={handleSaveEdit} className="p-1 hover:bg-green-50 rounded" title={t('common.save')} aria-label={t('common.save')}><Check className="w-3.5 h-3.5 text-green-600" /></button>
-                  <button onClick={() => setEditingId(null)} className="p-1 hover:bg-gray-100 rounded" title={t('common.cancel')} aria-label={t('common.cancel')}><X className="w-3.5 h-3.5 text-gray-400" /></button>
+                  <button onClick={handleSaveEdit} className="p-1 hover:bg-ok/10 rounded-chip" title={t('common.save')} aria-label={t('common.save')}><Check className="w-3.5 h-3.5 text-ok-ink" /></button>
+                  <button onClick={() => setEditingId(null)} className="p-1 hover:bg-sunken rounded-chip" title={t('common.cancel')} aria-label={t('common.cancel')}><X className="w-3.5 h-3.5 text-ink-3" /></button>
                 </div>
               </div>
             ) : (
-              <div key={task.id} className={`p-2.5 rounded border text-sm ${task.status === 'active' ? 'bg-white border-gray-200' : 'bg-gray-50 border-gray-100 opacity-60'}`}>
+              <div key={task.id} className={`p-2.5 rounded-chip border text-sm ${task.status === 'active' ? 'bg-panel border-line' : 'bg-sunken border-line opacity-60'}`}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
-                      <span className="font-mono text-xs bg-gray-100 px-1.5 py-0.5 rounded">{cronHuman(task.cron_expr)}</span>
-                      <span className={`text-[10px] font-bold uppercase px-1.5 rounded ${task.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                      <span className="font-mono text-xs bg-sunken px-1.5 py-0.5 rounded-chip">{cronHuman(task.cron_expr)}</span>
+                      <span className={`text-[10px] font-bold uppercase px-1.5 rounded-chip ${task.status === 'active' ? 'bg-ok/15 text-ok-ink' : 'bg-warn/15 text-warn-ink'}`}>
                         {t(`agent.status_${task.status}`, task.status)}
                       </span>
                     </div>
-                    <p className="text-gray-700 text-xs truncate">{task.prompt_goal}</p>
+                    <p className="text-ink text-xs truncate">{task.prompt_goal}</p>
                   </div>
                   <div className="flex gap-1 flex-shrink-0">
                     {isRunning && (
-                      <button onClick={() => handleTrigger(task)} className="p-1 hover:bg-blue-50 rounded" title={t('agent.run_now')} aria-label={t('agent.run_now')}>
-                        <Play className="w-3.5 h-3.5 text-blue-500" />
+                      <button onClick={() => handleTrigger(task)} className="p-1 hover:bg-info/10 rounded-chip" title={t('agent.run_now')} aria-label={t('agent.run_now')}>
+                        <Play className="w-3.5 h-3.5 text-info" />
                       </button>
                     )}
-                    <button onClick={() => handleEdit(task)} className="p-1 hover:bg-blue-50 rounded" title={t('common.edit')} aria-label={t('common.edit')}>
-                      <Pencil className="w-3.5 h-3.5 text-blue-400" />
+                    <button onClick={() => handleEdit(task)} className="p-1 hover:bg-info/10 rounded-chip" title={t('common.edit')} aria-label={t('common.edit')}>
+                      <Pencil className="w-3.5 h-3.5 text-info" />
                     </button>
-                    <button onClick={() => handleToggle(task)} className="p-1 hover:bg-yellow-50 rounded" title={task.status === 'active' ? t('agent.pause') : t('agent.resume')} aria-label={task.status === 'active' ? t('agent.pause') : t('agent.resume')}>
-                      {task.status === 'active' ? <Pause className="w-3.5 h-3.5 text-yellow-500" /> : <RotateCcw className="w-3.5 h-3.5 text-green-500" />}
+                    <button onClick={() => handleToggle(task)} className="p-1 hover:bg-warn/10 rounded-chip" title={task.status === 'active' ? t('agent.pause') : t('agent.resume')} aria-label={task.status === 'active' ? t('agent.pause') : t('agent.resume')}>
+                      {task.status === 'active' ? <Pause className="w-3.5 h-3.5 text-warn" /> : <RotateCcw className="w-3.5 h-3.5 text-ok" />}
                     </button>
-                    <button onClick={() => handleDelete(task)} className="p-1 hover:bg-red-50 rounded" title={t('common.delete')} aria-label={t('common.delete')}>
-                      <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                    <button onClick={() => handleDelete(task)} className="p-1 hover:bg-bad/10 rounded-chip" title={t('common.delete')} aria-label={t('common.delete')}>
+                      <Trash2 className="w-3.5 h-3.5 text-bad" />
                     </button>
                   </div>
                 </div>
@@ -619,8 +625,8 @@ function TriggerRulesPanel({ isRunning, active }) {
   return (
     <div className="card">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-          <Zap className="w-5 h-5 text-amber-500" />
+        <h3 className="section-title flex items-center gap-2">
+          <Zap className="w-5 h-5 text-warn" />
           {t('agent.trigger_rules')}
         </h3>
         <button type="button" onClick={() => setShowAdd(!showAdd)} aria-expanded={showAdd} className="text-xs flex items-center gap-1 text-primary-600 hover:text-primary-800">
@@ -629,14 +635,14 @@ function TriggerRulesPanel({ isRunning, active }) {
       </div>
       <InlineFlash flash={flash} className="mb-3" />
       {loadError && (
-        <div role="alert" className="mb-3 flex items-center gap-2 text-xs text-red-600">
+        <div role="alert" className="mb-3 flex items-center gap-2 text-xs text-bad-ink">
           <span className="flex-1">{loadError}</span>
           <button type="button" onClick={fetchRules} className="underline">{t('common.retry')}</button>
         </div>
       )}
 
       {showAdd && (
-        <div className="mb-3 p-3 bg-gray-50 rounded border border-gray-200 space-y-2">
+        <div className="mb-3 p-3 bg-sunken rounded-chip border border-line space-y-2">
           <input type="text" value={newRule.name} onChange={(e) => setNewRule({ ...newRule, name: e.target.value })} placeholder={t('agent.rule_name')} aria-label={t('agent.rule_name')} className="input w-full text-sm" />
           <div className="grid grid-cols-2 gap-2">
             <input type="text" value={newRule.feature_type} onChange={(e) => setNewRule({ ...newRule, feature_type: e.target.value })} placeholder={t('agent.feature_placeholder')} aria-label={t('agent.feature_placeholder')} className="input text-sm" />
@@ -656,12 +662,12 @@ function TriggerRulesPanel({ isRunning, active }) {
       )}
 
       {rules.length === 0 ? (
-        <p className="text-sm text-gray-400 text-center py-4">{t('agent.no_trigger_rules')}</p>
+        <p className="text-sm text-ink-3 text-center py-4">{t('agent.no_trigger_rules')}</p>
       ) : (
         <div className="space-y-2">
           {rules.map((rule) => (
             editingId === rule.id ? (
-              <div key={rule.id} className="p-2.5 rounded border border-primary-200 bg-primary-50/30 text-sm space-y-2">
+              <div key={rule.id} className="p-2.5 rounded-chip border border-primary-200 bg-primary-50/30 text-sm space-y-2">
                 <input type="text" value={editRule.name} onChange={(e) => setEditRule({ ...editRule, name: e.target.value })} className="input w-full text-sm" placeholder={t('agent.rule_name')} aria-label={t('agent.rule_name')} />
                 <div className="grid grid-cols-2 gap-2">
                   <input type="text" value={editRule.feature_type} onChange={(e) => setEditRule({ ...editRule, feature_type: e.target.value })} className="input text-sm" placeholder={t('agent.feature_type')} aria-label={t('agent.feature_type')} />
@@ -674,43 +680,43 @@ function TriggerRulesPanel({ isRunning, active }) {
                 </div>
                 <textarea value={editRule.prompt_goal} onChange={(e) => setEditRule({ ...editRule, prompt_goal: e.target.value })} className="input w-full text-sm" rows={2} placeholder={t('agent.analysis_goal_placeholder')} aria-label={t('agent.analysis_goal_placeholder')} />
                 <div className="flex gap-1">
-                  <button onClick={handleSaveEdit} className="p-1 hover:bg-green-50 rounded" title={t('common.save')} aria-label={t('common.save')}><Check className="w-3.5 h-3.5 text-green-600" /></button>
-                  <button onClick={() => setEditingId(null)} className="p-1 hover:bg-gray-100 rounded" title={t('common.cancel')} aria-label={t('common.cancel')}><X className="w-3.5 h-3.5 text-gray-400" /></button>
+                  <button onClick={handleSaveEdit} className="p-1 hover:bg-ok/10 rounded-chip" title={t('common.save')} aria-label={t('common.save')}><Check className="w-3.5 h-3.5 text-ok-ink" /></button>
+                  <button onClick={() => setEditingId(null)} className="p-1 hover:bg-sunken rounded-chip" title={t('common.cancel')} aria-label={t('common.cancel')}><X className="w-3.5 h-3.5 text-ink-3" /></button>
                 </div>
               </div>
             ) : (
-              <div key={rule.id} className={`p-2.5 rounded border text-sm ${rule.status === 'active' ? 'bg-white border-gray-200' : 'bg-gray-50 border-gray-100 opacity-60'}`}>
+              <div key={rule.id} className={`p-2.5 rounded-chip border text-sm ${rule.status === 'active' ? 'bg-panel border-line' : 'bg-sunken border-line opacity-60'}`}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
-                      <span className="font-medium text-xs text-gray-900">{rule.name}</span>
-                      <span className={`text-[10px] font-bold uppercase px-1.5 rounded ${rule.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                      <span className="font-medium text-xs text-ink">{rule.name}</span>
+                      <span className={`text-[10px] font-bold uppercase px-1.5 rounded-chip ${rule.status === 'active' ? 'bg-ok/15 text-ok-ink' : 'bg-warn/15 text-warn-ink'}`}>
                         {t(`agent.status_${rule.status}`, rule.status)}
                       </span>
                     </div>
-                    <div className="text-xs text-gray-500 font-mono mb-0.5">
+                    <div className="text-xs text-ink-2 font-mono mb-0.5">
                       {rule.feature_type} {CONDITION_SYMBOLS[rule.condition] || t(`agent.cond_short_${rule.condition}`, rule.condition)} {rule.threshold}
-                      <span className="text-gray-400 ml-2">{t('agent.rule_window_cooldown', { window: rule.window_minutes, cooldown: rule.cooldown_minutes })}</span>
+                      <span className="text-ink-3 ml-2">{t('agent.rule_window_cooldown', { window: rule.window_minutes, cooldown: rule.cooldown_minutes })}</span>
                     </div>
-                    <p className="text-gray-700 text-xs truncate">{rule.prompt_goal}</p>
+                    <p className="text-ink text-xs truncate">{rule.prompt_goal}</p>
                     {rule.trigger_count > 0 && (
-                      <div className="text-[10px] text-gray-400 mt-0.5">{t('agent.triggered_times', { count: rule.trigger_count })}</div>
+                      <div className="text-[10px] text-ink-3 mt-0.5">{t('agent.triggered_times', { count: rule.trigger_count })}</div>
                     )}
                   </div>
                   <div className="flex gap-1 flex-shrink-0">
                     {isRunning && (
-                      <button onClick={() => handleTrigger(rule)} className="p-1 hover:bg-blue-50 rounded" title={t('agent.run_now')} aria-label={t('agent.run_now')}>
-                        <Play className="w-3.5 h-3.5 text-blue-500" />
+                      <button onClick={() => handleTrigger(rule)} className="p-1 hover:bg-info/10 rounded-chip" title={t('agent.run_now')} aria-label={t('agent.run_now')}>
+                        <Play className="w-3.5 h-3.5 text-info" />
                       </button>
                     )}
-                    <button onClick={() => handleEdit(rule)} className="p-1 hover:bg-blue-50 rounded" title={t('common.edit')} aria-label={t('common.edit')}>
-                      <Pencil className="w-3.5 h-3.5 text-blue-400" />
+                    <button onClick={() => handleEdit(rule)} className="p-1 hover:bg-info/10 rounded-chip" title={t('common.edit')} aria-label={t('common.edit')}>
+                      <Pencil className="w-3.5 h-3.5 text-info" />
                     </button>
-                    <button onClick={() => handleToggle(rule)} className="p-1 hover:bg-yellow-50 rounded" title={rule.status === 'active' ? t('agent.pause') : t('agent.resume')} aria-label={rule.status === 'active' ? t('agent.pause') : t('agent.resume')}>
-                      {rule.status === 'active' ? <Pause className="w-3.5 h-3.5 text-yellow-500" /> : <RotateCcw className="w-3.5 h-3.5 text-green-500" />}
+                    <button onClick={() => handleToggle(rule)} className="p-1 hover:bg-warn/10 rounded-chip" title={rule.status === 'active' ? t('agent.pause') : t('agent.resume')} aria-label={rule.status === 'active' ? t('agent.pause') : t('agent.resume')}>
+                      {rule.status === 'active' ? <Pause className="w-3.5 h-3.5 text-warn" /> : <RotateCcw className="w-3.5 h-3.5 text-ok" />}
                     </button>
-                    <button onClick={() => handleDelete(rule)} className="p-1 hover:bg-red-50 rounded" title={t('common.delete')} aria-label={t('common.delete')}>
-                      <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                    <button onClick={() => handleDelete(rule)} className="p-1 hover:bg-bad/10 rounded-chip" title={t('common.delete')} aria-label={t('common.delete')}>
+                      <Trash2 className="w-3.5 h-3.5 text-bad" />
                     </button>
                   </div>
                 </div>
@@ -771,25 +777,25 @@ function StartupModal({ currentStep, error, onClose }) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="startup-modal-title"
-        className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden outline-none"
+        className="bg-panel rounded-card shadow-2xl w-full max-w-md mx-4 overflow-hidden outline-none"
       >
         {/* Header */}
-        <div className={`px-6 py-4 ${error ? 'bg-red-50' : done ? 'bg-green-50' : 'bg-indigo-50'}`}>
+        <div className={`px-6 py-4 ${error ? 'bg-bad/10' : done ? 'bg-ok/10' : 'bg-info/10'}`}>
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3">
               {error ? (
-                <AlertCircle className="w-6 h-6 text-red-500" />
+                <AlertCircle className="w-6 h-6 text-bad" />
               ) : done ? (
-                <CheckCircle2 className="w-6 h-6 text-green-500" />
+                <CheckCircle2 className="w-6 h-6 text-ok" />
               ) : (
-                <Loader2 className="w-6 h-6 text-indigo-500 animate-spin" />
+                <Loader2 className="w-6 h-6 text-info animate-spin" />
               )}
-              <h3 id="startup-modal-title" className="text-lg font-semibold text-gray-900">
+              <h3 id="startup-modal-title" className="section-title">
                 {error ? t('agent.startup_failed') : done ? t('agent.agent_ready') : t('agent.starting_agent')}
               </h3>
             </div>
             {(done || error) && (
-              <button type="button" onClick={onClose} aria-label={t('common.close')} className="text-gray-400 hover:text-gray-600 transition-colors">
+              <button type="button" onClick={onClose} aria-label={t('common.close')} className="text-ink-3 hover:text-ink-2 transition-colors">
                 <X className="w-5 h-5" />
               </button>
             )}
@@ -803,22 +809,22 @@ function StartupModal({ currentStep, error, onClose }) {
             const active = displayStep === key && !error
             const pending = displayStep < key
             return (
-              <div key={key} className={`flex items-center space-x-3 py-2 px-3 rounded-lg transition-all duration-300 ${
-                active ? 'bg-indigo-50' : completed ? 'bg-gray-50' : ''
+              <div key={key} className={`flex items-center space-x-3 py-2 px-3 rounded-control transition-all duration-300 ${
+                active ? 'bg-info/10' : completed ? 'bg-sunken' : ''
               }`}>
                 <div className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center transition-all duration-300 ${
-                  completed ? 'bg-green-100' : active ? 'bg-indigo-100' : 'bg-gray-100'
+                  completed ? 'bg-ok/15' : active ? 'bg-info/15' : 'bg-sunken'
                 }`}>
                   {completed ? (
-                    <Check className="w-4 h-4 text-green-600" />
+                    <Check className="w-4 h-4 text-ok-ink" />
                   ) : active ? (
-                    <Loader2 className="w-4 h-4 text-indigo-600 animate-spin" />
+                    <Loader2 className="w-4 h-4 text-info-ink animate-spin" />
                   ) : (
-                    <Icon className={`w-4 h-4 ${pending ? 'text-gray-300' : 'text-gray-400'}`} />
+                    <Icon className={`w-4 h-4 ${pending ? 'text-ink-3' : 'text-ink-3'}`} />
                   )}
                 </div>
                 <span className={`text-sm transition-colors duration-300 ${
-                  completed ? 'text-gray-500' : active ? 'text-indigo-700 font-medium' : 'text-gray-400'
+                  completed ? 'text-ink-2' : active ? 'text-info-ink font-medium' : 'text-ink-3'
                 }`}>
                   {t(labelKey)}
                 </span>
@@ -830,8 +836,8 @@ function StartupModal({ currentStep, error, onClose }) {
         {/* Error message */}
         {error && (
           <div className="px-6 pb-4">
-            <div className="bg-red-50 border border-red-200 rounded-lg p-3">
-              <p className="text-sm text-red-700 font-mono break-all">{error}</p>
+            <div className="bg-bad/10 border border-bad/30 rounded-control p-3">
+              <p className="text-sm text-bad-ink font-mono break-all">{error}</p>
             </div>
           </div>
         )}
@@ -840,17 +846,17 @@ function StartupModal({ currentStep, error, onClose }) {
         <div className="px-6 pb-5">
           {done ? (
             <button onClick={onClose}
-              className="w-full py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium transition-colors">
+              className="w-full py-2.5 bg-ok hover:bg-ok/90 text-panel rounded-control font-medium transition-colors">
               {t('common.done')}
             </button>
           ) : error ? (
             <button onClick={onClose}
-              className="w-full py-2.5 bg-gray-600 hover:bg-gray-700 text-white rounded-lg font-medium transition-colors">
+              className="w-full py-2.5 bg-ink-2 hover:bg-ink text-panel rounded-control font-medium transition-colors">
               {t('common.dismiss')}
             </button>
           ) : (
-            <div className="w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
-              <div className="bg-indigo-500 h-full rounded-full transition-all duration-500 ease-out"
+            <div className="w-full bg-line rounded-full h-1.5 overflow-hidden">
+              <div className="bg-info h-full rounded-full transition-all duration-500 ease-out"
                 style={{ width: `${Math.max(5, ((displayStep - 1) / 7) * 100)}%` }} />
             </div>
           )}
@@ -1466,19 +1472,19 @@ export default function AutonomousAgentMonitor({ active = true }) {
           onClose={closeStartupModal}
         />
       )}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-3xl font-bold text-gray-900">{t('agent.title')}</h2>
-          <p className="mt-1 text-sm text-gray-500">{t('agent.subtitle')}</p>
+          <h2 className="page-title">{t('agent.title')}</h2>
+          <p className="page-subtitle">{t('agent.subtitle')}</p>
         </div>
         <div className="flex items-center space-x-3">
           <div className="flex items-center space-x-1 text-xs">
             {wsConnected ? (
-              <><Wifi className="w-3 h-3 text-green-500" /><span className="text-green-600">{t('agent.live')}</span></>
+              <><Wifi className="w-3 h-3 text-ok" /><span className="text-ok-ink">{t('agent.live')}</span></>
             ) : isRunning && wsReconnecting ? (
-              <><WifiOff className="w-3 h-3 text-orange-500 animate-pulse" /><span className="text-orange-600">{t('agent.reconnecting')}</span></>
+              <><WifiOff className="w-3 h-3 text-warn animate-pulse" /><span className="text-warn-ink">{t('agent.reconnecting')}</span></>
             ) : isRunning ? (
-              <><WifiOff className="w-3 h-3 text-yellow-500" /><span className="text-yellow-600">{t('agent.polling')}</span></>
+              <><WifiOff className="w-3 h-3 text-warn" /><span className="text-warn-ink">{t('agent.polling')}</span></>
             ) : null}
           </div>
           <button
@@ -1496,10 +1502,10 @@ export default function AutonomousAgentMonitor({ active = true }) {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Configuration */}
         <div className="card">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">{t('agent.configuration')}</h3>
+          <h3 className="section-title mb-4">{t('agent.configuration')}</h3>
           <div className="space-y-4">
             <div>
-              <label htmlFor="agent-llm-provider" className="block text-sm font-medium text-gray-700 mb-2">{t('agent.llm_provider')}</label>
+              <label htmlFor="agent-llm-provider" className="block text-sm font-medium text-ink mb-2">{t('agent.llm_provider')}</label>
               <select id="agent-llm-provider" value={llmProvider} onChange={(e) => setLlmProvider(e.target.value)} className="select" disabled={isRunning}>
                 <option value="gemini">Google Gemini (SDK)</option>
                 <option value="google_vertex">Google Vertex AI</option>
@@ -1518,14 +1524,14 @@ export default function AutonomousAgentMonitor({ active = true }) {
               </select>
             </div>
             <div>
-              <label htmlFor="agent-llm-model" className="block text-sm font-medium text-gray-700 mb-2">{t('agent.model')}</label>
+              <label htmlFor="agent-llm-model" className="block text-sm font-medium text-ink mb-2">{t('agent.model')}</label>
               <input
                 id="agent-llm-model"
                 type="text" value={model} onChange={(e) => setModel(e.target.value)}
                 placeholder={providerModels[llmProvider] || ''}
-                className="input w-full placeholder:text-gray-400" disabled={isRunning}
+                className="input w-full placeholder:text-ink-3" disabled={isRunning}
               />
-              <p className="mt-1 text-xs text-gray-400">
+              <p className="mt-1 text-xs text-ink-3">
                 {model ? '' : providerModels[llmProvider] ? t('agent.using_default', { model: providerModels[llmProvider] }) : t('agent.leave_empty_default')}
               </p>
             </div>
@@ -1535,67 +1541,67 @@ export default function AutonomousAgentMonitor({ active = true }) {
         {/* Agent Status */}
         <div className="card">
           <div className="flex items-center space-x-2 mb-4">
-            <Brain className="w-5 h-5 text-gray-600" />
-            <h3 className="text-lg font-semibold text-gray-900">{t('agent.agent_status')}</h3>
+            <Brain className="w-5 h-5 text-ink-2" />
+            <h3 className="section-title">{t('agent.agent_status')}</h3>
           </div>
           {isRunning && agentStatus ? (
             <div className="space-y-3">
               <div className="flex items-center space-x-2">
-                <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                <span className="text-sm text-gray-600">{t('agent.running')}</span>
+                <div className="w-2 h-2 rounded-full bg-ok animate-pulse" />
+                <span className="text-sm text-ink-2">{t('agent.running')}</span>
               </div>
               {(agentStatus.config?.model || agentStatus.config?.llm_provider) && (
-                <div className="text-sm space-y-1 pb-2 border-b border-gray-100">
+                <div className="text-sm space-y-1 pb-2 border-b border-line">
                   {agentStatus.config?.model && (
                     <div className="flex justify-between">
-                      <span className="text-gray-600">{t('agent.model')}:</span>
-                      <span className="font-medium text-gray-900 font-mono text-xs">{agentStatus.config.model}</span>
+                      <span className="text-ink-2">{t('agent.model')}:</span>
+                      <span className="font-medium text-ink font-mono text-xs">{agentStatus.config.model}</span>
                     </div>
                   )}
                 </div>
               )}
               <div className="text-sm space-y-1">
                 <div className="flex justify-between">
-                  <span className="text-gray-600">{t('agent.tasks_completed')}</span>
+                  <span className="text-ink-2">{t('agent.tasks_completed')}</span>
                   <span className="font-medium">{agentStatus.status?.cycle_count || 0}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-600">{t('agent.queue')}</span>
+                  <span className="text-ink-2">{t('agent.queue')}</span>
                   <span className="font-medium">{t('agent.pending', { count: agentStatus.status?.analysis_queue_size || 0 })}</span>
                 </div>
                 <div className="flex justify-between items-start">
-                  <span className="text-gray-600">{t('agent.state')}</span>
-                  <span className="font-medium text-xs bg-gray-100 px-2 py-0.5 rounded text-right">
+                  <span className="text-ink-2">{t('agent.state')}</span>
+                  <span className="font-medium text-xs bg-sunken px-2 py-0.5 rounded-chip text-right">
                     {formatAgentState(agentStatus.status)}
                   </span>
                 </div>
               </div>
             </div>
           ) : (
-            <div className="text-center py-8 text-gray-400">
+            <div className="text-center py-8 text-ink-3">
               <Activity className="w-12 h-12 mx-auto mb-2 opacity-50" />
               <p className="text-sm">{t('agent.agent_not_running')}</p>
             </div>
           )}
           {(cumulativeTokens.prompt > 0 || cumulativeTokens.thoughts > 0 || cumulativeTokens.response > 0) && (
-            <div className="mt-3 pt-3 border-t border-gray-100">
-              <div className="text-xs font-medium text-gray-500 mb-2">{t('agent.token_usage')}</div>
+            <div className="mt-3 pt-3 border-t border-line">
+              <div className="text-xs font-medium text-ink-2 mb-2">{t('agent.token_usage')}</div>
               <div className="grid grid-cols-2 gap-2 text-center">
-                <div className="bg-amber-50 rounded px-2 py-1.5 border border-amber-100">
-                  <div className="text-amber-700 font-mono font-semibold">{cumulativeTokens.prompt.toLocaleString()}</div>
-                  <div className="text-amber-600 text-[10px]">{t('agent.tok_input')}</div>
+                <div className="bg-warn/10 rounded-chip px-2 py-1.5 border border-warn/30">
+                  <div className="text-warn-ink font-mono font-semibold">{cumulativeTokens.prompt.toLocaleString()}</div>
+                  <div className="text-warn-ink text-[10px]">{t('agent.tok_input')}</div>
                 </div>
-                <div className="bg-violet-50 rounded px-2 py-1.5 border border-violet-100">
-                  <div className="text-violet-700 font-mono font-semibold">{cumulativeTokens.thoughts.toLocaleString()}</div>
-                  <div className="text-violet-600 text-[10px]">{t('agent.tok_thinking')}</div>
+                <div className="bg-info/10 rounded-chip px-2 py-1.5 border border-info/30">
+                  <div className="text-info-ink font-mono font-semibold">{cumulativeTokens.thoughts.toLocaleString()}</div>
+                  <div className="text-info-ink text-[10px]">{t('agent.tok_thinking')}</div>
                 </div>
-                <div className="bg-emerald-50 rounded px-2 py-1.5 border border-emerald-100">
-                  <div className="text-emerald-700 font-mono font-semibold">{cumulativeTokens.response.toLocaleString()}</div>
-                  <div className="text-emerald-600 text-[10px]">{t('agent.tok_response')}</div>
+                <div className="bg-ok/10 rounded-chip px-2 py-1.5 border border-ok/30">
+                  <div className="text-ok-ink font-mono font-semibold">{cumulativeTokens.response.toLocaleString()}</div>
+                  <div className="text-ok-ink text-[10px]">{t('agent.tok_response')}</div>
                 </div>
-                <div className="bg-sky-50 rounded px-2 py-1.5 border border-sky-100">
-                  <div className="text-sky-700 font-mono font-semibold">{(cumulativeTokens.cacheRead || 0).toLocaleString()}</div>
-                  <div className="text-sky-600 text-[10px]">{t('agent.tok_cached')}</div>
+                <div className="bg-info/10 rounded-chip px-2 py-1.5 border border-info/30">
+                  <div className="text-info-ink font-mono font-semibold">{(cumulativeTokens.cacheRead || 0).toLocaleString()}</div>
+                  <div className="text-info-ink text-[10px]">{t('agent.tok_cached')}</div>
                 </div>
               </div>
             </div>
@@ -1605,20 +1611,20 @@ export default function AutonomousAgentMonitor({ active = true }) {
         {/* Data Store */}
         <div className="card">
           <div className="flex items-center space-x-2 mb-4">
-            <Database className="w-5 h-5 text-gray-600" />
-            <h3 className="text-lg font-semibold text-gray-900">{t('agent.data_store')}</h3>
+            <Database className="w-5 h-5 text-ink-2" />
+            <h3 className="section-title">{t('agent.data_store')}</h3>
           </div>
           {isRunning && agentStatus?.data_store_stats ? (
             <div className="space-y-3">
               <div className="text-sm space-y-1">
                 <div className="flex justify-between">
-                  <span className="text-gray-600">{t('agent.total_records')}</span>
+                  <span className="text-ink-2">{t('agent.total_records')}</span>
                   <span className="font-medium">{(agentStatus.data_store_stats.total_records || 0).toLocaleString()}</span>
                 </div>
               </div>
               {agentStatus.data_store_stats.by_feature && (
-                <div className="pt-3 border-t border-gray-200">
-                  <div className="text-xs text-gray-600 space-y-1 max-h-60 overflow-y-auto pr-2">
+                <div className="pt-3 border-t border-line">
+                  <div className="text-xs text-ink-2 space-y-1 max-h-60 overflow-y-auto pr-2">
                     {Object.entries(agentStatus.data_store_stats.by_feature).map(([feature, count]) => (
                       <div key={feature} className="flex justify-between">
                         <span className="capitalize">{feature}:</span>
@@ -1629,8 +1635,8 @@ export default function AutonomousAgentMonitor({ active = true }) {
                 </div>
               )}
               {agentStatus.data_store_stats.time_range && (
-                <div className="pt-3 border-t border-gray-200">
-                  <div className="text-xs text-gray-600">
+                <div className="pt-3 border-t border-line">
+                  <div className="text-xs text-ink-2">
                     <div className="font-medium mb-1">{t('agent.time_range')}</div>
                     {agentStatus.data_store_stats.time_range.min && (<div>{t('agent.time_from')} {formatFullDateTime(agentStatus.data_store_stats.time_range.min)}</div>)}
                     {agentStatus.data_store_stats.time_range.max && (<div>{t('agent.time_to')} {formatFullDateTime(agentStatus.data_store_stats.time_range.max)}</div>)}
@@ -1639,7 +1645,7 @@ export default function AutonomousAgentMonitor({ active = true }) {
               )}
             </div>
           ) : (
-            <div className="text-center py-8 text-gray-400">
+            <div className="text-center py-8 text-ink-3">
               <Database className="w-12 h-12 mx-auto mb-2 opacity-50" />
               <p className="text-sm">{t('agent.no_data')}</p>
             </div>
@@ -1658,8 +1664,8 @@ export default function AutonomousAgentMonitor({ active = true }) {
 
         {/* Unified Agent Log — 2/3 width */}
         <div className="lg:col-span-2 card flex flex-col overflow-hidden" style={{ height: '800px' }}>
-        <div className="flex items-center justify-between mb-3 flex-shrink-0">
-          <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3 flex-shrink-0">
+          <h3 className="section-title flex items-center gap-2">
             <Activity className="w-4 h-4 text-primary-500" />
             {t('agent.agent_activity')}
           </h3>
@@ -1671,7 +1677,7 @@ export default function AutonomousAgentMonitor({ active = true }) {
                 key={f}
                 onClick={() => setLogFilter(f)}
                 aria-pressed={logFilter === f}
-                className={`text-xs px-2 py-0.5 rounded font-medium ${logFilter === f ? 'bg-primary-100 text-primary-700' : 'text-gray-400 hover:text-gray-600'}`}
+                className={`text-xs px-2 py-0.5 rounded-chip font-medium ${logFilter === f ? 'bg-primary-100 text-primary-700' : 'text-ink-3 hover:text-ink-2'}`}
               >
                 {t(`agent.${f}`)}
               </button>
@@ -1680,40 +1686,40 @@ export default function AutonomousAgentMonitor({ active = true }) {
               <button
                 type="button"
                 onClick={() => { if (window.confirm(t('agent.confirm_clear_logs'))) setLogUpdates([]) }}
-                className="text-xs px-2 py-0.5 rounded font-medium ml-3 bg-red-50 text-red-500 hover:bg-red-100 hover:text-red-700 border border-red-200/60"
+                className="text-xs px-2 py-0.5 rounded-chip font-medium ml-3 bg-bad/10 text-bad hover:bg-bad/15 hover:text-bad-ink border border-bad/30"
               >{t('agent.clear')}</button>
             )}
           </div>
         </div>
         {logLoadError && (
-          <div role="alert" className="mb-2 flex items-center gap-2 text-xs text-red-600 flex-shrink-0">
+          <div role="alert" className="mb-2 flex items-center gap-2 text-xs text-bad-ink flex-shrink-0">
             <span className="flex-1">{t('agent.activity_load_failed', { error: logLoadError })}</span>
             <button type="button" onClick={fetchActivityLog} className="underline">{t('common.retry')}</button>
           </div>
         )}
         <div
-          className="bg-gray-50 rounded p-4 overflow-y-auto font-mono text-[11px] border border-gray-100 shadow-inner flex-1"
+          className="bg-sunken rounded-chip p-4 overflow-y-auto font-mono text-[11px] border border-line shadow-inner flex-1"
         >
           {/* Live streaming preview */}
           {(liveStream.thinking || liveStream.content) && (
-            <div className="mb-3 pb-2 border-b-2 border-indigo-200/60">
+            <div className="mb-3 pb-2 border-b-2 border-info/30">
               {liveStream.thinking && (
-                <div className="mb-1 whitespace-pre-wrap text-blue-600 italic">
-                  <span className="inline-block w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse mr-1.5 align-middle" />
-                  <span className="text-blue-400 font-semibold mr-1">{t('agent.thinking_label')}</span>
+                <div className="mb-1 whitespace-pre-wrap text-info-ink italic">
+                  <span className="inline-block w-1.5 h-1.5 bg-info rounded-full animate-pulse mr-1.5 align-middle" />
+                  <span className="text-info font-semibold mr-1">{t('agent.thinking_label')}</span>
                   {liveStream.thinking.length > 2000 ? liveStream.thinking.slice(-2000) : liveStream.thinking}
                 </div>
               )}
               {liveStream.content && (
-                <div className="whitespace-pre-wrap text-indigo-800 font-medium bg-indigo-50/50 rounded px-2 py-1">
-                  <span className="inline-block w-1.5 h-1.5 bg-indigo-500 rounded-full animate-pulse mr-1.5 align-middle" />
+                <div className="whitespace-pre-wrap text-info-ink font-medium bg-info/10 rounded-chip px-2 py-1">
+                  <span className="inline-block w-1.5 h-1.5 bg-info rounded-full animate-pulse mr-1.5 align-middle" />
                   {stripToolCallXml(liveStream.content.length > 2000 ? liveStream.content.slice(-2000) : liveStream.content)}
                 </div>
               )}
             </div>
           )}
           {filteredLogs.length === 0 && !liveStream.thinking && !liveStream.content ? (
-            <div className="text-gray-400 text-center py-8">
+            <div className="text-ink-3 text-center py-8">
               {isRunning ? t('agent.waiting_events') : t('agent.start_to_see')}
             </div>
           ) : (

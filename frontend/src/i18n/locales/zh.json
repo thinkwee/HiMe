@@ -48,6 +48,8 @@
     "brand_subtitle": "数字化身",
     "live_healthkit": "实时健康数据",
     "agent_indicator": "智能体",
+    "open_menu": "打开菜单",
+    "close_menu": "关闭菜单",
     "stream_indicator": "数据流"
   },
   "dashboard": {
@@ -417,6 +419,12 @@
     "shortcut": "快捷键: Ctrl + S 保存",
     "confirm_discard": "有未保存的修改，确定放弃吗？",
     "body_label": "手册正文"
+  },
+  "theme": {
+    "label": "主题",
+    "system": "跟随系统",
+    "light": "浅色",
+    "dark": "深色"
   },
   "language_switcher": {
     "english": "English",

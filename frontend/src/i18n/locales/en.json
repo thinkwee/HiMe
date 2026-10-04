@@ -48,6 +48,8 @@
     "brand_subtitle": "Digital Avatar",
     "live_healthkit": "Live HealthKit",
     "agent_indicator": "Agent",
+    "open_menu": "Open menu",
+    "close_menu": "Close menu",
     "stream_indicator": "Stream"
   },
   "dashboard": {
@@ -417,6 +419,12 @@
     "shortcut": "Shortcut: Ctrl + S to Save",
     "confirm_discard": "You have unsaved changes. Discard them?",
     "body_label": "Playbook body"
+  },
+  "theme": {
+    "label": "Theme",
+    "system": "System",
+    "light": "Light",
+    "dark": "Dark"
   },
   "language_switcher": {
     "english": "English",

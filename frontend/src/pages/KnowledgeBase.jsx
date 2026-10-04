@@ -17,6 +17,7 @@ import {
   EyeOff,
 } from 'lucide-react'
 import React from 'react'
+import Skeleton from '../components/Skeleton'
 
 export default function MemoryAndTools({ active = true }) {
   const { t } = useTranslation()
@@ -121,8 +122,8 @@ export default function MemoryAndTools({ active = true }) {
   return (
     <div className="space-y-6 animate-fade-in relative">
       {/* Header */}
-      <div className="flex items-center justify-between gap-4">
-        <h2 className="text-3xl font-black text-gray-900 tracking-tight">{t('knowledge.title')}</h2>
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <h2 className="page-title">{t('knowledge.title')}</h2>
 
         <div className="flex items-center gap-3">
         <button
@@ -131,16 +132,16 @@ export default function MemoryAndTools({ active = true }) {
           disabled={loading}
           aria-label={t('common.refresh')}
           title={t('common.refresh')}
-          className="p-2 rounded-xl border border-gray-200 bg-white text-gray-500 hover:text-gray-800 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+          className="p-2 rounded-control border border-line bg-panel text-ink-2 hover:text-ink hover:bg-sunken disabled:opacity-50 transition-colors"
         >
           <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
         </button>
-        <div className="flex items-center space-x-2 bg-gray-100 p-1 rounded-xl border border-gray-200">
+        <div className="flex items-center space-x-2 bg-sunken p-1 rounded-card border border-line">
           <button
             type="button"
             aria-pressed={activeTab === 'memory'}
             onClick={() => setActiveTab('memory')}
-            className={`px-5 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-2 ${activeTab === 'memory' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:bg-gray-50'
+            className={`px-5 py-1.5 rounded-control text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'memory' ? 'bg-panel text-ink shadow-sm' : 'text-ink-2 hover:bg-sunken'
               }`}
           >
             <Database className="w-3.5 h-3.5" /> {t('knowledge.tab_memory')}
@@ -149,7 +150,7 @@ export default function MemoryAndTools({ active = true }) {
             type="button"
             aria-pressed={activeTab === 'tools'}
             onClick={() => setActiveTab('tools')}
-            className={`px-5 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-2 ${activeTab === 'tools' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:bg-gray-50'
+            className={`px-5 py-1.5 rounded-control text-xs font-bold transition-all flex items-center gap-2 ${activeTab === 'tools' ? 'bg-panel text-ink shadow-sm' : 'text-ink-2 hover:bg-sunken'
               }`}
           >
             <Wrench className="w-3.5 h-3.5" /> {t('knowledge.tab_tools')}
@@ -159,7 +160,7 @@ export default function MemoryAndTools({ active = true }) {
       </div>
 
       {error && (
-        <div role="alert" className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700 font-medium flex items-center gap-3">
+        <div role="alert" className="bg-bad/10 border border-bad/30 rounded-card px-4 py-3 text-sm text-bad-ink font-medium flex items-center gap-3">
           <span className="flex-1 break-words">{error}</span>
           <button type="button" onClick={handleRefresh} className="underline font-semibold">{t('common.retry')}</button>
         </div>
@@ -168,36 +169,33 @@ export default function MemoryAndTools({ active = true }) {
       <div className="space-y-6 p-1">
         <div className="min-w-0">
           {loading ? (
-            <div className="flex flex-col items-center justify-center py-24 bg-white rounded-3xl border border-gray-100">
-              <RefreshCw className="w-8 h-8 text-primary-500 animate-spin mb-4" />
-              <p className="font-black text-gray-400 text-xs uppercase tracking-widest">{t('knowledge.synchronizing')}</p>
-            </div>
+            <Skeleton lines={5} label={t('knowledge.synchronizing')} />
           ) : activeTab === 'tools' ? (
             /* Tools List */
             <div className="max-h-[calc(100vh-250px)] overflow-y-auto pr-2 space-y-4 custom-scrollbar">
               {tools.map((tool) => (
-                <div key={tool.function.name} className="card shadow-none border-gray-200 border-l-4 border-l-gray-200 hover:border-l-primary-500 group">
+                <div key={tool.function.name} className="card shadow-none border-line border-l-4 border-l-line hover:border-l-primary-500 group">
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-3">
-                      <div className="p-2 bg-gray-50 text-gray-500 rounded-lg group-hover:bg-primary-50 group-hover:text-primary-600 transition-colors">
+                      <div className="p-2 bg-sunken text-ink-2 rounded-control group-hover:bg-primary-50 group-hover:text-primary-600 transition-colors">
                         {tool.function.name === 'sql' ? <Search className="w-4 h-4" /> :
                           tool.function.name === 'code' ? <Code className="w-4 h-4" /> :
                               <Terminal className="w-4 h-4" />}
                       </div>
-                      <h3 className="font-black text-lg text-gray-900">{tool.function.name}</h3>
+                      <h3 className="font-bold text-lg text-ink">{tool.function.name}</h3>
                     </div>
                   </div>
-                  <p className="text-sm text-gray-600 leading-relaxed mb-4 font-medium">
+                  <p className="text-sm text-ink-2 leading-relaxed mb-4 font-medium">
                     {tool.function.description}
                   </p>
 
-                  <div className="bg-gray-50/50 rounded-xl p-3 border border-gray-100">
-                    <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">{t('knowledge.parameters')}</div>
+                  <div className="bg-sunken/50 rounded-card p-3 border border-line">
+                    <div className="text-[10px] font-bold text-ink-3 uppercase tracking-widest mb-2">{t('knowledge.parameters')}</div>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1">
                       {Object.entries(tool.function.parameters.properties).map(([name, schema]) => (
-                        <div key={name} className="flex items-center justify-between font-mono text-[11px] py-1 border-b border-gray-100 last:border-0">
-                          <span className="text-gray-700 font-bold">{name}{tool.function.parameters.required?.includes(name) ? '*' : ''}</span>
-                          <span className="text-gray-400">{schema.type}</span>
+                        <div key={name} className="flex items-center justify-between font-mono text-[11px] py-1 border-b border-line last:border-0">
+                          <span className="text-ink font-bold">{name}{tool.function.parameters.required?.includes(name) ? '*' : ''}</span>
+                          <span className="text-ink-3">{schema.type}</span>
                         </div>
                       ))}
                     </div>
@@ -209,31 +207,31 @@ export default function MemoryAndTools({ active = true }) {
             /* Memory Stats View with Inline Expansion */
             <div className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="card shadow-none border-gray-200 p-4 flex items-center gap-4">
-                  <div className="p-3 bg-blue-50 text-blue-500 rounded-xl"><Table className="w-5 h-5" /></div>
+                <div className="card shadow-none border-line p-4 flex items-center gap-4">
+                  <div className="p-3 bg-info/10 text-info rounded-card"><Table className="w-5 h-5" /></div>
                   <div>
-                    <div className="text-[10px] font-black text-gray-400 uppercase tracking-tighter">{t('knowledge.tables')}</div>
-                    <div className="text-2xl font-black text-gray-900">{Object.keys(memoryStats?.table_counts || {}).length}</div>
+                    <div className="text-[10px] font-bold text-ink-3 uppercase tracking-tighter">{t('knowledge.tables')}</div>
+                    <div className="text-2xl font-bold text-ink">{Object.keys(memoryStats?.table_counts || {}).length}</div>
                   </div>
                 </div>
-                <div className="card shadow-none border-gray-200 p-4 flex items-center gap-4">
-                  <div className="p-3 bg-purple-50 text-purple-500 rounded-xl"><Hash className="w-5 h-5" /></div>
+                <div className="card shadow-none border-line p-4 flex items-center gap-4">
+                  <div className="p-3 bg-info/10 text-info rounded-card"><Hash className="w-5 h-5" /></div>
                   <div>
-                    <div className="text-[10px] font-black text-gray-400 uppercase tracking-tighter">{t('knowledge.total_rows')}</div>
-                    <div className="text-2xl font-black text-gray-900">{Object.values(memoryStats?.table_counts || {}).reduce((a, b) => a + (b > 0 ? b : 0), 0).toLocaleString()}</div>
+                    <div className="text-[10px] font-bold text-ink-3 uppercase tracking-tighter">{t('knowledge.total_rows')}</div>
+                    <div className="text-2xl font-bold text-ink">{Object.values(memoryStats?.table_counts || {}).reduce((a, b) => a + (b > 0 ? b : 0), 0).toLocaleString()}</div>
                   </div>
                 </div>
-                <div className="card shadow-none border-gray-200 p-4 flex items-center gap-4">
-                  <div className="p-3 bg-emerald-50 text-emerald-500 rounded-xl"><Calendar className="w-5 h-5" /></div>
+                <div className="card shadow-none border-line p-4 flex items-center gap-4">
+                  <div className="p-3 bg-ok/10 text-ok rounded-card"><Calendar className="w-5 h-5" /></div>
                   <div>
-                    <div className="text-[10px] font-black text-gray-400 uppercase tracking-tighter">{t('knowledge.activity')}</div>
-                    <div className="text-sm font-black text-gray-900 truncate">{memoryStats?.date_range?.max ? parseBackendDate(memoryStats.date_range.max).toLocaleDateString() : t('knowledge.none')}</div>
+                    <div className="text-[10px] font-bold text-ink-3 uppercase tracking-tighter">{t('knowledge.activity')}</div>
+                    <div className="text-sm font-bold text-ink truncate">{memoryStats?.date_range?.max ? parseBackendDate(memoryStats.date_range.max).toLocaleDateString() : t('knowledge.none')}</div>
                   </div>
                 </div>
               </div>
 
               {/* Outer card uses overflow-hidden so inner content cannot stretch it wider */}
-              <div className="card p-0 overflow-hidden border-gray-200 shadow-none">
+              <div className="card p-0 overflow-hidden border-line shadow-none">
                 {/* Outer table area scrolls horizontally but width is clamped inside the card */}
                 <div className="overflow-x-auto">
                   <table className="w-full text-left" style={{ tableLayout: 'fixed', minWidth: '500px' }}>
@@ -244,28 +242,28 @@ export default function MemoryAndTools({ active = true }) {
                       <col style={{ width: '30%' }} />
                     </colgroup>
                     <thead>
-                      <tr className="border-b border-gray-100 bg-gray-50/50">
-                        <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('knowledge.col_table_name')}</th>
-                        <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('knowledge.col_rows')}</th>
-                        <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('knowledge.col_type')}</th>
-                        <th className="px-6 py-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('knowledge.col_actions')}</th>
+                      <tr className="border-b border-line bg-sunken/50">
+                        <th className="px-6 py-4 text-[10px] font-bold text-ink-3 uppercase tracking-widest">{t('knowledge.col_table_name')}</th>
+                        <th className="px-6 py-4 text-[10px] font-bold text-ink-3 uppercase tracking-widest">{t('knowledge.col_rows')}</th>
+                        <th className="px-6 py-4 text-[10px] font-bold text-ink-3 uppercase tracking-widest">{t('knowledge.col_type')}</th>
+                        <th className="px-6 py-4 text-[10px] font-bold text-ink-3 uppercase tracking-widest">{t('knowledge.col_actions')}</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-gray-50">
+                    <tbody className="divide-y divide-line">
                       {Object.entries(memoryStats?.table_counts || {}).sort(([a], [b]) => a.localeCompare(b)).map(([name, count]) => {
                         const isSystem = ['reports', 'activity_log'].includes(name)
                         const isExpanded = expandedTable === name
                         return (
                           <React.Fragment key={name}>
-                            <tr className={`transition-colors group ${isExpanded ? 'bg-primary-50/30' : 'hover:bg-gray-50/50'}`}>
+                            <tr className={`transition-colors group ${isExpanded ? 'bg-primary-50/30' : 'hover:bg-sunken/50'}`}>
                               <td className="px-6 py-4">
-                                <span className="font-mono font-black text-gray-900 text-sm">{name}</span>
+                                <span className="font-mono font-bold text-ink text-sm">{name}</span>
                               </td>
                               <td className="px-6 py-4">
-                                <span className="font-black text-gray-500 text-sm">{count >= 0 ? count.toLocaleString() : t('knowledge.row_error')}</span>
+                                <span className="font-bold text-ink-2 text-sm">{count >= 0 ? count.toLocaleString() : t('knowledge.row_error')}</span>
                               </td>
                               <td className="px-6 py-4">
-                                <span className={`text-[10px] font-black uppercase tracking-tighter ${isSystem ? 'text-blue-500 bg-blue-50 px-2 py-1 rounded' : 'text-purple-500 bg-purple-50 px-2 py-1 rounded'}`}>
+                                <span className={`text-[10px] font-bold uppercase tracking-tighter ${isSystem ? 'text-info-ink bg-info/15' : 'text-primary-700 bg-primary-100'} px-2 py-1 rounded-chip`}>
                                   {isSystem ? t('knowledge.type_system') : t('knowledge.type_agent')}
                                 </span>
                               </td>
@@ -274,7 +272,7 @@ export default function MemoryAndTools({ active = true }) {
                                   type="button"
                                   aria-expanded={isExpanded}
                                   onClick={() => toggleExpand(name)}
-                                  className={`flex items-center gap-1.5 text-xs font-black transition-all ${isExpanded ? 'text-primary-700' : 'text-primary-600'
+                                  className={`flex items-center gap-1.5 text-xs font-bold transition-all ${isExpanded ? 'text-primary-700' : 'text-primary-600'
                                     }`}
                                 >
                                   {isExpanded ? (
@@ -289,12 +287,12 @@ export default function MemoryAndTools({ active = true }) {
                             {/* Expanded detail row: colspan fills the width, but its content area is independent and does not affect the outer table's column widths */}
                             {isExpanded && (
                               <tr>
-                                <td colSpan="4" className="p-0 border-b border-gray-200">
-                                  <div className="bg-white p-4 font-mono">
+                                <td colSpan="4" className="p-0 border-b border-line">
+                                  <div className="bg-panel p-4 font-mono">
                                     {inspectLoading ? (
                                       <div className="flex items-center justify-center py-12 gap-3">
                                         <RefreshCw className="w-5 h-5 text-primary-500 animate-spin" />
-                                        <span className="text-xs font-black text-gray-400 uppercase">{t('knowledge.fetching')}</span>
+                                        <span className="text-xs font-bold text-ink-3 uppercase">{t('knowledge.fetching')}</span>
                                       </div>
                                     ) : tableData.length > 0 ? (
                                       /*
@@ -305,14 +303,14 @@ export default function MemoryAndTools({ active = true }) {
                                            stretching the row; max-w-xs caps any single column, and horizontal scroll
                                            handles the many-column case.
                                       */
-                                      <div className="overflow-x-auto max-h-[400px] border border-gray-100 rounded-xl custom-scrollbar">
+                                      <div className="overflow-x-auto max-h-[400px] border border-line rounded-card custom-scrollbar">
                                         <table className="text-left text-[11px] border-collapse" style={{ minWidth: '100%' }}>
-                                          <thead className="bg-gray-50 sticky top-0 font-black text-gray-400">
+                                          <thead className="bg-sunken sticky top-0 font-bold text-ink-3">
                                             <tr>
                                               {Object.keys(tableData[0] || {}).map(k => (
                                                 <th
                                                   key={k}
-                                                  className="px-3 py-2 border-b border-gray-100 uppercase bg-gray-50 whitespace-nowrap"
+                                                  className="px-3 py-2 border-b border-line uppercase bg-sunken whitespace-nowrap"
                                                   style={{ maxWidth: '240px', minWidth: '80px' }}
                                                 >
                                                   {k}
@@ -320,17 +318,17 @@ export default function MemoryAndTools({ active = true }) {
                                               ))}
                                             </tr>
                                           </thead>
-                                          <tbody className="divide-y divide-gray-50">
+                                          <tbody className="divide-y divide-line">
                                             {tableData.map((row, i) => (
-                                              <tr key={i} className="hover:bg-gray-50 transition-colors">
+                                              <tr key={i} className="hover:bg-sunken transition-colors">
                                                 {Object.values(row).map((v, j) => (
                                                   <td
                                                     key={j}
-                                                    className="px-3 py-2 text-gray-600 align-top"
+                                                    className="px-3 py-2 text-ink-2 align-top"
                                                     style={{ maxWidth: '240px', wordBreak: 'break-all', whiteSpace: 'pre-wrap' }}
                                                   >
                                                     {v === null ? (
-                                                      <span className="text-gray-300">—</span>
+                                                      <span className="text-ink-3">—</span>
                                                     ) : typeof v === 'object' ? (
                                                       JSON.stringify(v)
                                                     ) : (
@@ -344,7 +342,7 @@ export default function MemoryAndTools({ active = true }) {
                                         </table>
                                       </div>
                                     ) : (
-                                      <div className="py-12 text-center text-gray-400 font-black text-xs uppercase">{t('knowledge.no_records')}</div>
+                                      <div className="py-12 text-center text-ink-3 font-bold text-xs uppercase">{t('knowledge.no_records')}</div>
                                     )}
                                   </div>
                                 </td>
