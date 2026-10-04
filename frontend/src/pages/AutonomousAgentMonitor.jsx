@@ -1,20 +1,20 @@
 import { memo, useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Light as SyntaxHighlighter } from 'react-syntax-highlighter'
-import python from 'react-syntax-highlighter/dist/esm/languages/hljs/python'
-import { githubGist, atomOneDark } from 'react-syntax-highlighter/dist/esm/styles/hljs'
 import { api } from '../lib/api'
 import { formatFullDateTime, parseBackendDate } from '../lib/utils'
 import { useAppActions } from '../context/AppContext'
 import InlineFlash from '../components/InlineFlash'
-import { useTheme } from '../lib/theme'
+import { createLiveStore } from '../lib/liveStore'
+import RunTimeline, { stepVerb } from '../components/agent/RunTimeline'
+import { ChatImage, CodeBlock } from '../components/agent/blocks'
 import { useDocumentVisible, useFlash, useOnActivate, usePolling } from '../lib/hooks'
 import {
   eventKey, eventTimeMs, eventToMessage, formatTokenUsage, mergeActivity, unwrapEvent,
 } from './agentEvents'
+import {
+  buildTimeline, currentStep, findLiveRun, mergeChrono, stepObject, toTimelineRecord,
+} from './runTimeline'
 import { Play, Square, Brain, Activity, Database, Wifi, WifiOff, X, Clock, Plus, Pause, Trash2, Zap, RotateCcw, Pencil, Check, Loader2, CheckCircle2, AlertCircle, Server, HardDrive, Cpu, ListChecks, Rocket } from 'lucide-react'
-
-SyntaxHighlighter.registerLanguage('python', python)
 
 const STORAGE_KEY = 'hime_agent_config'
 
@@ -113,49 +113,9 @@ function ToolResultBlock({ text, sqlData, theme }) {
   )
 }
 
-// Syntax-highlighted Python code block
-const codeHighlightStyles = {
-  light: { ...githubGist, hljs: { ...githubGist.hljs, background: 'transparent', padding: 0 } },
-  dark: { ...atomOneDark, hljs: { ...atomOneDark.hljs, background: 'transparent', padding: 0 } },
-}
-function PythonBlock({ code, theme, maxH = 'max-h-32' }) {
-  const { resolved } = useTheme()
-  const codeHighlightStyle = codeHighlightStyles[resolved] || codeHighlightStyles.light
-  return (
-    <div className={`mt-1 ${theme.bg} rounded-chip px-2.5 py-1.5 border ${theme.border} ${maxH} overflow-y-auto`}>
-      <SyntaxHighlighter language="python" style={codeHighlightStyle} customStyle={{ fontSize: '10px', margin: 0, background: 'transparent' }}>
-        {code}
-      </SyntaxHighlighter>
-    </div>
-  )
-}
-
-/** Agent-sent chart. Fetched with the bearer header (never a ?token= URL) and shown from an object URL. */
-function ChatImage({ url, caption }) {
-  const { t } = useTranslation()
-  const [state, setState] = useState({ src: null, error: false })
-  useEffect(() => {
-    if (!url) return undefined
-    let cancelled = false
-    let objectUrl = null
-    api.fetchChatImage(url).then((res) => {
-      if (cancelled) return
-      if (res.success) {
-        objectUrl = URL.createObjectURL(res.blob)
-        setState({ src: objectUrl, error: false })
-      } else {
-        setState({ src: null, error: true })
-      }
-    })
-    return () => {
-      cancelled = true
-      if (objectUrl) URL.revokeObjectURL(objectUrl)
-    }
-  }, [url])
-  if (!url) return null
-  if (state.error) return <div className="mt-1 text-[10px] text-bad">{t('agent.image_load_failed')}</div>
-  if (!state.src) return <div className="mt-1 text-[10px] text-ink-3">{t('common.loading')}</div>
-  return <img src={state.src} alt={caption || t('agent.evt_image')} className="mt-1 max-h-64 rounded-chip border border-line" />
+// Syntax-highlighted Python code block (raw log)
+function PythonBlock({ code, maxH = 'max-h-32' }) {
+  return <CodeBlock code={code} className="mt-1" maxH={maxH} fontSize="10px" />
 }
 
 const LogItem = memo(function LogItem({ update }) {
@@ -409,7 +369,7 @@ function ScheduledTasksPanel({ isRunning, active }) {
   }
 
   return (
-    <div className="card">
+    <div className="card !p-4">
       <div className="flex items-center justify-between mb-3">
         <h3 className="section-title flex items-center gap-2">
           <Clock className="w-5 h-5 text-ink-2" />
@@ -623,7 +583,7 @@ function TriggerRulesPanel({ isRunning, active }) {
   }
 
   return (
-    <div className="card">
+    <div className="card !p-4">
       <div className="flex items-center justify-between mb-3">
         <h3 className="section-title flex items-center gap-2">
           <Zap className="w-5 h-5 text-warn" />
@@ -875,6 +835,10 @@ const MAX_LOG_ITEMS = 500
 /** Right after a (re)connect the server replays its recent backlog; events seen in this window are de-duplicated. */
 const REPLAY_WINDOW_MS = 3000
 const EMPTY_LIVE = { thinking: '', content: '' }
+/** Max timeline records kept (history fetch + live). */
+const MAX_TIMELINE = 1500
+/** Agent states in which nothing is being worked on. */
+const IDLE_STATES = new Set(['', 'idle', 'initialized', 'chat_complete', 'chat_suspended'])
 const stripToolCallXml = (text) => (text || '').replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '').trim()
 
 export default function AutonomousAgentMonitor({ active = true }) {
@@ -898,7 +862,15 @@ export default function AutonomousAgentMonitor({ active = true }) {
   const [providerModels, setProviderModels] = useState({})
   const [wsConnected, setWsConnected] = useState(false)
   const [cumulativeTokens, setCumulativeTokens] = useState({ prompt: 0, thoughts: 0, response: 0, cacheRead: 0, cacheCreation: 0 })
-  const [liveStream, setLiveStream] = useState(EMPTY_LIVE)
+  // Chronological timeline records (the primary view) + view switch.
+  const [timeline, setTimeline] = useState([])
+  const [activityLoaded, setActivityLoaded] = useState(false)
+  const [view, setView] = useState('activity') // 'activity' | 'raw'
+  const [lastError, setLastError] = useState('')
+  const [stoppingReply, setStoppingReply] = useState(false)
+  // Streaming text (latest thought, reply being typed) lives outside React state
+  // so a streamed delta re-renders only the live bubble.
+  const [liveStore] = useState(createLiveStore)
   const [stopping, setStopping] = useState(false)
 
   const [wsReconnecting, setWsReconnecting] = useState(false)
@@ -926,8 +898,21 @@ export default function AutonomousAgentMonitor({ active = true }) {
   const replayTimerRef = useRef(null)
   const waitingShownRef = useRef(false)
 
+  // Narration (chat_content / content) buffered per run until a tool call
+  // follows, when it is demoted to a "thought" row in the timeline.
+  const thoughtBufRef = useRef({})
+
   const clearLive = useCallback(() => {
-    setLiveStream((prev) => (prev.thinking || prev.content ? EMPTY_LIVE : prev))
+    liveStore.setThought('')
+  }, [liveStore])
+
+  /** Append one record to the timeline. */
+  const pushRecord = useCallback((rec) => {
+    if (!rec) return
+    setTimeline((prev) => {
+      const next = [...prev, rec]
+      return next.length > MAX_TIMELINE ? next.slice(next.length - MAX_TIMELINE) : next
+    })
   }, [])
 
   /** Remember that an event with this key is on screen (bounded). */
@@ -1030,12 +1015,12 @@ export default function AutonomousAgentMonitor({ active = true }) {
     const timer = setInterval(() => {
       const tt = lastStreamTaskRef.current || 'analysis'
       const buf = streamBufferRef.current[tt] || EMPTY_LIVE
-      const thinking = buf.thinking || ''
-      const content = buf.content || ''
-      setLiveStream((prev) => (prev.thinking === thinking && prev.content === content ? prev : { thinking, content }))
+      // Latest narration wins over reasoning; either is shown as one muted line.
+      const thought = stripToolCallXml(buf.content) || (buf.thinking || '').trim()
+      liveStore.setThought(thought.length > 600 ? thought.slice(-600) : thought)
     }, 150)
     return () => clearInterval(timer)
-  }, [active, visible])
+  }, [active, visible, liveStore])
 
   const formatAgentState = (status) => {
     if (!status) return '—'
@@ -1105,15 +1090,19 @@ export default function AutonomousAgentMonitor({ active = true }) {
       setLogLoadError('')
       if (!result.events?.length) return
       const items = []
+      const recs = []
       const fetchedCounts = new Map()
       result.events.forEach((ev) => {
         const d = unwrapEvent(ev)
-        const key = eventKey(ev.type || d.type || '', d)
+        const type = ev.type || d.type || ''
+        const key = eventKey(type, d)
         fetchedCounts.set(key, (fetchedCounts.get(key) || 0) + 1)
         const msg = eventToMessage(ev)
+        const ts = eventTimeMs(ev, parseBackendDate) ?? Date.now()
+        const rec = toTimelineRecord(type, d, { id: genId(), key, ts, note: msg?.text })
+        if (rec) recs.push(rec)
         if (!msg) return
         if (msg.isStreaming) return
-        const ts = eventTimeMs(ev, parseBackendDate) ?? Date.now()
         items.push({ id: genId(), time: new Date(ts).toLocaleTimeString(), ts, key, message: msg })
       })
       // Everything fetched is now "on screen": a WS backlog replay of it must be skipped.
@@ -1122,10 +1111,48 @@ export default function AutonomousAgentMonitor({ active = true }) {
       // Merge rather than overwrite: live events that arrived while the fetch
       // was in flight (or streamed text that is never persisted) must survive.
       setLogUpdates((prev) => mergeActivity(prev, items.reverse(), MAX_LOG_ITEMS))
+      // History is chronological already; live records that raced the fetch are kept.
+      setTimeline((prev) => mergeChrono(prev, recs, MAX_TIMELINE))
     } catch (e) {
       setLogLoadError(e?.message || t('common.load_failed'))
+    } finally {
+      setActivityLoaded(true)
     }
   }, [t])
+
+  /**
+   * Feed one (already de-duplicated) live event into the timeline. Narration
+   * deltas are buffered per run and demoted to a "thought" row when a tool
+   * call follows; a delivered reply supersedes its streamed draft.
+   */
+  const ingestTimeline = useCallback((type, d, ts, key, note) => {
+    const isChat = type.startsWith('chat_') || type === 'user_message'
+    const bufKey = isChat ? (d.run_id || 'chat') : 'bg'
+    const bufs = thoughtBufRef.current
+    if (type === 'chat_content' || type === 'content') {
+      bufs[bufKey] = (bufs[bufKey] || '') + (d.content || '')
+      return
+    }
+    if (type === 'chat_thinking' || type === 'agent_thinking') return
+    if (/^(chat|analysis|quick|plan)_tool_call$/.test(type)) {
+      const text = stripToolCallXml(bufs[bufKey])
+      bufs[bufKey] = ''
+      if (text && d.tool !== 'reply_user' && d.tool !== 'finish_chat') {
+        pushRecord(toTimelineRecord('thought', { content: text, run_id: d.run_id, scope: isChat ? 'chat' : 'bg' }, { id: genId(), ts: ts - 1 }))
+      }
+    } else if (['chat_reply', 'chat_stopped', 'chat_cleared', 'user_message', 'cycle_start', 'cycle_end'].includes(type)) {
+      bufs[bufKey] = ''
+    }
+    if (type === 'chat_reply') liveStore.setReply(d.run_id || '_', '')
+    if (type === 'chat_stopped') {
+      liveStore.clearReplies()
+      liveStore.setThought('')
+      streamBufferRef.current.chat = { content: '', thinking: '' }
+    }
+    if (type === 'agent_started' || type === 'cycle_start' || type === 'user_message' || type === 'agent_stopped') setLastError('')
+    if (type === 'agent_error' || type === 'startup_error') setLastError(d.error || note || '')
+    pushRecord(toTimelineRecord(type, d, { id: genId(), key, ts, note }))
+  }, [liveStore, pushRecord])
 
   // Schedule a WebSocket reconnect with exponential backoff
   const scheduleReconnect = useCallback(() => {
@@ -1197,7 +1224,14 @@ export default function AutonomousAgentMonitor({ active = true }) {
           if (!waitingShownRef.current) {
             waitingShownRef.current = true
             addStatusUpdate({ taskType: 'analysis', text: `📡 ${t('agent.evt_waiting')}`, type: 'system' })
+            pushRecord(toTimelineRecord('agent_waiting', data, { id: genId(), ts: Date.now(), note: t('agent.evt_waiting') }))
           }
+          return
+        }
+        if (data.type === 'chat_reply_delta') {
+          // Full reply text so far (not a diff). Streamed straight into the live
+          // store; never logged or de-duplicated (every snapshot is distinct).
+          liveStore.setReply(data.run_id || '_', data.reset ? '' : (data.text || ''))
           return
         }
 
@@ -1218,6 +1252,7 @@ export default function AutonomousAgentMonitor({ active = true }) {
             cache_creation_tokens: data.cache_creation_tokens,
           }
           addCumulativeTokens(tokenUsage)
+          ingestTimeline('token_usage', data, evTs, key, '')
           const tt = isChat ? 'chat' : 'analysis'
           const buckets = streamBufferRef.current
           if (!buckets[tt]) buckets[tt] = { content: '', thinking: '' }
@@ -1266,8 +1301,9 @@ export default function AutonomousAgentMonitor({ active = true }) {
             // Mark startup complete (step 8 = past the last step)
             setStartupModal((prev) => prev ? { step: 8, error: null } : null)
             streamBufferRef.current = {}
+            thoughtBufRef.current = {}
             lastStreamTaskRef.current = 'analysis'
-            clearLive()
+            liveStore.reset()
             checkAgentStatus()
           } else if (data.type === 'startup_error') {
             setStartupModal((prev) => ({ step: prev?.step || 0, error: data.error || t('common.unknown_error') }))
@@ -1275,6 +1311,7 @@ export default function AutonomousAgentMonitor({ active = true }) {
             setWsReconnecting(false)
           }
           const msg = eventToMessage(data)
+          ingestTimeline(data.type || '', data, evTs, key, msg?.text)
           if (msg) addStatusUpdate(msg, { ts: evTs, key })
         }
       } catch (e) {
@@ -1299,7 +1336,7 @@ export default function AutonomousAgentMonitor({ active = true }) {
       }
     }
     wsRef.current = websocket
-  }, [addStatusUpdate, addCumulativeTokens, checkAgentStatus, clearLive, consumeReplay, registerKey, scheduleReconnect, t])
+  }, [addStatusUpdate, addCumulativeTokens, checkAgentStatus, clearLive, consumeReplay, ingestTimeline, liveStore, pushRecord, registerKey, scheduleReconnect, t])
 
   // Keep stable refs for callbacks (updated after commit, never during render)
   useEffect(() => {
@@ -1353,6 +1390,8 @@ export default function AutonomousAgentMonitor({ active = true }) {
       configSyncedRef.current = false
       appDispatch({ type: 'SET_AGENT_STATUS', payload: { running: false } })
       addStatusUpdate({ taskType: 'analysis', text: `🛑 ${t('agent.agent_stopped_by_user')}`, type: 'system' })
+      liveStore.reset()
+      pushRecord(toTimelineRecord('agent_stopped', {}, { id: genId(), ts: Date.now(), note: t('agent.agent_stopped_by_user') }))
     } catch (error) {
       console.error('Failed to stop agent:', error)
       setActionFlash('error', error?.message || t('agent.stop_failed'))
@@ -1446,7 +1485,7 @@ export default function AutonomousAgentMonitor({ active = true }) {
     }
   }, [])
 
-  // Filtered logs
+  // Filtered logs (raw view)
   const filteredLogs = useMemo(() => (
     logFilter === 'all'
       ? logUpdates
@@ -1462,9 +1501,82 @@ export default function AutonomousAgentMonitor({ active = true }) {
     setStartupModal(null)
   }
 
+  // ── Timeline (memoised on the records; never on streamed text) ──────────
+  const agentState = agentStatus?.status?.state || ''
+  const idle = !isRunning || IDLE_STATES.has(agentState)
+  const [now, setNow] = useState(() => Date.now())
+  // A run with no end marker is declared finished shortly after the agent goes
+  // idle (or stale after a while); nothing else would trigger that re-evaluation.
+  useEffect(() => {
+    if (!idle) return undefined
+    const id = setTimeout(() => setNow(Date.now()), 8500)
+    return () => clearTimeout(id)
+  }, [idle, timeline])
+  useEffect(() => {
+    if (!active || !visible) return undefined
+    const id = setInterval(() => setNow(Date.now()), 30000)
+    return () => clearInterval(id)
+  }, [active, visible])
+  const items = useMemo(() => buildTimeline(timeline, { idle, now }), [timeline, idle, now])
+  const liveRun = useMemo(() => (isRunning ? findLiveRun(items) : null), [items, isRunning])
+  const liveStep = useMemo(() => currentStep(liveRun), [liveRun])
+  const liveStepText = liveStep ? stepVerb(liveStep, t) : ''
+  const chatLive = !!liveRun && liveRun.runType === 'chat'
+  const stateBusy = isRunning && !IDLE_STATES.has(agentState)
+  const showLive = isRunning && (!!liveRun || stateBusy)
+
+  // ── Status hero ──────────────────────────────────────────────────────────
+  const starting = (!!startupModal && !startupModal.error && startupModal.step < 8) || (isRunning && !agentStatus)
+  let hero
+  if (starting) {
+    hero = { tone: 'warn', title: t('agent.hero_starting'), hint: '' }
+  } else if (lastError) {
+    hero = { tone: 'bad', title: t('agent.hero_error'), hint: lastError }
+  } else if (!isRunning) {
+    hero = { tone: 'off', title: t('agent.hero_stopped'), hint: t('agent.hero_stopped_hint') }
+  } else if (showLive) {
+    hero = liveStepText
+      ? { tone: 'info', title: t('agent.hero_working', { step: liveStepText }), hint: stepObject(liveStep) }
+      : { tone: 'info', title: stateBusy && !liveRun ? t('agent.hero_working_plain') : t('agent.hero_thinking'), hint: '' }
+  } else {
+    hero = { tone: 'ok', title: t('agent.hero_idle'), hint: t('agent.hero_idle_hint') }
+  }
+  const HERO_DOT = {
+    ok: 'bg-ok', info: 'bg-info animate-pulse', warn: 'bg-warn animate-pulse', bad: 'bg-bad', off: 'bg-ink-3',
+  }
+
+  const handleStopReply = async () => {
+    if (stoppingReply) return
+    setStoppingReply(true)
+    try {
+      const res = await api.stopChat()
+      if (!res.success) setActionFlash('error', res.error || t('agent.stop_reply_failed'))
+      else if (!res.stopped) setActionFlash('success', t('agent.stop_reply_none'))
+    } catch (error) {
+      setActionFlash('error', error?.message || t('agent.stop_reply_failed'))
+    } finally {
+      setStoppingReply(false)
+    }
+  }
+
+  const clearAll = () => {
+    if (!window.confirm(t('agent.confirm_clear_logs'))) return
+    setLogUpdates([])
+    setTimeline([])
+    liveStore.reset()
+  }
+
+  const hasTokens = cumulativeTokens.prompt > 0 || cumulativeTokens.thoughts > 0 || cumulativeTokens.response > 0
+  const tokenTiles = [
+    { label: t('agent.tok_input'), value: cumulativeTokens.prompt },
+    { label: t('agent.tok_thinking'), value: cumulativeTokens.thoughts },
+    { label: t('agent.tok_response'), value: cumulativeTokens.response },
+    { label: t('agent.tok_cached'), value: cumulativeTokens.cacheRead || 0 },
+  ]
+
   // Render
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {startupModal && (
         <StartupModal
           currentStep={startupModal.step}
@@ -1472,261 +1584,253 @@ export default function AutonomousAgentMonitor({ active = true }) {
           onClose={closeStartupModal}
         />
       )}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="page-title">{t('agent.title')}</h2>
-          <p className="page-subtitle">{t('agent.subtitle')}</p>
+      <div>
+        <h2 className="page-title">{t('agent.title')}</h2>
+        <p className="page-subtitle">{t('agent.subtitle')}</p>
+      </div>
+
+      {/* Status hero + agent controls */}
+      <div className="card !p-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3" role="status" aria-live="polite" aria-atomic="true">
+          <span className={`h-3 w-3 shrink-0 rounded-full ${HERO_DOT[hero.tone]}`} aria-hidden="true" />
+          <div className="min-w-0">
+            <div className="truncate text-lg font-semibold text-ink" data-testid="status-hero">{hero.title}</div>
+            {hero.hint && <div className="truncate font-mono text-xs text-ink-2" title={hero.hint}>{hero.hint}</div>}
+          </div>
         </div>
-        <div className="flex items-center space-x-3">
-          <div className="flex items-center space-x-1 text-xs">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1 text-xs">
             {wsConnected ? (
-              <><Wifi className="w-3 h-3 text-ok" /><span className="text-ok-ink">{t('agent.live')}</span></>
+              <><Wifi className="h-3 w-3 text-ok" aria-hidden="true" /><span className="text-ok-ink">{t('agent.live')}</span></>
             ) : isRunning && wsReconnecting ? (
-              <><WifiOff className="w-3 h-3 text-warn animate-pulse" /><span className="text-warn-ink">{t('agent.reconnecting')}</span></>
+              <><WifiOff className="h-3 w-3 animate-pulse text-warn" aria-hidden="true" /><span className="text-warn-ink">{t('agent.reconnecting')}</span></>
             ) : isRunning ? (
-              <><WifiOff className="w-3 h-3 text-warn" /><span className="text-warn-ink">{t('agent.polling')}</span></>
+              <><WifiOff className="h-3 w-3 text-warn" aria-hidden="true" /><span className="text-warn-ink">{t('agent.polling')}</span></>
             ) : null}
           </div>
+          {chatLive && (
+            <button
+              type="button"
+              onClick={handleStopReply}
+              disabled={stoppingReply}
+              className="btn btn-secondary"
+            >
+              <Square className="h-3.5 w-3.5" aria-hidden="true" />
+              {t('agent.stop_reply')}
+            </button>
+          )}
           <button
             type="button"
             onClick={isRunning ? handleStopAgent : handleStartAgent}
             disabled={stopping}
-            className={`btn ${isRunning ? 'btn-danger' : 'btn-primary'} flex items-center space-x-2 disabled:opacity-50`}
+            className={`btn ${isRunning ? 'btn-danger' : 'btn-primary'}`}
           >
-            {isRunning ? (<><Square className="w-4 h-4" /><span>{t('agent.stop_agent')}</span></>) : (<><Play className="w-4 h-4" /><span>{t('agent.start_agent')}</span></>)}
+            {isRunning ? (<><Square className="h-4 w-4" aria-hidden="true" /><span>{t('agent.stop_agent')}</span></>) : (<><Play className="h-4 w-4" aria-hidden="true" /><span>{t('agent.start_agent')}</span></>)}
           </button>
         </div>
       </div>
       <InlineFlash flash={actionFlash} />
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Configuration */}
-        <div className="card">
-          <h3 className="section-title mb-4">{t('agent.configuration')}</h3>
-          <div className="space-y-4">
-            <div>
-              <label htmlFor="agent-llm-provider" className="block text-sm font-medium text-ink mb-2">{t('agent.llm_provider')}</label>
-              <select id="agent-llm-provider" value={llmProvider} onChange={(e) => setLlmProvider(e.target.value)} className="select" disabled={isRunning}>
-                <option value="gemini">Google Gemini (SDK)</option>
-                <option value="google_vertex">Google Vertex AI</option>
-                <option value="openai">OpenAI</option>
-                <option value="azure_openai">Azure OpenAI</option>
-                <option value="anthropic">Anthropic</option>
-                <option value="deepseek">DeepSeek</option>
-                <option value="mistral">Mistral AI</option>
-                <option value="groq">Groq</option>
-                <option value="xai">x.AI (Grok)</option>
-                <option value="openrouter">OpenRouter</option>
-                <option value="perplexity">Perplexity</option>
-                <option value="amazon_bedrock">Amazon Bedrock</option>
-                <option value="minimax">MiniMax</option>
-                <option value="vllm">vLLM (Local)</option>
-              </select>
-            </div>
-            <div>
-              <label htmlFor="agent-llm-model" className="block text-sm font-medium text-ink mb-2">{t('agent.model')}</label>
-              <input
-                id="agent-llm-model"
-                type="text" value={model} onChange={(e) => setModel(e.target.value)}
-                placeholder={providerModels[llmProvider] || ''}
-                className="input w-full placeholder:text-ink-3" disabled={isRunning}
-              />
-              <p className="mt-1 text-xs text-ink-3">
-                {model ? '' : providerModels[llmProvider] ? t('agent.using_default', { model: providerModels[llmProvider] }) : t('agent.leave_empty_default')}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* Agent Status */}
-        <div className="card">
-          <div className="flex items-center space-x-2 mb-4">
-            <Brain className="w-5 h-5 text-ink-2" />
-            <h3 className="section-title">{t('agent.agent_status')}</h3>
-          </div>
-          {isRunning && agentStatus ? (
-            <div className="space-y-3">
-              <div className="flex items-center space-x-2">
-                <div className="w-2 h-2 rounded-full bg-ok animate-pulse" />
-                <span className="text-sm text-ink-2">{t('agent.running')}</span>
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-3">
+        {/* Timeline (first on narrow screens, left 2/3 on wide) */}
+        <div className="card order-1 flex h-[72dvh] min-h-[26rem] flex-col !p-3 sm:!p-4 lg:col-span-2 lg:h-[calc(100dvh-15rem)]">
+          <div className="mb-3 flex flex-shrink-0 flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <h3 className="section-title flex items-center gap-2">
+                <Activity className="h-4 w-4 text-primary-500" aria-hidden="true" />
+                {t('agent.agent_activity')}
+              </h3>
+              <div className="ml-1 inline-flex rounded-control border border-line bg-sunken p-0.5" role="group" aria-label={t('agent.view_switch')}>
+                {['activity', 'raw'].map((v) => (
+                  <button
+                    type="button"
+                    key={v}
+                    onClick={() => setView(v)}
+                    aria-pressed={view === v}
+                    className={`rounded-chip px-2.5 py-0.5 text-xs font-medium ${view === v ? 'bg-panel text-ink shadow-sm' : 'text-ink-3 hover:text-ink-2'}`}
+                  >
+                    {v === 'activity' ? t('agent.tab_activity') : t('agent.tab_raw')}
+                  </button>
+                ))}
               </div>
-              {(agentStatus.config?.model || agentStatus.config?.llm_provider) && (
-                <div className="text-sm space-y-1 pb-2 border-b border-line">
-                  {agentStatus.config?.model && (
-                    <div className="flex justify-between">
-                      <span className="text-ink-2">{t('agent.model')}:</span>
-                      <span className="font-medium text-ink font-mono text-xs">{agentStatus.config.model}</span>
-                    </div>
-                  )}
-                </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {view === 'raw' && ['all', 'analysis', 'chat'].map((f) => (
+                <button
+                  type="button"
+                  key={f}
+                  onClick={() => setLogFilter(f)}
+                  aria-pressed={logFilter === f}
+                  className={`rounded-chip px-2 py-0.5 text-xs font-medium ${logFilter === f ? 'bg-primary-100 text-primary-700' : 'text-ink-3 hover:text-ink-2'}`}
+                >
+                  {t(`agent.${f}`)}
+                </button>
+              ))}
+              {(logUpdates.length > 0 || timeline.length > 0) && (
+                <button
+                  type="button"
+                  onClick={clearAll}
+                  className="rounded-chip border border-bad/30 bg-bad/10 px-2 py-0.5 text-xs font-medium text-bad-ink hover:bg-bad/15"
+                >{t('agent.clear')}</button>
               )}
-              <div className="text-sm space-y-1">
-                <div className="flex justify-between">
-                  <span className="text-ink-2">{t('agent.tasks_completed')}</span>
-                  <span className="font-medium">{agentStatus.status?.cycle_count || 0}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-ink-2">{t('agent.queue')}</span>
-                  <span className="font-medium">{t('agent.pending', { count: agentStatus.status?.analysis_queue_size || 0 })}</span>
-                </div>
-                <div className="flex justify-between items-start">
-                  <span className="text-ink-2">{t('agent.state')}</span>
-                  <span className="font-medium text-xs bg-sunken px-2 py-0.5 rounded-chip text-right">
-                    {formatAgentState(agentStatus.status)}
-                  </span>
-                </div>
-              </div>
             </div>
-          ) : (
-            <div className="text-center py-8 text-ink-3">
-              <Activity className="w-12 h-12 mx-auto mb-2 opacity-50" />
-              <p className="text-sm">{t('agent.agent_not_running')}</p>
+          </div>
+          {logLoadError && (
+            <div role="alert" className="mb-2 flex flex-shrink-0 items-center gap-2 text-xs text-bad-ink">
+              <span className="flex-1">{t('agent.activity_load_failed', { error: logLoadError })}</span>
+              <button type="button" onClick={fetchActivityLog} className="underline">{t('common.retry')}</button>
             </div>
           )}
-          {(cumulativeTokens.prompt > 0 || cumulativeTokens.thoughts > 0 || cumulativeTokens.response > 0) && (
-            <div className="mt-3 pt-3 border-t border-line">
-              <div className="text-xs font-medium text-ink-2 mb-2">{t('agent.token_usage')}</div>
-              <div className="grid grid-cols-2 gap-2 text-center">
-                <div className="bg-warn/10 rounded-chip px-2 py-1.5 border border-warn/30">
-                  <div className="text-warn-ink font-mono font-semibold">{cumulativeTokens.prompt.toLocaleString()}</div>
-                  <div className="text-warn-ink text-[10px]">{t('agent.tok_input')}</div>
+          {view === 'activity' ? (
+            <RunTimeline
+              items={items}
+              store={liveStore}
+              liveStepText={liveStepText}
+              isLive={showLive}
+              loading={!activityLoaded && items.length === 0}
+              isRunning={isRunning}
+            />
+          ) : (
+            <div className="min-h-0 flex-1 overflow-y-auto rounded-control border border-line bg-sunken p-4 font-mono text-[11px]">
+              {filteredLogs.length === 0 ? (
+                <div className="py-8 text-center text-ink-3">
+                  {isRunning ? t('agent.waiting_events') : t('agent.start_to_see')}
                 </div>
-                <div className="bg-info/10 rounded-chip px-2 py-1.5 border border-info/30">
-                  <div className="text-info-ink font-mono font-semibold">{cumulativeTokens.thoughts.toLocaleString()}</div>
-                  <div className="text-info-ink text-[10px]">{t('agent.tok_thinking')}</div>
-                </div>
-                <div className="bg-ok/10 rounded-chip px-2 py-1.5 border border-ok/30">
-                  <div className="text-ok-ink font-mono font-semibold">{cumulativeTokens.response.toLocaleString()}</div>
-                  <div className="text-ok-ink text-[10px]">{t('agent.tok_response')}</div>
-                </div>
-                <div className="bg-info/10 rounded-chip px-2 py-1.5 border border-info/30">
-                  <div className="text-info-ink font-mono font-semibold">{(cumulativeTokens.cacheRead || 0).toLocaleString()}</div>
-                  <div className="text-info-ink text-[10px]">{t('agent.tok_cached')}</div>
-                </div>
-              </div>
+              ) : (
+                filteredLogs.map((update) => (<LogItem key={update.id} update={update} />))
+              )}
             </div>
           )}
         </div>
 
-        {/* Data Store */}
-        <div className="card">
-          <div className="flex items-center space-x-2 mb-4">
-            <Database className="w-5 h-5 text-ink-2" />
-            <h3 className="section-title">{t('agent.data_store')}</h3>
-          </div>
-          {isRunning && agentStatus?.data_store_stats ? (
-            <div className="space-y-3">
-              <div className="text-sm space-y-1">
+        {/* Compact side column */}
+        <div className="order-2 space-y-4">
+          {/* Agent status + tokens */}
+          <div className="card !p-4">
+            <div className="mb-3 flex items-center gap-2">
+              <Brain className="h-4 w-4 text-ink-2" aria-hidden="true" />
+              <h3 className="section-title !text-base">{t('agent.agent_status')}</h3>
+            </div>
+            {isRunning && agentStatus ? (
+              <dl className="space-y-1 text-sm">
+                {agentStatus.config?.model && (
+                  <div className="flex justify-between gap-2">
+                    <dt className="text-ink-2">{t('agent.model')}</dt>
+                    <dd className="truncate font-mono text-xs font-medium text-ink" title={agentStatus.config.model}>{agentStatus.config.model}</dd>
+                  </div>
+                )}
                 <div className="flex justify-between">
-                  <span className="text-ink-2">{t('agent.total_records')}</span>
-                  <span className="font-medium">{(agentStatus.data_store_stats.total_records || 0).toLocaleString()}</span>
+                  <dt className="text-ink-2">{t('agent.tasks_completed')}</dt>
+                  <dd className="font-medium tabular-nums">{agentStatus.status?.cycle_count || 0}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-ink-2">{t('agent.queue')}</dt>
+                  <dd className="font-medium">{t('agent.pending', { count: agentStatus.status?.analysis_queue_size || 0 })}</dd>
+                </div>
+                <div className="flex items-start justify-between gap-2">
+                  <dt className="text-ink-2">{t('agent.state')}</dt>
+                  <dd className="rounded-chip bg-sunken px-2 py-0.5 text-right text-xs font-medium tabular-nums">
+                    {formatAgentState(agentStatus.status)}
+                  </dd>
+                </div>
+              </dl>
+            ) : (
+              <p className="py-2 text-sm text-ink-3">{t('agent.agent_not_running')}</p>
+            )}
+            {hasTokens && (
+              <div className="mt-3 border-t border-line pt-3">
+                <div className="mb-1.5 text-xs font-medium text-ink-2">{t('agent.token_usage')}</div>
+                <div className="grid grid-cols-4 gap-1.5 text-center">
+                  {tokenTiles.map((tile) => (
+                    <div key={tile.label} className="rounded-chip border border-line bg-sunken px-1 py-1">
+                      <div className="font-mono text-xs font-semibold tabular-nums text-ink">{tile.value.toLocaleString()}</div>
+                      <div className="truncate text-[10px] text-ink-3">{tile.label}</div>
+                    </div>
+                  ))}
                 </div>
               </div>
-              {agentStatus.data_store_stats.by_feature && (
-                <div className="pt-3 border-t border-line">
-                  <div className="text-xs text-ink-2 space-y-1 max-h-60 overflow-y-auto pr-2">
+            )}
+          </div>
+
+          {/* Configuration */}
+          <div className="card !p-4">
+            <h3 className="section-title !text-base mb-3">{t('agent.configuration')}</h3>
+            <div className="space-y-3">
+              <div>
+                <label htmlFor="agent-llm-provider" className="mb-1 block text-sm font-medium text-ink">{t('agent.llm_provider')}</label>
+                <select id="agent-llm-provider" value={llmProvider} onChange={(e) => setLlmProvider(e.target.value)} className="select" disabled={isRunning}>
+                  <option value="gemini">Google Gemini (SDK)</option>
+                  <option value="google_vertex">Google Vertex AI</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="azure_openai">Azure OpenAI</option>
+                  <option value="anthropic">Anthropic</option>
+                  <option value="deepseek">DeepSeek</option>
+                  <option value="mistral">Mistral AI</option>
+                  <option value="groq">Groq</option>
+                  <option value="xai">x.AI (Grok)</option>
+                  <option value="openrouter">OpenRouter</option>
+                  <option value="perplexity">Perplexity</option>
+                  <option value="amazon_bedrock">Amazon Bedrock</option>
+                  <option value="minimax">MiniMax</option>
+                  <option value="vllm">vLLM (Local)</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="agent-llm-model" className="mb-1 block text-sm font-medium text-ink">{t('agent.model')}</label>
+                <input
+                  id="agent-llm-model"
+                  type="text" value={model} onChange={(e) => setModel(e.target.value)}
+                  placeholder={providerModels[llmProvider] || ''}
+                  className="input w-full placeholder:text-ink-3" disabled={isRunning}
+                />
+                <p className="mt-1 text-xs text-ink-3">
+                  {model ? '' : providerModels[llmProvider] ? t('agent.using_default', { model: providerModels[llmProvider] }) : t('agent.leave_empty_default')}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <ScheduledTasksPanel isRunning={isRunning} active={active} />
+          <TriggerRulesPanel isRunning={isRunning} active={active} />
+
+          {/* Data store (collapsed: it is reference, not activity) */}
+          <details className="card !p-4 group">
+            <summary className="flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden">
+              <Database className="h-4 w-4 text-ink-2" aria-hidden="true" />
+              <h3 className="section-title !text-base flex-1">{t('agent.data_store')}</h3>
+              {isRunning && agentStatus?.data_store_stats && (
+                <span className="text-xs tabular-nums text-ink-3">{(agentStatus.data_store_stats.total_records || 0).toLocaleString()}</span>
+              )}
+            </summary>
+            {isRunning && agentStatus?.data_store_stats ? (
+              <div className="mt-3 space-y-3">
+                <div className="flex justify-between text-sm">
+                  <span className="text-ink-2">{t('agent.total_records')}</span>
+                  <span className="font-medium tabular-nums">{(agentStatus.data_store_stats.total_records || 0).toLocaleString()}</span>
+                </div>
+                {agentStatus.data_store_stats.by_feature && (
+                  <div className="max-h-60 space-y-1 overflow-y-auto border-t border-line pr-2 pt-3 text-xs text-ink-2">
                     {Object.entries(agentStatus.data_store_stats.by_feature).map(([feature, count]) => (
                       <div key={feature} className="flex justify-between">
                         <span className="capitalize">{feature}:</span>
-                        <span>{count.toLocaleString()}</span>
+                        <span className="tabular-nums">{count.toLocaleString()}</span>
                       </div>
                     ))}
                   </div>
-                </div>
-              )}
-              {agentStatus.data_store_stats.time_range && (
-                <div className="pt-3 border-t border-line">
-                  <div className="text-xs text-ink-2">
-                    <div className="font-medium mb-1">{t('agent.time_range')}</div>
+                )}
+                {agentStatus.data_store_stats.time_range && (
+                  <div className="border-t border-line pt-3 text-xs text-ink-2">
+                    <div className="mb-1 font-medium">{t('agent.time_range')}</div>
                     {agentStatus.data_store_stats.time_range.min && (<div>{t('agent.time_from')} {formatFullDateTime(agentStatus.data_store_stats.time_range.min)}</div>)}
                     {agentStatus.data_store_stats.time_range.max && (<div>{t('agent.time_to')} {formatFullDateTime(agentStatus.data_store_stats.time_range.max)}</div>)}
                   </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="text-center py-8 text-ink-3">
-              <Database className="w-12 h-12 mx-auto mb-2 opacity-50" />
-              <p className="text-sm">{t('agent.no_data')}</p>
-            </div>
-          )}
-        </div>
-
-      </div>
-
-      {/* Second row: Scheduled Tasks + Agent Log */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Scheduled Tasks — 1/3 width, aligned with top row */}
-        <div className="lg:col-span-1 space-y-6">
-          <ScheduledTasksPanel isRunning={isRunning} active={active} />
-          <TriggerRulesPanel isRunning={isRunning} active={active} />
-        </div>
-
-        {/* Unified Agent Log — 2/3 width */}
-        <div className="lg:col-span-2 card flex flex-col overflow-hidden" style={{ height: '800px' }}>
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-3 flex-shrink-0">
-          <h3 className="section-title flex items-center gap-2">
-            <Activity className="w-4 h-4 text-primary-500" />
-            {t('agent.agent_activity')}
-          </h3>
-          <div className="flex items-center gap-2">
-            {/* Filter buttons */}
-            {['all', 'analysis', 'chat'].map((f) => (
-              <button
-                type="button"
-                key={f}
-                onClick={() => setLogFilter(f)}
-                aria-pressed={logFilter === f}
-                className={`text-xs px-2 py-0.5 rounded-chip font-medium ${logFilter === f ? 'bg-primary-100 text-primary-700' : 'text-ink-3 hover:text-ink-2'}`}
-              >
-                {t(`agent.${f}`)}
-              </button>
-            ))}
-            {logUpdates.length > 0 && (
-              <button
-                type="button"
-                onClick={() => { if (window.confirm(t('agent.confirm_clear_logs'))) setLogUpdates([]) }}
-                className="text-xs px-2 py-0.5 rounded-chip font-medium ml-3 bg-bad/10 text-bad hover:bg-bad/15 hover:text-bad-ink border border-bad/30"
-              >{t('agent.clear')}</button>
+                )}
+              </div>
+            ) : (
+              <p className="mt-3 text-sm text-ink-3">{t('agent.no_data')}</p>
             )}
-          </div>
+          </details>
         </div>
-        {logLoadError && (
-          <div role="alert" className="mb-2 flex items-center gap-2 text-xs text-bad-ink flex-shrink-0">
-            <span className="flex-1">{t('agent.activity_load_failed', { error: logLoadError })}</span>
-            <button type="button" onClick={fetchActivityLog} className="underline">{t('common.retry')}</button>
-          </div>
-        )}
-        <div
-          className="bg-sunken rounded-chip p-4 overflow-y-auto font-mono text-[11px] border border-line shadow-inner flex-1"
-        >
-          {/* Live streaming preview */}
-          {(liveStream.thinking || liveStream.content) && (
-            <div className="mb-3 pb-2 border-b-2 border-info/30">
-              {liveStream.thinking && (
-                <div className="mb-1 whitespace-pre-wrap text-info-ink italic">
-                  <span className="inline-block w-1.5 h-1.5 bg-info rounded-full animate-pulse mr-1.5 align-middle" />
-                  <span className="text-info font-semibold mr-1">{t('agent.thinking_label')}</span>
-                  {liveStream.thinking.length > 2000 ? liveStream.thinking.slice(-2000) : liveStream.thinking}
-                </div>
-              )}
-              {liveStream.content && (
-                <div className="whitespace-pre-wrap text-info-ink font-medium bg-info/10 rounded-chip px-2 py-1">
-                  <span className="inline-block w-1.5 h-1.5 bg-info rounded-full animate-pulse mr-1.5 align-middle" />
-                  {stripToolCallXml(liveStream.content.length > 2000 ? liveStream.content.slice(-2000) : liveStream.content)}
-                </div>
-              )}
-            </div>
-          )}
-          {filteredLogs.length === 0 && !liveStream.thinking && !liveStream.content ? (
-            <div className="text-ink-3 text-center py-8">
-              {isRunning ? t('agent.waiting_events') : t('agent.start_to_see')}
-            </div>
-          ) : (
-            filteredLogs.map((update) => (<LogItem key={update.id} update={update} />))
-          )}
-        </div>
-      </div>
       </div>
     </div>
   )

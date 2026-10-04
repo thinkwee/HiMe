@@ -307,6 +307,10 @@ export const api = {
   stopAutonomousAgent: () =>
     _post('/agent/stop', {}),
 
+  /** Cancel the in-flight chat reply (not the agent). → { success, stopped } */
+  stopChat: () =>
+    _post('/agent/chat/stop', {}),
+
   /** Returns full status for all agents or a specific one */
   getAgentLastConfig: () =>
     _get('/agent/last-config'),

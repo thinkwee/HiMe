@@ -29,6 +29,11 @@ describe('eventToMessage', () => {
     expect(eventToMessage({ type: 'chat_image', caption: '' }).text).toBe('Image')
   })
 
+  it('renders chat_stopped and silently skips chat_reply_delta snapshots', () => {
+    expect(eventToMessage({ type: 'chat_stopped', chat_id: 'x', run_id: 'r' })).toMatchObject({ type: 'system', taskType: 'chat' })
+    expect(eventToMessage({ type: 'chat_reply_delta', text: 'partial', run_id: 'r' })).toBeNull()
+  })
+
   it('renders chat_cleared and tool_progress', () => {
     expect(eventToMessage({ type: 'chat_cleared', chat_id: 'x' })).toMatchObject({ type: 'system', taskType: 'chat' })
     const p = eventToMessage({ type: 'tool_progress', tool: 'code', data: { pct: 50 } })

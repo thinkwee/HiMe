@@ -307,6 +307,31 @@
     @apply rounded-control bg-line/70;
     animation: himePulse 1.4s ease-in-out infinite;
   }
+
+  /* Agent timeline: entrance for new messages / runs, and the streaming caret. */
+  .msg-in {
+    animation: himeMsgIn 0.18s ease-out both;
+  }
+  .stream-caret .prose > :last-child::after {
+    content: '';
+    display: inline-block;
+    width: 0.5rem;
+    height: 1em;
+    margin-left: 2px;
+    vertical-align: text-bottom;
+    border-radius: 1px;
+    background: rgb(var(--ink-2));
+    animation: himePulse 1s ease-in-out infinite;
+  }
+}
+
+@keyframes himeMsgIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .msg-in { animation: none; }
 }
 
 /* ==========================================================================

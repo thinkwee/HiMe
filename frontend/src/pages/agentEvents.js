@@ -13,7 +13,7 @@ const TOOL_EVENT_RE = /^(chat|analysis|quick|plan)_tool_(call|result)$/
 const VERIFICATION_EVENT_RE = /^(chat|analysis|quick|plan)_verification$/
 
 /** Event types that are handled elsewhere — never logged as "unknown". */
-const SILENT_TYPES = new Set(['status_update', 'token_usage', 'pong', 'agent_waiting'])
+const SILENT_TYPES = new Set(['status_update', 'token_usage', 'pong', 'agent_waiting', 'chat_reply_delta'])
 
 const _warnedTypes = new Set()
 
@@ -45,7 +45,7 @@ export function unwrapEvent(ev) {
 export function eventToMessage(ev) {
   const d = unwrapEvent(ev)
   const t = ev.type || d.type || ''
-  if (t === 'status_update' || t === 'token_usage' || t === 'pong' || t === 'agent_waiting') return null
+  if (SILENT_TYPES.has(t)) return null
 
   // Determine task type for badge
   const isQuick = d.task === 'quick_analysis' || d.source === 'quick' || t.startsWith('quick_')
@@ -124,6 +124,9 @@ export function eventToMessage(ev) {
           type: 'image',
           imageUrl: chatImageUrl(d),
         }
+        break
+      case 'chat_stopped':
+        msg = { text: `⏹ ${tr('agent.evt_chat_stopped')}`, type: 'system' }
         break
       case 'chat_cleared':
         msg = { text: `🧹 ${tr('agent.evt_chat_cleared')}`, type: 'system' }
