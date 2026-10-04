@@ -353,6 +353,15 @@ class OpenAIProvider(BaseLLMProvider):
                                 tool_accum[idx]["name"] += tc_delta.function.name
                             if tc_delta.function.arguments:
                                 tool_accum[idx]["arguments"] += tc_delta.function.arguments
+                                # Incremental chunk for live UIs (e.g. streaming
+                                # a reply_user message). Purely additive: the
+                                # final accumulated tool_call is unchanged.
+                                yield {
+                                    "type": "tool_call_delta",
+                                    "index": idx,
+                                    "name": tool_accum[idx]["name"],
+                                    "arguments_delta": tc_delta.function.arguments,
+                                }
 
                 # Track finish reason for truncation detection
                 if choice.finish_reason:

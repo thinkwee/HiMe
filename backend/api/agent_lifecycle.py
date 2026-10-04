@@ -24,6 +24,7 @@ from .agent_state import (
     _ID_RE,
     _RATE_LIMIT_CHAT_MAX_CALLS,
     ChatMessageRequest,
+    ChatStopRequest,
     QuickAnalysisResponse,
     StartAgentRequest,
     _check_rate_limit,
@@ -52,6 +53,7 @@ _EPHEMERAL_EVENT_TYPES = frozenset({
     "agent_thinking",    # LLM thinking chunks (analysis)
     "chat_content",      # LLM response chunks (chat)
     "chat_thinking",     # LLM thinking chunks (chat)
+    "chat_reply_delta",  # streamed reply_user text snapshots (chat)
     "token_usage",       # per-turn token stats (cumulative is in status)
     "startup_progress",  # init progress steps (transient UI feedback)
 })
@@ -983,6 +985,23 @@ async def post_chat_message(request: Request, body: ChatMessageRequest):
     )
     await info["agent"].inbox.push(envelope)
     return {"success": True, "status": "queued", "queued": True}
+
+
+@lifecycle_router.post("/chat/stop")
+async def post_chat_stop(request: Request, body: ChatStopRequest | None = None):
+    """Cancel the in-flight chat run (mid-LLM-call or mid-tool, sub-agents
+    included) without stopping the agent or its queued analysis tasks.
+
+    Returns ``{"success": true, "stopped": bool}``; ``stopped`` is false when no
+    chat run is active. Clients receive ``chat_stopped`` on the agent stream.
+    """
+    _check_rate_limit(_client_ip(request), "chat", _RATE_LIMIT_CHAT_MAX_CALLS)
+    uid = (body.user_id if body else None) or _LIVE_USER
+    info = active_agents.get(uid)
+    agent = info.get("agent") if info else None
+    if agent is None:
+        return {"success": True, "stopped": False}
+    return {"success": True, "stopped": bool(agent.stop_chat())}
 
 
 # ---------------------------------------------------------------------------

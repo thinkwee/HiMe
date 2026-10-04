@@ -160,6 +160,11 @@ class ChatMessageRequest(BaseModel):
     image_mime: str | None = None
 
 
+class ChatStopRequest(BaseModel):
+    """Request body for POST /api/agent/chat/stop (all fields optional)."""
+    user_id: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Memory helpers
 # ---------------------------------------------------------------------------

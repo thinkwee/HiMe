@@ -20,6 +20,7 @@ from typing import Any
 
 from ..config import settings
 from ..utils import ts_now
+from .chat_stream import ReplyDeltaStreamer, result_preview, summarize_tool_args
 from .errors import ErrorCategory, FallbackTriggered, classify_error
 from .llm import set_llm_log_context
 from .tools.base import _tool_role
@@ -514,6 +515,16 @@ def _trim_history(hist: list[dict], limit: int) -> list[dict]:
     return hist
 
 
+async def _clear_reply_stream(agent, chat_id: str) -> None:
+    """Tell clients to discard a streamed reply that was not delivered."""
+    if not getattr(agent, "_reply_streamed", False):
+        return
+    agent._reply_streamed = False
+    await agent._emit({
+        "type": "chat_reply_delta", "text": "", "reset": True, "chat_id": chat_id,
+    })
+
+
 async def _llm_call(
     agent,
     messages: list[dict],
@@ -548,8 +559,25 @@ async def _llm_call(
         tool_results=prev_tool_results or [],
     )
 
+    # Live reply streaming (chat orchestrator only): the reply text travels as
+    # reply_user tool-call ARGUMENTS, so decode the partial JSON as it arrives.
+    streamer: ReplyDeltaStreamer | None = ReplyDeltaStreamer() if loop == "chat" else None
+    if loop == "chat":
+        agent._reply_streamed = False
+
+    async def _emit_reply_delta(text: str) -> None:
+        agent._reply_streamed = True
+        await agent._emit({
+            "type": "chat_reply_delta", "text": text,
+            **_loop_meta(loop, agent, chat_id),
+        })
+
     async def _consume(llm) -> None:
-        nonlocal thought_signature
+        nonlocal thought_signature, streamer
+        if streamer is not None and streamer.emitted:
+            # Retry / provider fallback after partial output: drop it client-side.
+            streamer = ReplyDeltaStreamer()
+            await _clear_reply_stream(agent, chat_id)
         async for chunk in llm.complete(
             messages=messages,
             tools=tools,
@@ -575,6 +603,14 @@ async def _llm_call(
                 thought_signature = chunk["signature"]
             elif ctype == "tool_call":
                 tool_calls.append(chunk)
+            elif ctype == "tool_call_delta":
+                if streamer is not None:
+                    try:
+                        snap = streamer.feed(chunk)
+                    except Exception:  # streaming is best-effort, never fatal
+                        snap = None
+                    if snap is not None:
+                        await _emit_reply_delta(snap)
             elif ctype == "token_usage":
                 prompt = chunk.get("prompt_tokens") or 0
                 completion = chunk.get("completion_tokens") or chunk.get("response_tokens") or 0
@@ -614,6 +650,11 @@ async def _llm_call(
         await asyncio.wait_for(_run_with_fallback(), timeout=timeout)
     else:
         await _run_with_fallback()
+
+    if streamer is not None:
+        final_snap = streamer.finish()
+        if final_snap is not None:
+            await _emit_reply_delta(final_snap)
 
     text = "".join(response_content)
 
@@ -1105,6 +1146,8 @@ async def _run_sub_analysis_loop(
         if chat_id is not None:
             base["chat_id"] = chat_id
         base["source"] = source
+        if source == "chat":
+            base["parent"] = "analyze"
         return base
 
     def _failure(exc: Exception) -> dict:
@@ -1188,6 +1231,8 @@ async def _run_sub_analysis_loop(
             await self._emit(_evt_payload({
                 "type": evt_call, "tool": tool_name,
                 "arguments": arguments,
+                "call_id": tc_id, "status": "running",
+                "summary": summarize_tool_args(tool_name, arguments),
             }))
 
             # push_report needs the evidence trail for fact verification:
@@ -1216,6 +1261,9 @@ async def _run_sub_analysis_loop(
                 "type": evt_result, "tool": tool_name,
                 "success": result.get("success", False),
                 "result": result,
+                "call_id": tc_id,
+                "status": "ok" if result.get("success", False) else "error",
+                "result_preview": result_preview(result),
             }))
             tool_results.append({
                 "id": tc_id, "tool": tool_name,
@@ -1382,6 +1430,8 @@ async def _run_chat_manage_loop(self, goal: str, chat_id: str) -> dict:
             await self._emit({
                 "type": "chat_tool_call", "tool": tool_name,
                 "arguments": arguments, "chat_id": chat_id,
+                "call_id": tc_id, "status": "running", "parent": "manage",
+                "summary": summarize_tool_args(tool_name, arguments),
             })
             try:
                 result = await asyncio.wait_for(
@@ -1394,6 +1444,9 @@ async def _run_chat_manage_loop(self, goal: str, chat_id: str) -> dict:
                 "type": "chat_tool_result", "tool": tool_name,
                 "success": result.get("success", False),
                 "result": result, "chat_id": chat_id,
+                "call_id": tc_id, "parent": "manage",
+                "status": "ok" if result.get("success", False) else "error",
+                "result_preview": result_preview(result),
             })
             tool_results.append({
                 "id": tc_id, "tool": tool_name,
@@ -1971,6 +2024,8 @@ class AgentLoopsMixin:
         # Platform-prefixed history key so the same numeric chat_id on
         # different gateways (Telegram 12345 vs Feishu 12345) can't collide.
         history_key = f"{channel}:{chat_id}"
+        # One id per handled message; ``_emit`` stamps it on every chat_* event.
+        self._chat_run_id = uuid.uuid4().hex
 
         # Slash-command handling for the native in-app channel. IM gateways
         # intercept these before the inbox, so this branch only fires for iOS
@@ -2102,370 +2157,405 @@ class AgentLoopsMixin:
         dup_count = 0
         chat_budget = min(self.max_turns, settings.CHAT_MAX_TURNS)
 
-        for turn in range(1, chat_budget + 1):
-            _check_cancelled(self)
-            self._set_state("chat_thinking", loop="chat")
-
-            try:
-                text, tool_calls, sig = await _llm_call(
-                    self, chat_messages, chat_tools,
-                    loop="chat", chat_id=str(chat_id),
-                    prev_tool_results=prev_chat_tool_results,
-                )
-            except Exception as e:
-                logger.error("LLM error (chat): %s", e, exc_info=True)
-                # Context overflow → emergency truncate + retry once (the same
-                # recovery the sub-agent loops have).
-                if (
-                    not overflow_retried
-                    and classify_error(e, "chat_llm").category == ErrorCategory.CONTEXT_OVERFLOW
-                ):
-                    overflow_retried = True
-                    from .context_manager import ContextManager
-                    before = len(chat_messages)
-                    chat_messages, _ = ContextManager().emergency_truncate(
-                        chat_messages, preamble_size,
-                    )
-                    shrunk = len(chat_messages) < before
-                    if not shrunk and llm_history:
-                        # Nothing in the turn body to drop: shed older history.
-                        llm_history = _normalize_history(llm_history[len(llm_history) // 2:])
-                        chat_messages = [
-                            chat_messages[0], *llm_history, *chat_messages[preamble_size - 1:],
-                        ]
-                        preamble_size = 2 + len(llm_history)
-                        shrunk = True
-                    if shrunk:
-                        _yield_missing_tool_results(chat_messages)
-                        logger.info("Chat: context overflow — truncated, retrying once")
-                        continue
-                _yield_missing_tool_results(chat_messages)
-                break
-
-            # --- No tool calls: graceful exit ---
-            if not tool_calls:
-                clean = _strip_meta_markers(text)
-                # Strip any raw tool-call markup that leaked through
-                if _contains_raw_tool_call(clean):
-                    logger.warning("Chat turn %d: stripping leaked tool-call markup from auto-reply", turn)
-                    clean = _strip_raw_tool_calls(clean)
-                if (
-                    (not has_replied or unanswered_result)
-                    and clean
-                    and clean not in ("(tools)", "(done)", "(no response)")
-                ):
-                    # LLM wrote text but didn't call reply_user — send it. Also
-                    # covers ack → analyze → plain-text final answer: the answer
-                    # is delivered because the result has not been reported yet.
-                    logger.info("Chat turn %d: no tool calls, auto-replying with text", turn)
-                    ar = await self._auto_reply(clean, chat_id, all_evidence, user_message=envelope.content, chat_history=history, channel=envelope.channel)
-                    if ar["sent"]:
-                        has_replied = True
-                        unanswered_result = False
-                        reply_text = clean
-                        finished = True
-                        break
-                    # Auto-reply was blocked (typically by fact verifier).
-                    # Give the agent one retry: feed back the verifier's
-                    # specific detail so it can fix the exact issue (e.g.
-                    # "fabricated step count without querying database").
-                    if not fabrication_retried:
-                        fabrication_retried = True
-                        block_detail = ar.get("error", "") or "(no detail)"
-                        logger.info(
-                            "Chat turn %d: auto-reply blocked, injecting retry feedback: %s",
-                            turn, block_detail[:160],
-                        )
-                        chat_messages.append(_build_assistant_msg(clean, [], sig))
-                        chat_messages.append({
-                            "role": "user",
-                            "content": (
-                                f"[System] Your previous reply was BLOCKED by the fact verifier: "
-                                f"{block_detail}\n\n"
-                                f"You MUST call the appropriate tool to obtain real data BEFORE replying. "
-                                f"For health/activity questions (steps, distance, energy, sleep, heart rate, "
-                                f"stand time, etc.) call `sql` on the `health_data` database or `code`. "
-                                f"For write/action claims (create_page, update_md, schedule, memory writes) "
-                                f"call that tool first. Do NOT cite specific numbers, dates, or outcomes "
-                                f"from memory or prior turns — re-query for the current request. After the "
-                                f"tool returns, reply using only the values it produced."
-                            ),
-                        })
-                        continue
-                # No more retries or conversational text — done
-                finished = True
-                break
-
-            # Merge multiple reply_user calls in the same batch. This MUST run
-            # before we record the assistant message: the assistant turn
-            # declares one tool_use id per call it contains, and the next LLM
-            # request requires exactly one tool_result per declared id. If we
-            # built the assistant message from the pre-merge calls (ids a, b)
-            # but only produced a single merged result (and dropped a/b), the
-            # next call would carry orphaned ids → provider 400 → the loop
-            # breaks and any analyze/manage results from this turn are silently
-            # discarded. Reuse the first reply call's id for the merged call so
-            # the declared ids and produced results reconcile.
-            reply_calls = [tc for tc in tool_calls if tc.get("name") == "reply_user"]
-            if len(reply_calls) > 1:
-                merged_parts: list[str] = []
-                merged_args: dict[str, Any] = {}
-                for rtc in reply_calls:
-                    args = _parse_arguments(rtc.get("arguments", {}))
-                    msg = args.get("message", "")
-                    if msg:
-                        merged_parts.append(msg)
-                    # Keep the first non-empty attachment / reply-to target
-                    # instead of silently dropping them with the extra calls.
-                    for key in ("image_path", "reply_to_message_id"):
-                        if args.get(key) and not merged_args.get(key):
-                            merged_args[key] = args[key]
-                merged_tc = {
-                    "name": "reply_user",
-                    "id": reply_calls[0].get("id", ""),
-                    "arguments": {"message": "\n\n".join(merged_parts), **merged_args},
-                }
-                tool_calls = [tc for tc in tool_calls if tc.get("name") != "reply_user"] + [merged_tc]
-
-            # Execution order: reply_user first (user sees ack immediately),
-            # manage before analyze (framework ops first), analyze last (may block),
-            # finish_chat very last.
-            _ORDER = {"reply_user": 0, "finish_chat": 99, "manage": 40, "analyze": 50}
-            tool_calls.sort(key=lambda tc: _ORDER.get(tc.get("name", ""), 10))
-
-            # --- Add assistant message with proper tool_calls structure ---
-            # Built AFTER merge+sort so the declared tool_use ids exactly match
-            # the calls we execute and the tool_results we produce below.
-            # Strip meta markers (e.g. "[Replied at ...]") the LLM mimics.
-            chat_messages.append(_build_assistant_msg(_strip_meta_markers(text), tool_calls, sig))
-
-            # --- Duplicate tool call detection ---
-            call_sig = _hash_tool_calls(tool_calls)
-            if call_sig == prev_call_sig:
-                dup_count += 1
-                if dup_count >= 2:
-                    logger.warning("Chat: 3 identical tool-call rounds, breaking loop")
-                    _yield_missing_tool_results(chat_messages)
-                    if not has_replied or unanswered_result:
-                        clean = _strip_meta_markers(text)
-                        if clean:
-                            ar = await self._auto_reply(clean, chat_id, all_evidence, user_message=envelope.content, chat_history=history, channel=envelope.channel)
-                            if ar["sent"]:
-                                has_replied = True
-                                unanswered_result = False
-                                reply_text = clean
-                    break
-            else:
-                dup_count = 0
-            prev_call_sig = call_sig
-
-            # --- Execute tools ---
-            tool_results: list[dict] = []
-
-            for tc in tool_calls:
-                tool_name = tc.get("name")
-                tc_id = tc.get("id", "")
-                arguments = _parse_arguments(tc.get("arguments", {}))
-
-                if tool_name not in CHAT_ALLOWED_TOOLS:
-                    # The orchestrator is a pure dispatcher: hiding other tools
-                    # from its definitions is not enough, the LLM can still name
-                    # them. Reject at execution (result keeps call/result pairing).
-                    logger.warning("Chat: rejected tool %r (not available in this role)", tool_name)
-                    tool_results.append({
-                        "id": tc_id, "tool": tool_name, "arguments": arguments,
-                        "result": dict(TOOL_NOT_AVAILABLE_RESULT),
-                    })
-                    continue
-
-                if tool_name == "analyze":
-                    # Delegate data analysis to sub-agent
-                    sub_goal = arguments.get("goal", "")
-                    self._set_state("chat_analyzing", loop="chat")
-                    await self._emit({"type": "chat_tool_call", "tool": "analyze",
-                                      "arguments": arguments, "chat_id": chat_id})
-                    try:
-                        result = await asyncio.wait_for(
-                            self._run_sub_analysis(
-                                sub_goal,
-                                chat_id=str(chat_id),
-                                source="chat",
-                            ),
-                            timeout=180.0,
-                        )
-                    except asyncio.TimeoutError:
-                        result = {
-                            "success": False, "findings": "",
-                            "error": "Analysis timed out.", "evidence": [],
-                        }
-                    except Exception as exc:
-                        result = {"success": False, "findings": "", "error": str(exc), "evidence": []}
-                    if not result.get("success", True):
-                        # Make the failure unmistakable so the orchestrator
-                        # tells the user instead of relaying it as data.
-                        result = {
-                            **result,
-                            "error": (
-                                f"Analysis failed: {result.get('error') or 'unknown error'}. "
-                                "No health data was analysed — tell the user honestly "
-                                "and suggest trying again."
-                            ),
-                        }
-                    all_evidence.extend(result.get("evidence", []))
-                    unanswered_result = True
-                    await self._emit({"type": "chat_tool_result", "tool": "analyze",
-                                      "success": result.get("success", False),
-                                      "result": {
-                                          "findings": (result.get("findings") or "")[:500],
-                                          **({"error": result["error"][:300]} if result.get("error") else {}),
-                                      },
-                                      "chat_id": chat_id})
-                    tool_results.append({"id": tc_id, "tool": "analyze", "result": result})
-                    prev_chat_tool_results = tool_results
-                    continue
-                elif tool_name == "manage":
-                    sub_goal = arguments.get("goal", "")
-                    self._set_state("chat_managing", loop="chat")
-                    await self._emit({"type": "chat_tool_call", "tool": "manage",
-                                      "arguments": arguments, "chat_id": chat_id})
-                    try:
-                        result = await asyncio.wait_for(
-                            self._run_chat_manage(sub_goal, str(chat_id)),
-                            timeout=120.0,
-                        )
-                    except asyncio.TimeoutError:
-                        result = {
-                            "success": False, "error": "Management operation timed out.",
-                            "result": "Management operation timed out.",
-                            "actions_taken": [], "evidence": [],
-                        }
-                    except Exception as exc:
-                        result = {
-                            "success": False, "error": str(exc), "result": str(exc),
-                            "actions_taken": [], "evidence": [],
-                        }
-                    all_evidence.extend(result.get("evidence", []))
-                    unanswered_result = True
-                    await self._emit({"type": "chat_tool_result", "tool": "manage",
-                                      "success": result.get("success", False),
-                                      "result": {"result": result.get("result", "")[:500]},
-                                      "chat_id": chat_id})
-                    tool_results.append({"id": tc_id, "tool": "manage", "result": result})
-                    prev_chat_tool_results = tool_results
-                    continue
-                elif tool_name == "finish_chat":
-                    if not has_replied:
-                        tool_results.append({
-                            "id": tc_id, "tool": "finish_chat",
-                            "result": {
-                                "success": False,
-                                "error": "Cannot finish: no reply sent yet. Call reply_user first.",
-                            },
-                        })
-                        continue
-                    finished = True
-                    tool_results.append({
-                        "id": tc_id, "tool": "finish_chat",
-                        "result": {"success": True, "message": "Chat session finished."},
-                    })
-                    continue
-                elif tool_name == "reply_user":
-                    # Empty args fallback: use content text if model put answer there
-                    msg = arguments.get("message", "")
-                    if not msg and text:
-                        arguments["message"] = _strip_meta_markers(text)
-                    elif msg:
-                        # Strip echoed envelope headers the LLM may have copied
-                        arguments["message"] = _strip_meta_markers(msg)
-                    # 2-send limit: 1st = interim ack, 2nd = final answer. Only
-                    # *delivered* replies count — a reply blocked by the fact
-                    # verifier or a gateway failure must not eat the budget.
-                    if reply_send_count >= 2:
-                        tool_results.append({
-                            "id": tc_id, "tool": "reply_user",
-                            "result": {"success": True,
-                                       "message": "Already sent 2 messages. Wrap up."},
-                        })
-                        continue
-                    if reply_attempt_count >= 4 and not has_replied:
-                        tool_results.append({
-                            "id": tc_id, "tool": "reply_user",
-                            "result": {
-                                "success": False,
-                                "error": "Too many failed reply attempts — nothing was "
-                                         "delivered. Stop retrying and finish.",
-                            },
-                        })
-                        continue
-                    reply_attempt_count += 1
-                    arguments["chat_id"] = str(chat_id)
-
-                self._set_state(f"chat_executing:{tool_name}", loop="chat")
-                await self._emit({
-                    "type": "chat_tool_call",
-                    "tool": tool_name,
-                    "arguments": arguments,
-                    "sender": sender,
-                    "chat_id": chat_id,
-                })
+        stopped = False  # user hit POST /chat/stop (task cancelled)
+        turn = 0
+        try:
+            for turn in range(1, chat_budget + 1):
+                _check_cancelled(self)
+                self._set_state("chat_thinking", loop="chat")
 
                 try:
-                    evidence = _filter_data_evidence(all_evidence + tool_results) if tool_name == "reply_user" else None
-                    result = await asyncio.wait_for(
-                        self._execute_tool(
-                            tool_name, arguments, evidence_trail=evidence,
-                            user_message=envelope.content if tool_name in ("reply_user",) else "",
-                            chat_history=history if tool_name == "reply_user" else None,
-                        ),
-                        timeout=60.0,
+                    text, tool_calls, sig = await _llm_call(
+                        self, chat_messages, chat_tools,
+                        loop="chat", chat_id=str(chat_id),
+                        prev_tool_results=prev_chat_tool_results,
                     )
-                except asyncio.TimeoutError:
-                    result = {"success": False, "error": "Tool timed out after 60s."}
+                except Exception as e:
+                    logger.error("LLM error (chat): %s", e, exc_info=True)
+                    # Context overflow → emergency truncate + retry once (the same
+                    # recovery the sub-agent loops have).
+                    if (
+                        not overflow_retried
+                        and classify_error(e, "chat_llm").category == ErrorCategory.CONTEXT_OVERFLOW
+                    ):
+                        overflow_retried = True
+                        from .context_manager import ContextManager
+                        before = len(chat_messages)
+                        chat_messages, _ = ContextManager().emergency_truncate(
+                            chat_messages, preamble_size,
+                        )
+                        shrunk = len(chat_messages) < before
+                        if not shrunk and llm_history:
+                            # Nothing in the turn body to drop: shed older history.
+                            llm_history = _normalize_history(llm_history[len(llm_history) // 2:])
+                            chat_messages = [
+                                chat_messages[0], *llm_history, *chat_messages[preamble_size - 1:],
+                            ]
+                            preamble_size = 2 + len(llm_history)
+                            shrunk = True
+                        if shrunk:
+                            _yield_missing_tool_results(chat_messages)
+                            logger.info("Chat: context overflow — truncated, retrying once")
+                            continue
+                    _yield_missing_tool_results(chat_messages)
+                    break
 
-                await self._emit({
-                    "type": "chat_tool_result",
-                    "tool": tool_name,
-                    "success": result.get("success", False),
-                    "result": result,
-                    "chat_id": chat_id,
-                    **({"reply_text": arguments.get("message", "")[:200]} if tool_name == "reply_user" else {}),
-                })
-                tool_results.append({"id": tc_id, "tool": tool_name, "arguments": arguments, "result": result})
-                prev_chat_tool_results = tool_results
+                # --- No tool calls: graceful exit ---
+                if not tool_calls:
+                    clean = _strip_meta_markers(text)
+                    # Strip any raw tool-call markup that leaked through
+                    if _contains_raw_tool_call(clean):
+                        logger.warning("Chat turn %d: stripping leaked tool-call markup from auto-reply", turn)
+                        clean = _strip_raw_tool_calls(clean)
+                    if (
+                        (not has_replied or unanswered_result)
+                        and clean
+                        and clean not in ("(tools)", "(done)", "(no response)")
+                    ):
+                        # LLM wrote text but didn't call reply_user — send it. Also
+                        # covers ack → analyze → plain-text final answer: the answer
+                        # is delivered because the result has not been reported yet.
+                        logger.info("Chat turn %d: no tool calls, auto-replying with text", turn)
+                        ar = await self._auto_reply(clean, chat_id, all_evidence, user_message=envelope.content, chat_history=history, channel=envelope.channel)
+                        if ar["sent"]:
+                            has_replied = True
+                            unanswered_result = False
+                            reply_text = clean
+                            finished = True
+                            break
+                        # Auto-reply was blocked (typically by fact verifier).
+                        # Give the agent one retry: feed back the verifier's
+                        # specific detail so it can fix the exact issue (e.g.
+                        # "fabricated step count without querying database").
+                        if not fabrication_retried:
+                            fabrication_retried = True
+                            block_detail = ar.get("error", "") or "(no detail)"
+                            logger.info(
+                                "Chat turn %d: auto-reply blocked, injecting retry feedback: %s",
+                                turn, block_detail[:160],
+                            )
+                            chat_messages.append(_build_assistant_msg(clean, [], sig))
+                            chat_messages.append({
+                                "role": "user",
+                                "content": (
+                                    f"[System] Your previous reply was BLOCKED by the fact verifier: "
+                                    f"{block_detail}\n\n"
+                                    f"You MUST call the appropriate tool to obtain real data BEFORE replying. "
+                                    f"For health/activity questions (steps, distance, energy, sleep, heart rate, "
+                                    f"stand time, etc.) call `sql` on the `health_data` database or `code`. "
+                                    f"For write/action claims (create_page, update_md, schedule, memory writes) "
+                                    f"call that tool first. Do NOT cite specific numbers, dates, or outcomes "
+                                    f"from memory or prior turns — re-query for the current request. After the "
+                                    f"tool returns, reply using only the values it produced."
+                                ),
+                            })
+                            continue
+                    # No more retries or conversational text — done
+                    finished = True
+                    break
 
-                # C2 fix: only mark has_replied after verifying tool success
-                if tool_name == "reply_user" and result.get("success"):
-                    has_replied = True
-                    unanswered_result = False
-                    reply_send_count += 1
-                    reply_text = arguments.get("message", "")
-                    # Pair the image with this reply's text (None clears any
-                    # image from an earlier send, keeping text↔image aligned).
-                    reply_image_id = result.get("image_id")
+                # Merge multiple reply_user calls in the same batch. This MUST run
+                # before we record the assistant message: the assistant turn
+                # declares one tool_use id per call it contains, and the next LLM
+                # request requires exactly one tool_result per declared id. If we
+                # built the assistant message from the pre-merge calls (ids a, b)
+                # but only produced a single merged result (and dropped a/b), the
+                # next call would carry orphaned ids → provider 400 → the loop
+                # breaks and any analyze/manage results from this turn are silently
+                # discarded. Reuse the first reply call's id for the merged call so
+                # the declared ids and produced results reconcile.
+                reply_calls = [tc for tc in tool_calls if tc.get("name") == "reply_user"]
+                if len(reply_calls) > 1:
+                    merged_parts: list[str] = []
+                    merged_args: dict[str, Any] = {}
+                    for rtc in reply_calls:
+                        args = _parse_arguments(rtc.get("arguments", {}))
+                        msg = args.get("message", "")
+                        if msg:
+                            merged_parts.append(msg)
+                        # Keep the first non-empty attachment / reply-to target
+                        # instead of silently dropping them with the extra calls.
+                        for key in ("image_path", "reply_to_message_id"):
+                            if args.get(key) and not merged_args.get(key):
+                                merged_args[key] = args[key]
+                    merged_tc = {
+                        "name": "reply_user",
+                        "id": reply_calls[0].get("id", ""),
+                        "arguments": {"message": "\n\n".join(merged_parts), **merged_args},
+                    }
+                    tool_calls = [tc for tc in tool_calls if tc.get("name") != "reply_user"] + [merged_tc]
+
+                # Execution order: reply_user first (user sees ack immediately),
+                # manage before analyze (framework ops first), analyze last (may block),
+                # finish_chat very last.
+                _ORDER = {"reply_user": 0, "finish_chat": 99, "manage": 40, "analyze": 50}
+                tool_calls.sort(key=lambda tc: _ORDER.get(tc.get("name", ""), 10))
+
+                # --- Add assistant message with proper tool_calls structure ---
+                # Built AFTER merge+sort so the declared tool_use ids exactly match
+                # the calls we execute and the tool_results we produce below.
+                # Strip meta markers (e.g. "[Replied at ...]") the LLM mimics.
+                chat_messages.append(_build_assistant_msg(_strip_meta_markers(text), tool_calls, sig))
+
+                # --- Duplicate tool call detection ---
+                call_sig = _hash_tool_calls(tool_calls)
+                if call_sig == prev_call_sig:
+                    dup_count += 1
+                    if dup_count >= 2:
+                        logger.warning("Chat: 3 identical tool-call rounds, breaking loop")
+                        _yield_missing_tool_results(chat_messages)
+                        if not has_replied or unanswered_result:
+                            clean = _strip_meta_markers(text)
+                            if clean:
+                                ar = await self._auto_reply(clean, chat_id, all_evidence, user_message=envelope.content, chat_history=history, channel=envelope.channel)
+                                if ar["sent"]:
+                                    has_replied = True
+                                    unanswered_result = False
+                                    reply_text = clean
+                        break
+                else:
+                    dup_count = 0
+                prev_call_sig = call_sig
+
+                # --- Execute tools ---
+                tool_results: list[dict] = []
+
+                for tc in tool_calls:
+                    tool_name = tc.get("name")
+                    tc_id = tc.get("id", "")
+                    arguments = _parse_arguments(tc.get("arguments", {}))
+
+                    if tool_name not in CHAT_ALLOWED_TOOLS:
+                        # The orchestrator is a pure dispatcher: hiding other tools
+                        # from its definitions is not enough, the LLM can still name
+                        # them. Reject at execution (result keeps call/result pairing).
+                        logger.warning("Chat: rejected tool %r (not available in this role)", tool_name)
+                        tool_results.append({
+                            "id": tc_id, "tool": tool_name, "arguments": arguments,
+                            "result": dict(TOOL_NOT_AVAILABLE_RESULT),
+                        })
+                        continue
+
+                    if tool_name == "analyze":
+                        # Delegate data analysis to sub-agent
+                        sub_goal = arguments.get("goal", "")
+                        self._set_state("chat_analyzing", loop="chat")
+                        await self._emit({"type": "chat_tool_call", "tool": "analyze",
+                                          "arguments": arguments, "chat_id": chat_id,
+                                          "call_id": tc_id, "status": "running",
+                                          "summary": summarize_tool_args("analyze", arguments)})
+                        try:
+                            result = await asyncio.wait_for(
+                                self._run_sub_analysis(
+                                    sub_goal,
+                                    chat_id=str(chat_id),
+                                    source="chat",
+                                ),
+                                timeout=180.0,
+                            )
+                        except asyncio.TimeoutError:
+                            result = {
+                                "success": False, "findings": "",
+                                "error": "Analysis timed out.", "evidence": [],
+                            }
+                        except Exception as exc:
+                            result = {"success": False, "findings": "", "error": str(exc), "evidence": []}
+                        if not result.get("success", True):
+                            # Make the failure unmistakable so the orchestrator
+                            # tells the user instead of relaying it as data.
+                            result = {
+                                **result,
+                                "error": (
+                                    f"Analysis failed: {result.get('error') or 'unknown error'}. "
+                                    "No health data was analysed — tell the user honestly "
+                                    "and suggest trying again."
+                                ),
+                            }
+                        all_evidence.extend(result.get("evidence", []))
+                        unanswered_result = True
+                        await self._emit({"type": "chat_tool_result", "tool": "analyze",
+                                          "success": result.get("success", False),
+                                          "result": {
+                                              "findings": (result.get("findings") or "")[:500],
+                                              **({"error": result["error"][:300]} if result.get("error") else {}),
+                                          },
+                                          "chat_id": chat_id, "call_id": tc_id,
+                                          "status": "ok" if result.get("success", False) else "error",
+                                          "result_preview": result_preview(
+                                              result.get("findings") or result.get("error") or "")})
+                        tool_results.append({"id": tc_id, "tool": "analyze", "result": result})
+                        prev_chat_tool_results = tool_results
+                        continue
+                    elif tool_name == "manage":
+                        sub_goal = arguments.get("goal", "")
+                        self._set_state("chat_managing", loop="chat")
+                        await self._emit({"type": "chat_tool_call", "tool": "manage",
+                                          "arguments": arguments, "chat_id": chat_id,
+                                          "call_id": tc_id, "status": "running",
+                                          "summary": summarize_tool_args("manage", arguments)})
+                        try:
+                            result = await asyncio.wait_for(
+                                self._run_chat_manage(sub_goal, str(chat_id)),
+                                timeout=120.0,
+                            )
+                        except asyncio.TimeoutError:
+                            result = {
+                                "success": False, "error": "Management operation timed out.",
+                                "result": "Management operation timed out.",
+                                "actions_taken": [], "evidence": [],
+                            }
+                        except Exception as exc:
+                            result = {
+                                "success": False, "error": str(exc), "result": str(exc),
+                                "actions_taken": [], "evidence": [],
+                            }
+                        all_evidence.extend(result.get("evidence", []))
+                        unanswered_result = True
+                        await self._emit({"type": "chat_tool_result", "tool": "manage",
+                                          "success": result.get("success", False),
+                                          "result": {"result": result.get("result", "")[:500]},
+                                          "chat_id": chat_id, "call_id": tc_id,
+                                          "status": "ok" if result.get("success", False) else "error",
+                                          "result_preview": result_preview(result.get("result", ""))})
+                        tool_results.append({"id": tc_id, "tool": "manage", "result": result})
+                        prev_chat_tool_results = tool_results
+                        continue
+                    elif tool_name == "finish_chat":
+                        if not has_replied:
+                            tool_results.append({
+                                "id": tc_id, "tool": "finish_chat",
+                                "result": {
+                                    "success": False,
+                                    "error": "Cannot finish: no reply sent yet. Call reply_user first.",
+                                },
+                            })
+                            continue
+                        finished = True
+                        tool_results.append({
+                            "id": tc_id, "tool": "finish_chat",
+                            "result": {"success": True, "message": "Chat session finished."},
+                        })
+                        continue
+                    elif tool_name == "reply_user":
+                        # Empty args fallback: use content text if model put answer there
+                        msg = arguments.get("message", "")
+                        if not msg and text:
+                            arguments["message"] = _strip_meta_markers(text)
+                        elif msg:
+                            # Strip echoed envelope headers the LLM may have copied
+                            arguments["message"] = _strip_meta_markers(msg)
+                        # 2-send limit: 1st = interim ack, 2nd = final answer. Only
+                        # *delivered* replies count — a reply blocked by the fact
+                        # verifier or a gateway failure must not eat the budget.
+                        if reply_send_count >= 2:
+                            await _clear_reply_stream(self, str(chat_id))
+                            tool_results.append({
+                                "id": tc_id, "tool": "reply_user",
+                                "result": {"success": True,
+                                           "message": "Already sent 2 messages. Wrap up."},
+                            })
+                            continue
+                        if reply_attempt_count >= 4 and not has_replied:
+                            await _clear_reply_stream(self, str(chat_id))
+                            tool_results.append({
+                                "id": tc_id, "tool": "reply_user",
+                                "result": {
+                                    "success": False,
+                                    "error": "Too many failed reply attempts — nothing was "
+                                             "delivered. Stop retrying and finish.",
+                                },
+                            })
+                            continue
+                        reply_attempt_count += 1
+                        arguments["chat_id"] = str(chat_id)
+
+                    self._set_state(f"chat_executing:{tool_name}", loop="chat")
+                    await self._emit({
+                        "type": "chat_tool_call",
+                        "tool": tool_name,
+                        "arguments": arguments,
+                        "sender": sender,
+                        "chat_id": chat_id,
+                        "call_id": tc_id, "status": "running",
+                        "summary": summarize_tool_args(tool_name, arguments),
+                    })
+
+                    try:
+                        evidence = _filter_data_evidence(all_evidence + tool_results) if tool_name == "reply_user" else None
+                        result = await asyncio.wait_for(
+                            self._execute_tool(
+                                tool_name, arguments, evidence_trail=evidence,
+                                user_message=envelope.content if tool_name in ("reply_user",) else "",
+                                chat_history=history if tool_name == "reply_user" else None,
+                            ),
+                            timeout=60.0,
+                        )
+                    except asyncio.TimeoutError:
+                        result = {"success": False, "error": "Tool timed out after 60s."}
+
+                    await self._emit({
+                        "type": "chat_tool_result",
+                        "tool": tool_name,
+                        "success": result.get("success", False),
+                        "result": result,
+                        "chat_id": chat_id,
+                        "call_id": tc_id,
+                        "status": "ok" if result.get("success", False) else "error",
+                        "result_preview": result_preview(result),
+                        **({"reply_text": arguments.get("message", "")[:200]} if tool_name == "reply_user" else {}),
+                    })
+                    tool_results.append({"id": tc_id, "tool": tool_name, "arguments": arguments, "result": result})
+                    prev_chat_tool_results = tool_results
+
+                    if tool_name == "reply_user" and not result.get("success"):
+                        # Blocked (fact verifier / gateway): the streamed text was
+                        # never delivered, so tell clients to clear it.
+                        await _clear_reply_stream(self, str(chat_id))
+                    elif tool_name == "reply_user":
+                        self._reply_streamed = False
+
+                    # C2 fix: only mark has_replied after verifying tool success
+                    if tool_name == "reply_user" and result.get("success"):
+                        has_replied = True
+                        unanswered_result = False
+                        reply_send_count += 1
+                        reply_text = arguments.get("message", "")
+                        # Pair the image with this reply's text (None clears any
+                        # image from an earlier send, keeping text↔image aligned).
+                        reply_image_id = result.get("image_id")
+
+                    if finished:
+                        break
+
+                all_evidence.extend(tool_results)
 
                 if finished:
                     break
 
-            all_evidence.extend(tool_results)
+                # --- Add tool results as proper role:"tool" messages ---
+                for tr in tool_results:
+                    chat_messages.append(_build_tool_result_msg(tr["id"], tr["result"], tr["tool"]))
 
-            if finished:
-                break
+                # Sliding window compression
+                try:
+                    chat_messages, accumulated_summary = await _compress_context_if_needed(
+                        chat_messages, preamble_size, self.context_window_size,
+                        original_user_content, _ResilientProvider(self.llm), accumulated_summary,
+                    )
+                except Exception as exc:
+                    logger.warning("Context compression error (chat): %s", exc)
+        except asyncio.CancelledError:
+            # Stop (or shutdown): don't send fallbacks. Fall through to persist
+            # a well-formed transcript, then re-raise below.
+            stopped = True
 
-            # --- Add tool results as proper role:"tool" messages ---
-            for tr in tool_results:
-                chat_messages.append(_build_tool_result_msg(tr["id"], tr["result"], tr["tool"]))
-
-            # Sliding window compression
-            try:
-                chat_messages, accumulated_summary = await _compress_context_if_needed(
-                    chat_messages, preamble_size, self.context_window_size,
-                    original_user_content, _ResilientProvider(self.llm), accumulated_summary,
-                )
-            except Exception as exc:
-                logger.warning("Context compression error (chat): %s", exc)
+        if not stopped:
+            await _clear_reply_stream(self, str(chat_id))
 
         # --- If we never replied, auto-reply ---
-        if not has_replied:
+        if stopped:
+            pass
+        elif not has_replied:
             logger.warning("Chat with %s ended without reply, sending fallback", sender)
             await self._auto_reply(
                 "Sorry, I couldn't process your message properly. Please try again!",
@@ -2564,6 +2654,15 @@ class AgentLoopsMixin:
         # they've had a real reply, design + set up their plan once. Guarded so
         # a slow run can't double-fire on the next turn; stays 'pending' (and
         # retries) only on a hard failure.
+        if stopped:
+            # Cancelled mid-run: history only ever gets complete user/assistant
+            # turns (no orphan tool_call / partial assistant turn). Tell
+            # clients, then propagate the cancellation to the chat worker.
+            if getattr(self, "_chat_stop_requested", False):
+                await self._emit({"type": "chat_stopped", "chat_id": chat_id})
+            self._set_state("chat_complete", loop="chat")
+            logger.info("Chat with %s stopped by user (history=%d msgs)", sender, len(hist))
+            raise asyncio.CancelledError()
         if reply_text and not getattr(self, "_plan_running", False):
             # Claim the guard before awaiting, so the HTTP-triggered redesign
             # can't slip in across the suspension point and double-fire.
