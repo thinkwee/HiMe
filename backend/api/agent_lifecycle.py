@@ -8,6 +8,7 @@ import json
 import logging
 import math
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -388,6 +389,7 @@ def _spawn_ingest_task(reader, data_store: DataStore, user_id: str) -> asyncio.T
 
 
 _INGEST_POLL_INTERVAL_S = 5.0
+_TRIGGER_SWEEP_INTERVAL_S = 60.0  # absent rules + throttled-feature catch-up
 _INGEST_MAX_BACKOFF_S = 60.0
 _INGEST_PAGE_SIZE = 100000  # matches the reader's default row limit
 # Epoch values above this are milliseconds (1e11 s is year 5138).
@@ -514,6 +516,22 @@ async def _ingest_cycle(reader, data_store: DataStore, user_id: str, hwm: dict,
     return consumed
 
 
+async def _periodic_trigger_sweep(trigger_eval, user_id: str) -> None:
+    """Evaluate rules that per-batch evaluation can't reach: ``absent`` rules
+    (nothing is ingested while data is missing) and features whose batch was
+    skipped by the evaluator's throttle. Only runs while an agent can take the
+    resulting analysis task."""
+    queue = _get_agent_analysis_queue(user_id)
+    if queue is None:
+        return
+    try:
+        triggered = await trigger_eval.evaluate_periodic(queue)
+        if triggered:
+            logger.info("Periodic triggers fired: %s", [t["name"] for t in triggered])
+    except Exception as exc:
+        logger.warning("Periodic trigger sweep failed for %s: %s", user_id, exc)
+
+
 async def _live_ingest_loop(reader, data_store: DataStore, user_id: str) -> None:
     """
     Continuously poll the live watch.db and forward ALL samples into the DataStore.
@@ -539,8 +557,12 @@ async def _live_ingest_loop(reader, data_store: DataStore, user_id: str) -> None
 
     backoff = _INGEST_POLL_INTERVAL_S
     first = True
+    last_sweep = time.monotonic()
     try:
         while data_store.is_ingesting:
+            if not first and time.monotonic() - last_sweep >= _TRIGGER_SWEEP_INTERVAL_S:
+                last_sweep = time.monotonic()
+                await _periodic_trigger_sweep(trigger_eval, user_id)
             try:
                 consumed = await _ingest_cycle(
                     reader, data_store, user_id, hwm, trigger_eval,

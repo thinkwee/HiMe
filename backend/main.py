@@ -233,7 +233,7 @@ async def _run_cron_scheduler():
                         (goal or "")[:60],
                     )
                     try:
-                        await agent.run_scheduled_analysis(goal)
+                        await agent.run_scheduled_analysis(goal, task_id=task_id)
                     except Exception as e:
                         logger.error("Scheduler: failed to enqueue task %d: %s", task_id, e)
                         # Give the tick back so the next poll retries it
