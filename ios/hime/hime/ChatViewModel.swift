@@ -695,8 +695,8 @@ final class ChatViewModel: ObservableObject {
         live.tool = tool
         // The reply itself is the bubble, not a step.
         if tool == "reply_user" { return }
-        // Sub-agent tools (sql / code / ...) carry a `source` tag.
-        let nested = forceNested || event["source"] != nil
+        // Sub-agent tools (sql / code / ...) carry a `source` and/or `parent` tag.
+        let nested = forceNested || event["source"] != nil || event["parent"] != nil
         addStep(tool: tool, nested: nested, arguments: event["arguments"] as? [String: Any])
     }
 
@@ -705,10 +705,10 @@ final class ChatViewModel: ObservableObject {
         // `reply_user`'s result lands after its `chat_reply`: nothing to do.
         guard !tool.isEmpty, tool != "reply_user", tool != "finish_chat" else { return }
         touch()
-        let nested = forceNested || event["source"] != nil
+        let nested = forceNested || event["source"] != nil || event["parent"] != nil
         let ok = (event["success"] as? Bool) ?? false
         completeStep(tool: tool, nested: nested, success: ok,
-                     preview: Self.preview(of: event["result"]))
+                     preview: Self.preview(of: event["result_preview"] ?? event["result"]))
         guard live.active else { return }
         // Text produced after a result (sub-agent findings) is not the reply.
         demoteNarration()
