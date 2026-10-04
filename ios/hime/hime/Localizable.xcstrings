@@ -3261,6 +3261,336 @@
           }
         }
       }
+    },
+    "Looked at your data" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看了你的数据"
+          }
+        }
+      }
+    },
+    "Making an update" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在更新"
+          }
+        }
+      }
+    },
+    "Made an update" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已更新"
+          }
+        }
+      }
+    },
+    "Checking your records" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在查询你的记录"
+          }
+        }
+      }
+    },
+    "Checked your records" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查询了你的记录"
+          }
+        }
+      }
+    },
+    "Running an analysis" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在运行分析"
+          }
+        }
+      }
+    },
+    "Ran an analysis" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "运行了一次分析"
+          }
+        }
+      }
+    },
+    "Reading a playbook" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在阅读分析手册"
+          }
+        }
+      }
+    },
+    "Read a playbook" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "阅读了分析手册"
+          }
+        }
+      }
+    },
+    "Writing a report" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在撰写报告"
+          }
+        }
+      }
+    },
+    "Wrote a report" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撰写了报告"
+          }
+        }
+      }
+    },
+    "Saving a note" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在保存笔记"
+          }
+        }
+      }
+    },
+    "Saved a note" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存了笔记"
+          }
+        }
+      }
+    },
+    "Building a page" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在搭建页面"
+          }
+        }
+      }
+    },
+    "Built a page" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "搭建了页面"
+          }
+        }
+      }
+    },
+    "Wrote a reply" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "撰写了回复"
+          }
+        }
+      }
+    },
+    "Wrapping up" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在收尾"
+          }
+        }
+      }
+    },
+    "Wrapped up" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已收尾"
+          }
+        }
+      }
+    },
+    "Worked on it" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已处理"
+          }
+        }
+      }
+    },
+    "Hime is working" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime 正在工作"
+          }
+        }
+      }
+    },
+    "Hime is working · %lld step" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime 正在工作 · %lld 个步骤"
+          }
+        }
+      }
+    },
+    "Hime is working · %lld steps" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime 正在工作 · %lld 个步骤"
+          }
+        }
+      }
+    },
+    "%lld step" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个步骤"
+          }
+        }
+      }
+    },
+    "%lld steps" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld 个步骤"
+          }
+        }
+      }
+    },
+    "Working on it… you can add something anytime" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "处理中… 随时可以补充内容"
+          }
+        }
+      }
+    },
+    "Reconnecting…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在重新连接…"
+          }
+        }
+      }
+    },
+    "Hi, I'm Hime" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你好，我是 Hime"
+          }
+        }
+      }
+    },
+    "Ask me anything about your sleep, heart, activity, or recovery." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关于睡眠、心率、活动或恢复，随时问我。"
+          }
+        }
+      }
+    },
+    "How did I sleep last night?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "我昨晚睡得怎么样？"
+          }
+        }
+      }
+    },
+    "Any unusual heart rate this week?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这周心率有异常吗？"
+          }
+        }
+      }
+    },
+    "Make me a weekly summary" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "帮我做一份每周总结"
+          }
+        }
+      }
+    },
+    "Stop" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停止"
+          }
+        }
+      }
+    },
+    "Couldn't stop. Please try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法停止，请重试。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

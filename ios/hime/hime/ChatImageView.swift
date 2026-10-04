@@ -22,8 +22,8 @@ struct ChatImageThumbnail: View {
             .resizable()
             .scaledToFit()
             .frame(maxWidth: maxWidth, maxHeight: maxHeight)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .contentShape(RoundedRectangle(cornerRadius: 14))
+            .clipShape(RoundedRectangle(cornerRadius: HimeRadius.card))
+            .contentShape(RoundedRectangle(cornerRadius: HimeRadius.card))
             .onTapGesture { showFullScreen = true }
             .contextMenu {
                 Button {

@@ -45,17 +45,24 @@ struct ChatView: View {
                 ScrollView {
                     LazyVStack(spacing: 14) {
                         ForEach(vm.rows) { row in
-                            ChatBubble(
-                                message: row.message,
-                                showAvatar: row.showAvatar,
-                                loadEvidence: { msg in await vm.evidence(for: msg) },
-                                onRetry: { id in vm.retry(messageId: id) }
-                            )
-                            .equatable()
+                            switch row.item {
+                            case .message(let message):
+                                ChatBubble(
+                                    message: message,
+                                    showAvatar: row.showAvatar,
+                                    loadEvidence: { msg in await vm.evidence(for: msg) },
+                                    onRetry: { id in vm.retry(messageId: id) }
+                                )
+                                .equatable()
+                            case .run(let card):
+                                RunCardView(card: card)
+                                    .equatable()
+                            }
                         }
                         if vm.isBusy {
-                            AgentActivityView(activity: vm.activity)
-                                .padding(.leading, 36)  // align under the avatar gutter
+                            // The one live-status bubble; observes only `LiveState`.
+                            LiveBubble(live: vm.live,
+                                       showAvatar: !(vm.rows.last?.isAssistantSide ?? false))
                                 .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .leading)))
                         }
                         Color.clear.frame(height: 1).id(Self.bottomID)
@@ -90,23 +97,28 @@ struct ChatView: View {
                 // The composer lives in a bottom safe-area inset so the scroll
                 // content, the keyboard and the input bar are laid out together.
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    ChatComposer(focus: $inputFocused) { text, image in
+                    ChatComposer(focus: $inputFocused,
+                                 isBusy: vm.isBusy,
+                                 showStop: vm.isBusy && vm.stopAvailable,
+                                 onStop: { vm.stop() }) { text, image in
                         vm.send(text: text, image: image)
                         scrollToBottom(proxy, animated: true)
                     }
                 }
                 // A grouped backdrop so the (white) assistant cards have contrast
                 // and read as distinct messages rather than blending into the page.
-                .background(Color(.systemGroupedBackground))
+                .background(HimeColor.cream)
                 .onChange(of: vm.didLoadHistory) { _, loaded in
                     guard loaded else { return }
                     jumpToBottom(proxy)
                 }
                 .onChange(of: vm.rows.last?.id) { _, _ in
-                    guard let last = vm.rows.last?.message else { return }
-                    // Always follow your own sends; follow replies unless the
-                    // user scrolled up to read history.
-                    if last.role == .user || nearBottom {
+                    guard let last = vm.rows.last else { return }
+                    // Always follow your own sends; follow replies and step
+                    // cards unless the user scrolled up to read history.
+                    var isUserRow = false
+                    if case .message(let m) = last.item, m.role == .user { isUserRow = true }
+                    if isUserRow || nearBottom {
                         scrollToBottom(proxy, animated: vm.didLoadHistory)
                     }
                 }
@@ -127,7 +139,12 @@ struct ChatView: View {
                 }
                 .onAppear { if vm.didLoadHistory { jumpToBottom(proxy) } }
                 .overlay {
-                    if vm.rows.isEmpty && !vm.isBusy { ChatEmptyState() }
+                    if vm.rows.isEmpty && !vm.isBusy {
+                        ChatEmptyState { text in
+                            vm.send(text: text, image: nil)
+                            scrollToBottom(proxy, animated: true)
+                        }
+                    }
                 }
             }
         }
@@ -135,6 +152,21 @@ struct ChatView: View {
         .navigationTitle("Chat")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                VStack(spacing: 1) {
+                    Text("Chat").font(.headline)
+                    if vm.showReconnecting {
+                        HStack(spacing: 4) {
+                            PulsingDot()
+                            Text("Reconnecting…")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        .transition(.opacity)
+                    }
+                }
+                .animation(.easeInOut(duration: 0.2), value: vm.showReconnecting)
+            }
             ToolbarItem(placement: .navigationBarTrailing) {
                 Menu {
                     Button(role: .destructive) { vm.clearConversation() } label: {
@@ -196,6 +228,11 @@ private struct ScrollMetrics: Equatable {
 /// typing never invalidates the (potentially very long) message list.
 private struct ChatComposer: View {
     var focus: FocusState<Bool>.Binding
+    /// The agent is working: the placeholder changes (sending stays enabled).
+    let isBusy: Bool
+    /// Show the square Stop button next to Send.
+    let showStop: Bool
+    let onStop: () -> Void
     let onSend: (String, Data?) -> Void
 
     @State private var text = ""
@@ -244,19 +281,34 @@ private struct ChatComposer: View {
                     }
                 }
 
-                TextField("Message Hime", text: $text, axis: .vertical)
+                TextField(isBusy ? String(localized: "Working on it… you can add something anytime")
+                                 : String(localized: "Message Hime"),
+                          text: $text, axis: .vertical)
                     .textFieldStyle(.plain)
                     .focused(focus)
                     .lineLimit(1...5)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(Color(.systemGray6))
-                    .clipShape(RoundedRectangle(cornerRadius: 18))
+                    .clipShape(RoundedRectangle(cornerRadius: HimeRadius.pill))
+
+                if showStop {
+                    Button(action: onStop) {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(.white)
+                            .frame(width: 28, height: 28)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(HimeColor.ink2))
+                    }
+                    .accessibilityLabel(Text("Stop"))
+                }
 
                 Button(action: send) {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 28))
-                        .foregroundColor(canSend ? Color.himeAccent : .gray)
+                        .foregroundColor(canSend ? HimeColor.accent : .gray)
                 }
                 .disabled(!canSend)
             }
@@ -287,39 +339,66 @@ private struct ChatComposer: View {
 
 // MARK: - Empty state
 
-/// Shown before the first message — a calm, single-accent invitation.
+/// Shown before the first message: a calm invitation with tappable starters.
 private struct ChatEmptyState: View {
+    let onPick: (String) -> Void
+
+    private var starters: [String] {
+        [String(localized: "How did I sleep last night?"),
+         String(localized: "Any unusual heart rate this week?"),
+         String(localized: "Make me a weekly summary")]
+    }
+
     var body: some View {
         VStack(spacing: 10) {
-            Image(systemName: "bubble.left.and.bubble.right")
-                .font(.system(size: 34, weight: .light))
-                .foregroundStyle(Color.himeAccent.opacity(0.75))
-            Text("Chat with Hime")
-                .font(.callout.weight(.medium))
-                .foregroundColor(.primary)
-            Text("Ask about your sleep, activity, or how you're recovering.")
+            HimeAvatar(size: 72)
+            Text("Hi, I'm Hime")
+                .font(.title3.weight(.semibold))
+                .foregroundColor(HimeColor.ink)
+            Text("Ask me anything about your sleep, heart, activity, or recovery.")
                 .font(.footnote)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 40)
+            VStack(spacing: 8) {
+                ForEach(starters, id: \.self) { prompt in
+                    Button { onPick(prompt) } label: {
+                        Text(prompt)
+                            .font(.subheadline)
+                            .foregroundColor(HimeColor.ink)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 9)
+                            .frame(maxWidth: .infinity)
+                            .background(
+                                RoundedRectangle(cornerRadius: HimeRadius.row, style: .continuous)
+                                    .fill(HimeColor.card)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: HimeRadius.row, style: .continuous)
+                                    .stroke(HimeColor.line, lineWidth: 0.5)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 8)
         }
         .padding(.bottom, 40)
-        .allowsHitTesting(false)
     }
 }
 
-// MARK: - Hime avatar
+/// Small amber dot that pulses, the "reconnecting" marker in the nav bar.
+private struct PulsingDot: View {
+    @State private var on = false
 
-/// A small, quiet identity mark beside Hime's messages. Monochrome on a soft
-/// accent disc — detail without a second colour.
-private struct HimeAvatar: View {
     var body: some View {
-        Image(systemName: "pawprint.fill")
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundColor(Color.himeAccent)
-            .frame(width: 28, height: 28)
-            .background(Circle().fill(Color.himeAccent.opacity(0.12)))
-            .overlay(Circle().stroke(Color.himeAccent.opacity(0.18), lineWidth: 0.5))
+        Circle()
+            .fill(HimeColor.warn)
+            .frame(width: 6, height: 6)
+            .opacity(on ? 1 : 0.3)
+            .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: on)
+            .onAppear { on = true }
     }
 }
 
@@ -348,23 +427,14 @@ private struct ChatBubble: View, Equatable {
 
     /// Subtly asymmetric corners — a small "tail" on the sender's bottom edge.
     /// A quiet detail that reads as a chat bubble without any ornament.
-    private var bubbleShape: UnevenRoundedRectangle {
-        let r: CGFloat = 17
-        let tail: CGFloat = 5
-        return UnevenRoundedRectangle(
-            topLeadingRadius: r,
-            bottomLeadingRadius: isUser ? r : tail,
-            bottomTrailingRadius: isUser ? tail : r,
-            topTrailingRadius: r,
-            style: .continuous)
-    }
+    private var bubbleShape: UnevenRoundedRectangle { chatBubbleShape(isUser: isUser) }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             if isUser {
                 Spacer(minLength: 44)
             } else if showAvatar {
-                HimeAvatar()
+                HimeAvatar(size: 28)
             } else {
                 Color.clear.frame(width: 28, height: 1)
             }
@@ -384,7 +454,7 @@ private struct ChatBubble: View, Equatable {
                             // lifted off the grouped backdrop. User: flat accent.
                             // The shadow sits on the shape only, so text stays crisp.
                             bubbleShape
-                                .fill(isUser ? Color.himeAccent : Color(.secondarySystemGroupedBackground))
+                                .fill(isUser ? HimeColor.userBubble : HimeColor.assistantBubble)
                                 .shadow(color: .black.opacity(isUser ? 0.08 : 0.05),
                                         radius: 2, x: 0, y: 1)
                         )
@@ -424,7 +494,7 @@ private struct ChatBubble: View, Equatable {
         if isUser {
             Text(message.text)
                 .font(.body)
-                .foregroundColor(.white)
+                .foregroundColor(HimeColor.userBubbleText)
         } else {
             MarkdownView(text: message.text, foreground: .primary)
         }
@@ -460,7 +530,7 @@ private struct ChatBubble: View, Equatable {
                     .font(.system(size: 9, weight: .semibold))
             }
             .font(.caption.weight(.medium))
-            .foregroundColor(Color.himeAccent)
+            .foregroundColor(HimeColor.accent)
         }
         .buttonStyle(.plain)
     }
@@ -511,7 +581,7 @@ private struct LocalChatImage: View {
             if let image {
                 ChatImageThumbnail(image: image, maxWidth: 220, maxHeight: 220)
             } else {
-                RoundedRectangle(cornerRadius: 14)
+                RoundedRectangle(cornerRadius: HimeRadius.card)
                     .fill(Color(.systemGray6))
                     .frame(width: 120, height: 120)
             }
@@ -543,7 +613,7 @@ private struct AuthedAsyncImage: View {
             if let image {
                 ChatImageThumbnail(image: image, maxWidth: 240, maxHeight: 240)
             } else {
-                RoundedRectangle(cornerRadius: 14)
+                RoundedRectangle(cornerRadius: HimeRadius.card)
                     .fill(Color(.systemGray6))
                     .frame(width: 200, height: 150)
                     .overlay {

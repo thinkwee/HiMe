@@ -106,7 +106,7 @@ enum MarkdownBlock {
         case let .quote(lines):
             HStack(spacing: 8) {
                 RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.himeAccent.opacity(0.6))
+                    .fill(HimeColor.accent.opacity(0.6))
                     .frame(width: 3)
                 inlineMarkdown(lines.joined(separator: "\n"))
                     .font(.body)
