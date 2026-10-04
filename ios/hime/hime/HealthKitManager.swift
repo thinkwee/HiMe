@@ -712,8 +712,17 @@ final class HealthKitManager: ObservableObject {
 
     // MARK: - Force Fetch
 
-    func forceFetch() {
-        HealthKitManager.bgLog("HK: Force sweep started...")
+    /// Sweep every metric now. With `fullResync`, first forget the anchors and
+    /// stats high-water marks so the sweep re-reads the whole 14-day backfill
+    /// window instead of only what changed since the last sync. Needed when the
+    /// server has lost data the phone believes it already sent (factory reset,
+    /// fresh Docker volume, a different server) — otherwise history never
+    /// re-uploads. Re-sending is safe: the server upserts on (ts, feature).
+    func forceFetch(fullResync: Bool = false) {
+        if fullResync {
+            HealthKitManager.resetSyncCursors()
+        }
+        HealthKitManager.bgLog("HK: Force sweep started\(fullResync ? " (full 14-day resync)" : "")...")
         var bgTaskID: UIBackgroundTaskIdentifier = .invalid
         var sweep: Task<Void, Never>?
         bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "HKForceFetch") {
@@ -819,6 +828,17 @@ final class HealthKitManager: ObservableObject {
         UserDefaults.standard.data(forKey: key).flatMap {
             try? NSKeyedUnarchiver.unarchivedObject(ofClass: HKQueryAnchor.self, from: $0)
         }
+    }
+
+    /// Drop every anchored-query anchor and cumulative-stats HWM so the next
+    /// fetch of each metric starts again from the 14-day backfill window.
+    nonisolated static func resetSyncCursors() {
+        let defaults = UserDefaults.standard
+        let keys = defaults.dictionaryRepresentation().keys.filter {
+            $0.hasPrefix("anchor_") || $0.hasPrefix("stats_hwm_")
+        }
+        keys.forEach { defaults.removeObject(forKey: $0) }
+        bgLog("HK: Reset \(keys.count) sync cursors — next sweep re-reads 14 days")
     }
 
     nonisolated private static func saveAnchorStatic(_ anchor: HKQueryAnchor, key: String) {

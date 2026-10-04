@@ -268,7 +268,7 @@ struct SettingsView: View {
                 }
 
                 Button {
-                    hk.forceFetch()
+                    hk.forceFetch(fullResync: true)
                 } label: {
                     Label("Force Fetch All Data Now", systemImage: "arrow.clockwise")
                 }
