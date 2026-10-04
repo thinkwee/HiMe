@@ -49,10 +49,24 @@
       "shouldTranslate" : false
     },
     "%@." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@。"
+          }
+        }
+      }
     },
     "%@. Double-tap to enlarge." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@。轻点两下可放大。"
+          }
+        }
+      }
     },
     "%lld" : {
       "shouldTranslate" : false
@@ -63,6 +77,12 @@
           "stringUnit" : {
             "state" : "new",
             "value" : "%1$lld / %2$lld"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld / %lld"
           }
         }
       }
@@ -78,6 +98,7 @@
       }
     },
     "%lld step" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -131,218 +152,15 @@
         }
       }
     },
-    "Archive" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "归档"
-          }
-        }
-      }
-    },
-    "Archived" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已归档"
-          }
-        }
-      }
-    },
-    "Chats" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "对话"
-          }
-        }
-      }
-    },
-    "Couldn't create a new chat. Please try again." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "无法创建新对话，请重试。"
-          }
-        }
-      }
-    },
-    "Couldn't delete this chat. Please try again." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "无法删除此对话，请重试。"
-          }
-        }
-      }
-    },
-    "Couldn't rename this chat. Please try again." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "无法重命名此对话，请重试。"
-          }
-        }
-      }
-    },
-    "Couldn't update this chat. Please try again." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "无法更新此对话，请重试。"
-          }
-        }
-      }
-    },
-    "Delete this chat?" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "删除这个对话？"
-          }
-        }
-      }
-    },
-    "Image" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "图片"
-          }
-        }
-      }
-    },
-    "Its messages are removed. Hime keeps what it has learned about you." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "对话内容将被删除，Hime 对你的了解会保留。"
-          }
-        }
-      }
-    },
-    "New chat" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "新对话"
-          }
-        }
-      }
-    },
-    "No archived chats" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "没有已归档的对话"
-          }
-        }
-      }
-    },
-    "now" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "刚刚"
-          }
-        }
-      }
-    },
-    "Rename" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "重命名"
-          }
-        }
-      }
-    },
-    "Rename chat" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "重命名对话"
-          }
-        }
-      }
-    },
-    "Reports & reminders" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "报告与提醒"
-          }
-        }
-      }
-    },
-    "Save" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "保存"
-          }
-        }
-      }
-    },
-    "Something went wrong" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "出错了"
-          }
-        }
-      }
-    },
-    "Title" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "标题"
-          }
-        }
-      }
-    },
-    "Unarchive" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "取消归档"
-          }
-        }
-      }
-    },
-    "Unread" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "未读"
-          }
-        }
-      }
-    },
     "•" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "•"
+          }
+        }
+      }
     },
     "1 data point recorded" : {
       "extractionState" : "manual",
@@ -357,6 +175,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "已记录 1 个数据点"
+          }
+        }
+      }
+    },
+    "1 step" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 个步骤"
           }
         }
       }
@@ -540,7 +368,14 @@
       }
     },
     "Action failed" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "操作失败"
+          }
+        }
+      }
     },
     "Activity Log" : {
       "extractionState" : "manual",
@@ -560,7 +395,14 @@
       }
     },
     "Afternoon slump" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下午犯困"
+          }
+        }
+      }
     },
     "Agent" : {
       "extractionState" : "manual",
@@ -650,6 +492,16 @@
         }
       }
     },
+    "Analyzing data" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在分析数据"
+          }
+        }
+      }
+    },
     "Any unusual heart rate this week?" : {
       "localizations" : {
         "zh-Hans" : {
@@ -661,7 +513,14 @@
       }
     },
     "Anything else you'd like HiMe to watch? (optional)" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "还有其他希望 HiMe 关注的吗？（可选）"
+          }
+        }
+      }
     },
     "Apple Health Access" : {
       "extractionState" : "manual",
@@ -676,6 +535,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Apple 健康数据访问"
+          }
+        }
+      }
+    },
+    "Archive" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "归档"
+          }
+        }
+      }
+    },
+    "Archived" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已归档"
           }
         }
       }
@@ -772,7 +651,14 @@
       }
     },
     "Breathing & mindfulness" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "呼吸与正念"
+          }
+        }
+      }
     },
     "Build" : {
       "extractionState" : "manual",
@@ -792,7 +678,14 @@
       }
     },
     "Build muscle" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "增肌"
+          }
+        }
+      }
     },
     "Building a page" : {
       "localizations" : {
@@ -815,7 +708,14 @@
       }
     },
     "Burned out by evening" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "到晚上就精疲力尽"
+          }
+        }
+      }
     },
     "Burst Mode (High Priority)" : {
       "extractionState" : "manual",
@@ -835,7 +735,14 @@
       }
     },
     "Can't unwind at night" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "晚上难以放松"
+          }
+        }
+      }
     },
     "Cancel" : {
       "extractionState" : "manual",
@@ -855,7 +762,14 @@
       }
     },
     "Chart. Double-tap to enlarge." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "图表。轻点两下可放大。"
+          }
+        }
+      }
     },
     "Chat" : {
       "localizations" : {
@@ -884,6 +798,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "和 Hime 对话"
+          }
+        }
+      }
+    },
+    "Chats" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "对话"
           }
         }
       }
@@ -926,7 +850,14 @@
       }
     },
     "Choose any that apply — or skip." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可多选，也可以跳过。"
+          }
+        }
+      }
     },
     "Clear" : {
       "extractionState" : "manual",
@@ -1228,19 +1159,84 @@
       }
     },
     "Couldn't clear the conversation. Please try again." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法清空对话，请重试。"
+          }
+        }
+      }
+    },
+    "Couldn't create a new chat. Please try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法创建新对话，请重试。"
+          }
+        }
+      }
+    },
+    "Couldn't delete this chat. Please try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法删除此对话，请重试。"
+          }
+        }
+      }
     },
     "Couldn't reach Hime. Tap the message to retry." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法连接 Hime，轻点消息重试。"
+          }
+        }
+      }
     },
     "Couldn't reach your server. Check the address and token in Settings, then try again." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法连接到你的服务器。请在设置中检查地址和令牌后重试。"
+          }
+        }
+      }
+    },
+    "Couldn't rename this chat. Please try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法重命名此对话，请重试。"
+          }
+        }
+      }
     },
     "Couldn't send (error %lld). Tap the message to retry." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送失败（错误 %lld），轻点消息重试。"
+          }
+        }
+      }
     },
     "Couldn't send. Tap the message to retry." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送失败，轻点消息重试。"
+          }
+        }
+      }
     },
     "Couldn't stop. Please try again." : {
       "localizations" : {
@@ -1252,112 +1248,12 @@
         }
       }
     },
-    "1 step" : {
+    "Couldn't update this chat. Please try again." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "1 个步骤"
-          }
-        }
-      }
-    },
-    "Writing the reply…" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "正在撰写回复…"
-          }
-        }
-      }
-    },
-    "Analyzing data" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "正在分析数据"
-          }
-        }
-      }
-    },
-    "Re-checking facts…" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "正在重新核对事实…"
-          }
-        }
-      }
-    },
-    "Thinking…" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "思考中…"
-          }
-        }
-      }
-    },
-    "Thought for %@" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "思考了 %@"
-          }
-        }
-      }
-    },
-    "Stopped" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "已停止"
-          }
-        }
-      }
-    },
-    "Draft held back by fact check — re-verifying" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "草稿未通过事实核查，正在重新验证"
-          }
-        }
-      }
-    },
-    "Draft discarded — retrying" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "草稿已丢弃，正在重试"
-          }
-        }
-      }
-    },
-    "Draft set aside — rewriting" : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "草稿已搁置，正在重写"
-          }
-        }
-      }
-    },
-    "Hime stopped responding." : {
-      "localizations" : {
-        "zh-Hans" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hime 没有响应。"
+            "value" : "无法更新此对话，请重试。"
           }
         }
       }
@@ -1451,13 +1347,44 @@
       }
     },
     "Delete" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除"
+          }
+        }
+      }
     },
     "Delete Report" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除报告"
+          }
+        }
+      }
+    },
+    "Delete this chat?" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除这个对话？"
+          }
+        }
+      }
     },
     "Delete this report?" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "删除这份报告？"
+          }
+        }
+      }
     },
     "Deploy Your Own Server" : {
       "localizations" : {
@@ -1470,7 +1397,14 @@
       }
     },
     "Diet & nutrition" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "饮食与营养"
+          }
+        }
+      }
     },
     "Disconnect" : {
       "extractionState" : "manual",
@@ -1516,8 +1450,45 @@
         }
       }
     },
+    "Draft discarded — retrying" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "草稿已丢弃，正在重试"
+          }
+        }
+      }
+    },
+    "Draft held back by fact check — re-verifying" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "草稿未通过事实核查，正在重新验证"
+          }
+        }
+      }
+    },
+    "Draft set aside — rewriting" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "草稿已搁置，正在重写"
+          }
+        }
+      }
+    },
     "During work / study" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "工作或学习时"
+          }
+        }
+      }
     },
     "e.g. 0 8 * * *" : {
       "extractionState" : "manual",
@@ -1571,7 +1542,14 @@
       }
     },
     "Endurance / VO₂max" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "耐力 / 最大摄氧量"
+          }
+        }
+      }
     },
     "Enter the WebSocket address of the Hime macOS server running on your Mac." : {
       "extractionState" : "manual",
@@ -1618,13 +1596,34 @@
       }
     },
     "Every day" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每天"
+          }
+        }
+      }
     },
     "Fairly constant" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "几乎一直都有"
+          }
+        }
+      }
     },
     "Family history — monitor" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有家族病史，需要关注"
+          }
+        }
+      }
     },
     "Feature" : {
       "extractionState" : "manual",
@@ -1661,7 +1660,14 @@
       }
     },
     "Get fitter & move more" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更健康、多运动"
+          }
+        }
+      }
     },
     "Get Started" : {
       "extractionState" : "manual",
@@ -1711,10 +1717,24 @@
       }
     },
     "Hard to fall asleep" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "入睡困难"
+          }
+        }
+      }
     },
     "Have more energy" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "精力更充沛"
+          }
+        }
+      }
     },
     "Health data is read from Apple HealthKit using HealthKit observer queries that the user authorises on the \"Apple Health Access\" onboarding page. The app never writes to HealthKit. Conversation text is provided directly by the user when they message the AI agent. Configuration is entered manually by the user." : {
       "extractionState" : "manual",
@@ -1812,7 +1832,14 @@
       }
     },
     "Heart & long-term health" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "心脏与长期健康"
+          }
+        }
+      }
     },
     "Hi, I'm Hime" : {
       "localizations" : {
@@ -1835,7 +1862,14 @@
       }
     },
     "High-intensity / training" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "高强度训练"
+          }
+        }
+      }
     },
     "Hime" : {
       "extractionState" : "manual",
@@ -1872,7 +1906,14 @@
       }
     },
     "Hime didn't wake up. Tap the message to retry." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime 没有被唤醒，轻点消息重试。"
+          }
+        }
+      }
     },
     "Hime Home" : {
       "extractionState" : "manual",
@@ -1942,7 +1983,14 @@
       }
     },
     "HiMe is redesigning your plan" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HiMe 正在重新设计你的计划"
+          }
+        }
+      }
     },
     "Hime is self-hosted, but your server forwards your data to a third-party AI service that you choose and configure. Please review the details below before continuing." : {
       "localizations" : {
@@ -1953,9 +2001,6 @@
           }
         }
       }
-    },
-    "Hime is thinking" : {
-
     },
     "Hime is thinking…" : {
       "extractionState" : "stale",
@@ -1969,9 +2014,17 @@
       }
     },
     "Hime is waking up. Try clearing again in a moment." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime 正在唤醒，请稍后再试清空。"
+          }
+        }
+      }
     },
     "Hime is working" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -1982,6 +2035,7 @@
       }
     },
     "Hime is working · %lld step" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -1992,6 +2046,7 @@
       }
     },
     "Hime is working · %lld steps" : {
+      "extractionState" : "stale",
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
@@ -2097,6 +2152,16 @@
         }
       }
     },
+    "Hime stopped responding." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hime 没有响应。"
+          }
+        }
+      }
+    },
     "HiMeow is a AI digital health avatar that lives on your home screen and reflects your real-time health state. It's happy when you are well-rested, concerned when something looks off. \nLong-press HiMeow anytime for an instant health report and quick AI analysis." : {
       "localizations" : {
         "zh-Hans" : {
@@ -2108,7 +2173,14 @@
       }
     },
     "How active are you right now?" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你目前的运动量如何？"
+          }
+        }
+      }
     },
     "How did I sleep last night?" : {
       "localizations" : {
@@ -2141,13 +2213,34 @@
       }
     },
     "How often should HiMe check in with you?" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "希望 HiMe 多久找你一次？"
+          }
+        }
+      }
     },
     "HRV & recovery" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HRV 与恢复"
+          }
+        }
+      }
     },
     "Hydration" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "饮水"
+          }
+        }
+      }
     },
     "I Agree & Continue" : {
       "localizations" : {
@@ -2203,11 +2296,35 @@
         }
       }
     },
+    "Image" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "图片"
+          }
+        }
+      }
+    },
     "Image unavailable" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "图片无法显示"
+          }
+        }
+      }
     },
     "Improve sleep" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "改善睡眠"
+          }
+        }
+      }
     },
     "Infinite possibilities, one conversation away." : {
       "extractionState" : "manual",
@@ -2278,10 +2395,34 @@
       }
     },
     "Irregular schedule" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "作息不规律"
+          }
+        }
+      }
     },
     "It affects my sleep" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "影响到我的睡眠"
+          }
+        }
+      }
+    },
+    "Its messages are removed. Hime keeps what it has learned about you." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "对话内容将被删除，Hime 对你的了解会保留。"
+          }
+        }
+      }
     },
     "Last Analysis" : {
       "extractionState" : "manual",
@@ -2328,7 +2469,14 @@
       }
     },
     "Let HiMe decide" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "让 HiMe 决定"
+          }
+        }
+      }
     },
     "Let's get started" : {
       "extractionState" : "manual",
@@ -2358,13 +2506,34 @@
       }
     },
     "Looking at your data" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在查看你的数据"
+          }
+        }
+      }
     },
     "Lose fat" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "减脂"
+          }
+        }
+      }
     },
     "Low all day" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "一整天都没精神"
+          }
+        }
+      }
     },
     "Mac Server" : {
       "extractionState" : "manual",
@@ -2394,7 +2563,14 @@
       }
     },
     "Maintain & tone" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保持体型、紧致线条"
+          }
+        }
+      }
     },
     "Make me a weekly summary" : {
       "localizations" : {
@@ -2417,7 +2593,14 @@
       }
     },
     "Manage stress & mood" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "管理压力与情绪"
+          }
+        }
+      }
     },
     "Meet HiMeow" : {
       "localizations" : {
@@ -2447,7 +2630,14 @@
       }
     },
     "Menstrual health" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "经期健康"
+          }
+        }
+      }
     },
     "Message Hime" : {
       "localizations" : {
@@ -2494,13 +2684,44 @@
       }
     },
     "Mood & wellbeing" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "情绪与身心状态"
+          }
+        }
+      }
     },
     "Morning & evening" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "早晚各一次"
+          }
+        }
+      }
     },
     "Mornings are hard" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "早上起不来"
+          }
+        }
+      }
+    },
+    "New chat" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新对话"
+          }
+        }
+      }
     },
     "New Scheduled Task" : {
       "extractionState" : "manual",
@@ -2537,7 +2758,24 @@
       }
     },
     "Next" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "下一步"
+          }
+        }
+      }
+    },
+    "No archived chats" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有已归档的对话"
+          }
+        }
+      }
     },
     "No data" : {
       "extractionState" : "manual",
@@ -2697,7 +2935,14 @@
       }
     },
     "Not enough sleep" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "睡眠不足"
+          }
+        }
+      }
     },
     "Not granted" : {
       "localizations" : {
@@ -2710,10 +2955,34 @@
       }
     },
     "Not sent. Tap to retry" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未发送，轻点重试"
+          }
+        }
+      }
+    },
+    "now" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "刚刚"
+          }
+        }
+      }
     },
     "Occasionally active" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "偶尔运动"
+          }
+        }
+      }
     },
     "Off" : {
       "shouldTranslate" : false
@@ -2831,10 +3100,24 @@
       }
     },
     "Photo. Double-tap to enlarge." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "照片。轻点两下可放大。"
+          }
+        }
+      }
     },
     "Plan & Onboarding" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "计划与引导"
+          }
+        }
+      }
     },
     "Privacy Policy" : {
       "localizations" : {
@@ -2864,7 +3147,14 @@
       }
     },
     "Questions about this policy or the project can be raised at https://github.com/thinkwee/HiMe/issues." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "有关本政策或本项目的问题，可在 https://github.com/thinkwee/HiMe/issues 提出。"
+          }
+        }
+      }
     },
     "Quick check" : {
       "extractionState" : "manual",
@@ -2894,7 +3184,24 @@
       }
     },
     "Rarely active" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "很少运动"
+          }
+        }
+      }
+    },
+    "Re-checking facts…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在重新核对事实…"
+          }
+        }
+      }
     },
     "Read a playbook" : {
       "localizations" : {
@@ -2988,13 +3295,54 @@
       }
     },
     "Redesign My Plan" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新设计我的计划"
+          }
+        }
+      }
     },
     "Redesign Plan" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新设计计划"
+          }
+        }
+      }
     },
     "Regular, want to progress" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "规律运动，想要进阶"
+          }
+        }
+      }
+    },
+    "Rename" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重命名"
+          }
+        }
+      }
+    },
+    "Rename chat" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重命名对话"
+          }
+        }
+      }
     },
     "Replay Onboarding" : {
       "extractionState" : "manual",
@@ -3030,8 +3378,25 @@
         }
       }
     },
+    "Reports & reminders" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "报告与提醒"
+          }
+        }
+      }
+    },
     "Resting heart rate" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "静息心率"
+          }
+        }
+      }
     },
     "Resume" : {
       "extractionState" : "manual",
@@ -3051,10 +3416,24 @@
       }
     },
     "Retake the goal survey and let HiMe redesign your scheduled check-ins and plan." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新填写目标问卷，让 HiMe 重新安排定时问候并设计你的计划。"
+          }
+        }
+      }
     },
     "Retry" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重试"
+          }
+        }
+      }
     },
     "Review Disclosure" : {
       "localizations" : {
@@ -3157,8 +3536,25 @@
         }
       }
     },
+    "Save" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存"
+          }
+        }
+      }
+    },
     "Save Image" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存图片"
+          }
+        }
+      }
     },
     "Saved a note" : {
       "localizations" : {
@@ -3171,7 +3567,14 @@
       }
     },
     "Saved to Photos" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已保存到照片"
+          }
+        }
+      }
     },
     "Saving a note" : {
       "localizations" : {
@@ -3282,13 +3685,34 @@
       }
     },
     "Server address is invalid." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器地址无效。"
+          }
+        }
+      }
     },
     "Server rejected the auth token (401)" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器拒绝了鉴权令牌（401）"
+          }
+        }
+      }
     },
     "Server rejected the auth token (401). Check it in Settings." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务器拒绝了鉴权令牌（401），请在设置中检查。"
+          }
+        }
+      }
     },
     "Server responded with an error" : {
       "extractionState" : "manual",
@@ -3416,6 +3840,16 @@
         }
       }
     },
+    "Something went wrong" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "出错了"
+          }
+        }
+      }
+    },
     "Start" : {
       "extractionState" : "manual",
       "localizations" : {
@@ -3490,6 +3924,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "停止"
+          }
+        }
+      }
+    },
+    "Stopped" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已停止"
           }
         }
       }
@@ -3616,8 +4060,35 @@
         }
       }
     },
+    "Thinking…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考中…"
+          }
+        }
+      }
+    },
     "This will remove the report from your server. This cannot be undone." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这会从你的服务器上删除这份报告，且无法恢复。"
+          }
+        }
+      }
+    },
+    "Thought for %@" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "思考了 %@"
+          }
+        }
+      }
     },
     "Threshold" : {
       "extractionState" : "manual",
@@ -3664,10 +4135,54 @@
       }
     },
     "Tired during the day" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "白天疲倦"
+          }
+        }
+      }
+    },
+    "Title" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "标题"
+          }
+        }
+      }
     },
     "Too much sitting" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "久坐太多"
+          }
+        }
+      }
+    },
+    "Unarchive" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消归档"
+          }
+        }
+      }
+    },
+    "Unread" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未读"
+          }
+        }
+      }
     },
     "Version" : {
       "extractionState" : "manual",
@@ -3687,7 +4202,14 @@
       }
     },
     "View full report" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看完整报告"
+          }
+        }
+      }
     },
     "Waiting for data..." : {
       "extractionState" : "manual",
@@ -3707,7 +4229,14 @@
       }
     },
     "Waking up at night" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "夜间易醒"
+          }
+        }
+      }
     },
     "Waking up Hime…" : {
       "localizations" : {
@@ -3737,10 +4266,24 @@
       }
     },
     "Weekly summary" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "每周总结"
+          }
+        }
+      }
     },
     "Weight & body shape" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "体重与体型"
+          }
+        }
+      }
     },
     "Welcome to Hime" : {
       "localizations" : {
@@ -3763,22 +4306,64 @@
       }
     },
     "What would you like to focus on first?" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你想先关注哪方面？"
+          }
+        }
+      }
     },
     "What's your biggest sleep struggle?" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你在睡眠上最大的困扰是什么？"
+          }
+        }
+      }
     },
     "What's your body goal?" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你的身材目标是什么？"
+          }
+        }
+      }
     },
     "When do you feel most drained?" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你什么时候最感到疲惫？"
+          }
+        }
+      }
     },
     "When is stress hardest for you?" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "什么时候压力最让你难受？"
+          }
+        }
+      }
     },
     "Which signal matters most to you?" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "你最关心哪项指标？"
+          }
+        }
+      }
     },
     "Who it is sent to" : {
       "localizations" : {
@@ -3852,7 +4437,14 @@
       }
     },
     "Working on it" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在处理"
+          }
+        }
+      }
     },
     "Working on it… you can add something anytime" : {
       "localizations" : {
@@ -3885,7 +4477,14 @@
       }
     },
     "Writing a reply" : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在撰写回复"
+          }
+        }
+      }
     },
     "Writing a report" : {
       "localizations" : {
@@ -3893,6 +4492,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "正在撰写报告"
+          }
+        }
+      }
+    },
+    "Writing the reply…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在撰写回复…"
           }
         }
       }
@@ -3945,7 +4554,14 @@
       }
     },
     "You're sending too fast. Wait a moment, then tap to retry." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送太频繁了，请稍等片刻再轻点重试。"
+          }
+        }
+      }
     },
     "Your AI digital health avatar" : {
       "localizations" : {
@@ -4019,7 +4635,14 @@
       }
     },
     "Your new check-ins and a fresh plan report will arrive in Chat shortly." : {
-
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "新的定时问候和计划报告稍后会出现在对话中。"
+          }
+        }
+      }
     },
     "Your Next Page Lives Here" : {
       "extractionState" : "manual",
