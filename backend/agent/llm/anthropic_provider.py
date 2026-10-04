@@ -254,7 +254,15 @@ class AnthropicProvider(BaseLLMProvider):
                         elif delta.type == "input_json_delta":
                             # Accumulate partial JSON argument string
                             if idx in tool_accum:
-                                tool_accum[idx]["arguments_buf"] += delta.partial_json or ""
+                                piece = delta.partial_json or ""
+                                tool_accum[idx]["arguments_buf"] += piece
+                                if piece:
+                                    yield {
+                                        "type": "tool_call_delta",
+                                        "index": idx,
+                                        "name": tool_accum[idx]["name"],
+                                        "arguments_delta": piece,
+                                    }
 
                     # --- Content block stop ---
                     elif etype == "content_block_stop":
