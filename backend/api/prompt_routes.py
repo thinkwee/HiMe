@@ -79,8 +79,8 @@ async def update_prompt(prompt_id: str, update: PromptUpdate):
         logger.info(f"Updated prompt {prompt_id} ({info['file']}) and refreshed caches")
         return {"success": True, "message": f"Prompt '{prompt_id}' updated successfully"}
     except Exception as e:
-        logger.error(f"Failed to update prompt {prompt_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to update prompt %s: %s", prompt_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to update prompt.") from e
 
 
 def _hot_reload_prompt_caches() -> None:

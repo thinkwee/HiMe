@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from ..config import settings
-from .agent_state import _get_or_create_memory, active_agents
+from .agent_state import active_agents, aget_or_create_memory
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ async def get_chat_history(limit: int = Query(200, ge=1, le=2000)):
     new device. Scoped to the ``ios:LiveUser`` history key, so it returns
     only the in-app chat (not legacy IM transcripts).
     """
-    memory = _get_or_create_memory(_LIVE_USER)
+    memory = await aget_or_create_memory(_LIVE_USER)
     if memory is None:
         return {"success": True, "messages": []}
     messages = await asyncio.to_thread(memory.get_chat_history, f"ios:{_LIVE_USER}", limit)
@@ -96,11 +96,11 @@ async def post_onboarding_survey(body: OnboardingSurvey):
       kicked right now against the running agent. If the agent isn't up yet we
       simply leave the survey pending and the next-chat-reply hook handles it.
     """
-    memory = _get_or_create_memory(_LIVE_USER)
+    memory = await aget_or_create_memory(_LIVE_USER)
     if memory is None:
         # No memory DB yet — create one so the survey can be recorded.
         from ..agent import MemoryManager
-        memory = MemoryManager(settings.MEMORY_DB_PATH, _LIVE_USER)
+        memory = await asyncio.to_thread(MemoryManager, settings.MEMORY_DB_PATH, _LIVE_USER)
     await asyncio.to_thread(memory.save_onboarding_survey, body.goals, body.answers)
     logger.info("Onboarding survey saved (%d goals)", len(body.goals))
 
@@ -114,7 +114,18 @@ async def post_onboarding_survey(body: OnboardingSurvey):
             logger.info(
                 "Redesign requested but agent not ready — will run on next chat reply"
             )
-    return {"success": True, "queued_plan": True, "triggered_now": triggered}
+    # ``queued_plan`` is True only when the plan designer is actually going to
+    # run: either it was kicked right now, or this is an onboarding survey whose
+    # run is deliberately deferred to the first chat reply. A Settings redesign
+    # that couldn't start (agent not ready) stays pending but is reported as
+    # not queued so the client can tell the user to start the agent / chat.
+    queued = triggered or not body.trigger_now
+    return {
+        "success": True,
+        "queued_plan": queued,
+        "triggered_now": triggered,
+        "deferred": (not triggered),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +218,7 @@ async def get_telegram_info():
 async def get_agent_activity(pid: str, limit: int = Query(500, ge=1, le=2000)):
     """Return persisted activity events for a user in chronological order."""
     try:
-        memory = _get_or_create_memory(pid)
+        memory = await aget_or_create_memory(pid)
         if not memory:
             return {"success": True, "user_id": pid, "events": []}
         events = await asyncio.to_thread(memory.get_recent_activity, limit)
@@ -232,7 +243,7 @@ async def get_agent_activity(pid: str, limit: int = Query(500, ge=1, le=2000)):
 async def query_agent_memory(pid: str, query_type: str = "stats"):
     """Query agent memory.  query_type: stats | reports"""
     try:
-        memory = _get_or_create_memory(pid)
+        memory = await aget_or_create_memory(pid)
         if not memory:
             return {"success": True, "user_id": pid, "query_type": query_type, "data": [] if query_type == "reports" else {}}
         if query_type == "stats":
@@ -245,8 +256,8 @@ async def query_agent_memory(pid: str, query_type: str = "stats"):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        logger.error("Error querying memory for %s: %s", pid, exc)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.error("Error querying memory for %s: %s", pid, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to query memory.") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -257,18 +268,18 @@ async def query_agent_memory(pid: str, query_type: str = "stats"):
 async def delete_agent_report(pid: str, report_id: int):
     """Delete a single agent-generated report by id."""
     try:
-        memory = _get_or_create_memory(pid)
+        memory = await aget_or_create_memory(pid)
         if not memory:
             raise HTTPException(status_code=404, detail=f"No memory found for user {pid}")
-        removed = memory.delete_report(report_id)
+        removed = await asyncio.to_thread(memory.delete_report, report_id)
         if not removed:
             raise HTTPException(status_code=404, detail=f"Report {report_id} not found")
         return {"success": True, "user_id": pid, "deleted_id": report_id}
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error("Error deleting report %s for %s: %s", report_id, pid, exc)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.error("Error deleting report %s for %s: %s", report_id, pid, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to delete report.") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -282,25 +293,27 @@ async def list_tools(user_id: str | None = None):
     If an agent is running for user_id, returns its active registry.
     Otherwise returns default tool set definitions.
     """
-    if user_id and user_id in active_agents:
-        registry = active_agents[user_id]["agent"].tool_registry
+    # During startup the registry entry is a placeholder whose agent is None.
+    live_agent = (active_agents.get(user_id) or {}).get("agent") if user_id else None
+    if live_agent is not None:
+        tools = live_agent.tool_registry.get_definitions()
     else:
-        # Create a transient registry with dummy dependencies just to get definitions
-        from ..agent.autonomous_agent import AutonomousHealthAgent
-        from ..agent.skills.registry import SkillRegistry
-        from ..agent.tools.registry import ToolRegistry
-        skill_registry = SkillRegistry(roots=AutonomousHealthAgent._resolve_skill_roots())
-        registry = ToolRegistry.with_default_tools(
-            data_store=None,
-            memory_db_path=settings.MEMORY_DB_PATH,
-            user_id="dummy",
-            skill_registry=skill_registry,
-        )
+        def _default_definitions() -> list:
+            # Transient registry with dummy dependencies, just for definitions.
+            from ..agent.autonomous_agent import AutonomousHealthAgent
+            from ..agent.skills.registry import SkillRegistry
+            from ..agent.tools.registry import ToolRegistry
+            skill_registry = SkillRegistry(roots=AutonomousHealthAgent._resolve_skill_roots())
+            return ToolRegistry.with_default_tools(
+                data_store=None,
+                memory_db_path=settings.MEMORY_DB_PATH,
+                user_id="dummy",
+                skill_registry=skill_registry,
+            ).get_definitions()
 
-    return {
-        "success": True,
-        "tools": registry.get_definitions()
-    }
+        tools = await asyncio.to_thread(_default_definitions)
+
+    return {"success": True, "tools": tools}
 
 
 # ---------------------------------------------------------------------------
@@ -315,7 +328,7 @@ async def inspect_memory_table(
 ):
     """Return raw rows from a specific memory table."""
     try:
-        memory = _get_or_create_memory(pid)
+        memory = await aget_or_create_memory(pid)
         if not memory:
             raise HTTPException(status_code=404, detail=f"No memory found for user {pid}")
 

@@ -165,9 +165,10 @@ async def run_qr_login(out_path: Path) -> bool:
             return False
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        # Persist auxiliary fields too — ``ilink_user_id`` is the bot's own
-        # iLink ID (handy when reading server logs) and ``baseurl`` may
-        # differ from the public ILINK_BASE on regional accounts.
+        # Persist auxiliary fields too — ``ilink_user_id`` is the WeChat user
+        # who scanned the QR (the gateway authorises exactly that user when no
+        # allowlist is configured) and ``baseurl`` may differ from the public
+        # ILINK_BASE on regional accounts.
         record = {
             "bot_token": bot_token,
             "ilink_bot_id": result.get("ilink_bot_id", ""),
@@ -188,19 +189,38 @@ async def run_qr_login(out_path: Path) -> bool:
             pass
         print(f"\nbot_token saved to {out_path}")
         if record["ilink_user_id"]:
-            print(f"  bot user_id: {record['ilink_user_id']}")
+            print(f"  authorised user_id (scanner): {record['ilink_user_id']}")
         return True
+
+
+def load_bot_record(path: Path) -> dict[str, Any]:
+    """Read the whole saved login record (``{}`` if absent or unreadable).
+
+    Keys written by :func:`run_qr_login`: ``bot_token``, ``ilink_bot_id``,
+    ``ilink_user_id`` (the WeChat user who scanned the QR — the bot's owner)
+    and ``baseurl`` (regional API base, may be empty).
+    """
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Failed to read WeChat bot_token from %s: %s", path, exc)
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def load_bot_token(path: Path) -> str | None:
     """Read the cached ``bot_token`` from ``path``; return ``None`` if absent."""
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text()).get("bot_token") or None
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("Failed to read WeChat bot_token from %s: %s", path, exc)
-        return None
+    return load_bot_record(path).get("bot_token") or None
+
+
+def resolve_base_url(record_baseurl: str | None) -> str:
+    """Return the saved regional ``baseurl`` when it is a sane https URL, else the default."""
+    url = (record_baseurl or "").strip().rstrip("/")
+    if url.startswith("https://") and len(url) > len("https://"):
+        return url
+    return ILINK_BASE
 
 
 def _main() -> int:

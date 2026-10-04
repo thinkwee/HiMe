@@ -94,9 +94,10 @@ class TestRateLimiting:
         req = self._request("9.9.9.9")
         assert agent_state._client_ip(req) == "10.0.0.1"
 
-    def test_xff_honoured_when_proxy_trusted(self, monkeypatch):
+    def test_xff_rightmost_when_proxy_trusted(self, monkeypatch):
+        """The proxy appends the real client to the RIGHT; the left is spoofable."""
         monkeypatch.setattr(agent_state.settings, "TRUST_PROXY_HEADERS", True)
-        req = self._request("9.9.9.9, 10.0.0.2")
+        req = self._request("6.6.6.6, 9.9.9.9")
         assert agent_state._client_ip(req) == "9.9.9.9"
 
     def test_forged_xff_cannot_bypass_the_limit(self):

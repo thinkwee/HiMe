@@ -411,7 +411,11 @@ class FeishuWebhookTransport:
             # verification token in the payload; no signature header yet.
             if body.get("type") == "url_verification":
                 token = body.get("token", "")
-                if token and transport._verification_token and token != transport._verification_token:
+                if (
+                    token
+                    and transport._verification_token
+                    and not hmac.compare_digest(str(token), transport._verification_token)
+                ):
                     return JSONResponse({"code": 401, "msg": "bad token"}, status_code=401)
                 return {"challenge": body.get("challenge", "")}
 
@@ -614,6 +618,40 @@ class FeishuWsTransport:
         # True once the current attempt actually established the socket — lets
         # _run() reset the reconnect backoff after a healthy connection drops.
         self._connected = False
+        # Feishu re-delivers events it doesn't see acked in time; the WS path
+        # must dedupe just like the webhook path (insertion-ordered, oldest
+        # evicted first).
+        self._seen_ids: dict[str, None] = {}
+        self._MAX_SEEN = 500
+        # Strong refs to in-flight dispatch tasks (asyncio keeps weak ones only).
+        self._bg_tasks: set[asyncio.Task[Any]] = set()
+
+    def _is_duplicate(self, key: str) -> bool:
+        """True when *key* (event_id / message_id) was already handled."""
+        if not key:
+            return False
+        if key in self._seen_ids:
+            return True
+        self._seen_ids[key] = None
+        if len(self._seen_ids) > self._MAX_SEEN:
+            for old in list(self._seen_ids)[: self._MAX_SEEN // 2]:
+                del self._seen_ids[old]
+        return False
+
+    def _spawn(self, coro: Awaitable[Any]) -> None:
+        """Run *coro* detached, keeping a reference and logging failures."""
+        task = asyncio.get_running_loop().create_task(coro)  # type: ignore[arg-type]
+        self._bg_tasks.add(task)
+
+        def _done(t: asyncio.Task[Any]) -> None:
+            self._bg_tasks.discard(t)
+            if not t.cancelled() and t.exception() is not None:
+                logger.error(
+                    "Feishu ws: background handler failed: %s", t.exception(),
+                    exc_info=t.exception(),
+                )
+
+        task.add_done_callback(_done)
 
     async def start(self) -> None:
         """Spawn the background subscription task."""
@@ -780,14 +818,22 @@ class FeishuWsTransport:
                     envelope.chat_id,
                 )
                 return
-            asyncio.get_running_loop().create_task(self._on_message(envelope))
+            event_id = str((event.get("header") or {}).get("event_id") or "")
+            msg_id = str(envelope.platform_message_id or "")
+            if self._is_duplicate(event_id) or self._is_duplicate(msg_id):
+                logger.info(
+                    "Feishu ws: dropping duplicate event_id=%s message_id=%s",
+                    event_id, msg_id,
+                )
+                return
+            self._spawn(self._on_message(envelope))
         except Exception as exc:
             logger.error("Feishu ws message handler error: %s", exc, exc_info=True)
 
     def _on_sdk_card_action(self, data: Any) -> None:
         try:
             event = _sdk_event_to_dict(data, "card.action.trigger")
-            asyncio.get_running_loop().create_task(self._on_card_action(event))
+            self._spawn(self._on_card_action(event))
         except Exception as exc:
             logger.error("Feishu ws card handler error: %s", exc, exc_info=True)
 

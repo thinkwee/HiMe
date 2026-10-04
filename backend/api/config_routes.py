@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..config import settings
+from ..utils import atomic_write_json
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +33,7 @@ app_state = {
 def save_app_state():
     """Save app_state to disk."""
     try:
-        settings.APP_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(settings.APP_STATE_PATH, 'w') as f:
-            json.dump(app_state, f, indent=2)
+        atomic_write_json(settings.APP_STATE_PATH, app_state)
         logger.debug(f"App state saved to {settings.APP_STATE_PATH}")
     except Exception as e:
         logger.error(f"Failed to save app state: {e}")
@@ -117,8 +116,8 @@ async def configure_stream(config: StreamConfig):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error configuring stream: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Error configuring stream: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to configure stream.") from e
 
 
 @router.get("/stream")

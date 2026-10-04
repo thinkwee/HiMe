@@ -208,7 +208,11 @@ async def _run_cron_scheduler():
     while True:
         try:
             now = now_utc().replace(microsecond=0)
-            for pid, info in get_active_agents_dict().items():
+            for pid, info in list(get_active_agents_dict().items()):
+                # A still-starting agent has no run loop yet: claiming a tick
+                # now would consume it with nothing to enqueue onto.
+                if info.get("agent") is None:
+                    continue
                 memory = get_memory_manager_for(pid)
                 if not memory:
                     continue
@@ -269,6 +273,7 @@ async def lifespan(app: FastAPI):
     # Validate the configured timezone once — utils.app_timezone() will
     # silently fall back to UTC if invalid, so we surface the warning here.
     settings.validate_timezone()
+    _warn_if_exposed_without_auth()
 
     # Ensure required directories exist
     logger.info("[Startup] 2/4 Creating directories (memory, logs)...")
@@ -576,16 +581,27 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Add CORS middleware. We allow only the explicit origins configured in
-# settings.CORS_ORIGINS (default: localhost dev hosts). Methods and headers
-# are restricted to what the SPA actually needs.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With"],
-)
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
+
+
+def _warn_if_exposed_without_auth() -> None:
+    """Log a prominent warning when the API is network-reachable and unauthenticated.
+
+    The default bind is 0.0.0.0 on purpose (the iPhone reaches the backend over
+    the LAN), so the safe-by-default answer is a loud notice rather than a
+    behaviour change.
+    """
+    host = (settings.API_HOST or "").strip().lower()
+    if host in _LOOPBACK_HOSTS or settings.API_AUTH_TOKEN:
+        return
+    bar = "!" * 78
+    logger.warning(
+        "\n%s\nSECURITY WARNING: API_HOST=%s exposes the HIME API to the network and "
+        "API_AUTH_TOKEN is empty,\nso anyone who can reach port %s can read your health "
+        "data and drive the agent.\nSet API_AUTH_TOKEN in .env (and the same token in "
+        "the iOS app / web UI), or bind API_HOST=127.0.0.1.\n%s",
+        bar, settings.API_HOST, settings.API_PORT, bar,
+    )
 
 
 class BearerAuthMiddleware(BaseHTTPMiddleware):
@@ -605,12 +621,22 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
     the whole authed API surface, so they are guarded too whenever a token is
     configured.
 
-    The token may arrive via the ``Authorization: Bearer`` header or, for
-    header-less clients (e.g. an ``<img>`` tag loading an authed ``/api/``
-    URL), a ``?token=...`` query string parameter. WebSocket handshakes are
+    The token may arrive via the ``Authorization: Bearer`` header or, only for
+    clients that cannot set headers, a ``?token=...`` query parameter — accepted
+    on ``/api/personalised-pages/*`` (any method) and on ``GET
+    /api/agent/chat-image/*``; everywhere else it is ignored. WebSocket handshakes are
     authenticated separately in the stream routes (``_ws_token_ok``), since
     Starlette's ``BaseHTTPMiddleware`` never runs for ``websocket`` scopes.
     """
+
+    _QUERY_TOKEN_ANY_METHOD_PREFIXES = ("/api/personalised-pages/",)
+    _QUERY_TOKEN_GET_PREFIXES = ("/api/agent/chat-image/",)
+
+    @classmethod
+    def _query_token_allowed(cls, method: str, path: str) -> bool:
+        if path.startswith(cls._QUERY_TOKEN_ANY_METHOD_PREFIXES):
+            return True
+        return method in ("GET", "HEAD") and path.startswith(cls._QUERY_TOKEN_GET_PREFIXES)
 
     _PUBLIC_PATHS = {"/", "/health"}
     _DOCS_PATHS = {"/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"}
@@ -635,18 +661,23 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         if not path.startswith("/api/") and path not in self._DOCS_PATHS:
             return await call_next(request)
 
-        # Accept the token from the Authorization header, or from a ?token=
-        # query param for header-less clients (e.g. an <img>/media tag that
-        # loads an authed /api/ URL directly and can't set custom headers).
+        # Accept the token from the Authorization header, or — only where a
+        # client genuinely cannot set headers — from a ?token= query param.
+        # Query strings end up in access logs / history, so this is limited
+        # to personalised-page URLs (WKWebView + the page's own /data calls)
+        # and GET image/media fetches.
         provided: str | None = None
         auth_header = request.headers.get("authorization")
         if auth_header and auth_header.lower().startswith("bearer "):
             provided = auth_header.split(" ", 1)[1].strip()
-        if provided is None:
+        if provided is None and self._query_token_allowed(request.method, path):
             provided = request.query_params.get("token")
 
-        # Constant-time compare so the token can't be recovered byte-by-byte.
-        if not provided or not secrets.compare_digest(provided, token):
+        # Constant-time compare (on bytes: compare_digest raises TypeError on
+        # non-ASCII str) so the token can't be recovered byte-by-byte.
+        if not provided or not secrets.compare_digest(
+            provided.encode("utf-8"), token.encode("utf-8"),
+        ):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Unauthorized"},
@@ -656,6 +687,19 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(BearerAuthMiddleware)
+
+# Add CORS middleware AFTER auth: Starlette treats the last-added middleware as
+# the outermost, so CORS wraps auth and a browser can actually read the 401
+# (otherwise it sees an opaque CORS failure). Only the explicit origins in
+# settings.CORS_ORIGINS are allowed (default: localhost dev hosts); methods and
+# headers are restricted to what the SPA needs.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With"],
+)
 
 # Include routers
 app.include_router(config_router)

@@ -9,9 +9,12 @@ before sending (headings, lists, tables, bold, italic, code blocks).
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import re
 import time
+from pathlib import Path
 
 import httpx
 
@@ -32,6 +35,35 @@ _BOLD_SGL_RE = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)")
 _ITALIC_RE = re.compile(r"(?<![_\w])_([^_]+)_(?![_\w])")
 _STRIKE_RE = re.compile(r"~~(.+?)~~")
 _TAG_RE = re.compile(r"</?([a-zA-Z][a-zA-Z0-9]*)[^>]*>")
+
+
+# Longest we are willing to wait out a 429 inside a send call.
+_MAX_RETRY_AFTER_S = 30.0
+
+
+def _retry_after_seconds(resp: httpx.Response) -> float:
+    """Seconds Telegram asks us to wait after a 429 (body, then header)."""
+    try:
+        val = ((resp.json() or {}).get("parameters") or {}).get("retry_after")
+        if val is not None:
+            return min(max(float(val), 0.0), _MAX_RETRY_AFTER_S)
+    except Exception:
+        pass
+    try:
+        return min(max(float(resp.headers.get("Retry-After", 1)), 0.0), _MAX_RETRY_AFTER_S)
+    except Exception:
+        return 1.0
+
+
+async def _post_with_retry(client: httpx.AsyncClient, url: str, **kwargs) -> httpx.Response:
+    """``client.post`` that waits out one HTTP 429 (``retry_after``) and retries."""
+    resp = await client.post(url, **kwargs)
+    if resp.status_code == 429:
+        delay = _retry_after_seconds(resp)
+        logger.warning("Telegram rate limited (429); retrying in %.1fs", delay)
+        await asyncio.sleep(delay)
+        resp = await client.post(url, **kwargs)
+    return resp
 
 
 def _html_to_plain(text: str) -> str:
@@ -291,12 +323,14 @@ class TelegramSender:
         }
         if reply_to_message_id is not None:
             payload["reply_to_message_id"] = reply_to_message_id
+            # The replied-to message may have been deleted; send anyway.
+            payload["allow_sending_without_reply"] = True
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup
 
         client = self._client or httpx.AsyncClient(timeout=15.0)
         try:
-            resp = await client.post(f"{self._base_url}/sendMessage", json=payload)
+            resp = await _post_with_retry(client, f"{self._base_url}/sendMessage", json=payload)
             if resp.status_code == 200:
                 logger.debug("Telegram message sent to %s", target)
                 return True
@@ -307,7 +341,7 @@ class TelegramSender:
             if resp.status_code == 400 and "parse" in resp.text.lower():
                 payload["parse_mode"] = ""
                 payload["text"] = _html_to_plain(payload["text"])
-                resp2 = await client.post(f"{self._base_url}/sendMessage", json=payload)
+                resp2 = await _post_with_retry(client, f"{self._base_url}/sendMessage", json=payload)
                 if resp2.status_code == 200:
                     logger.debug("Telegram message sent (plain) to %s", target)
                     return True
@@ -345,20 +379,30 @@ class TelegramSender:
 
         data: dict = {"chat_id": target, "caption": caption, "parse_mode": parse_mode}
         if reply_markup:
-            import json
             data["reply_markup"] = json.dumps(reply_markup)
 
         client = self._client or httpx.AsyncClient(timeout=30.0)
         try:
-            with open(photo_path, "rb") as f:
-                resp = await client.post(
-                    f"{self._base_url}/sendPhoto",
-                    data=data,
-                    files={"photo": ("chart.png", f, "image/png")},
-                )
+            # Read once so a 429 / caption retry can resend the same bytes.
+            photo_bytes = await asyncio.to_thread(Path(photo_path).read_bytes)
+            files = {"photo": ("chart.png", photo_bytes, "image/png")}
+            resp = await _post_with_retry(
+                client, f"{self._base_url}/sendPhoto", data=data, files=files,
+            )
             if resp.status_code == 200:
                 logger.debug("Telegram photo sent to %s", target)
                 return True
+            # Caption HTML rejected → resend the photo with a plain-text caption
+            # rather than dropping the chart.
+            if resp.status_code == 400 and "parse" in resp.text.lower():
+                data["caption"] = _html_to_plain(caption)
+                data.pop("parse_mode", None)
+                resp2 = await _post_with_retry(
+                    client, f"{self._base_url}/sendPhoto", data=data, files=files,
+                )
+                if resp2.status_code == 200:
+                    logger.debug("Telegram photo sent (plain caption) to %s", target)
+                    return True
             logger.warning("Telegram photo failed (%d): %s", resp.status_code, resp.text[:300])
             return False
         except Exception as exc:
@@ -393,7 +437,7 @@ class TelegramSender:
 
         client = self._client or httpx.AsyncClient(timeout=15.0)
         try:
-            resp = await client.post(f"{self._base_url}/editMessageText", json=payload)
+            resp = await _post_with_retry(client, f"{self._base_url}/editMessageText", json=payload)
             if resp.status_code == 200:
                 return True
 
@@ -401,8 +445,8 @@ class TelegramSender:
             if resp.status_code == 400 and "parse" in resp.text.lower():
                 payload["parse_mode"] = ""
                 payload["text"] = _html_to_plain(payload["text"])
-                resp2 = await client.post(
-                    f"{self._base_url}/editMessageText", json=payload
+                resp2 = await _post_with_retry(
+                    client, f"{self._base_url}/editMessageText", json=payload
                 )
                 if resp2.status_code == 200:
                     return True

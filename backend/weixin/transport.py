@@ -93,7 +93,9 @@ class WeixinPoller:
         on_message: OnMessage,
         allowed_user_ids: set[str] | None = None,
         state_path: Path | str | None = None,
+        base_url: str | None = None,
     ) -> None:
+        self._base_url = (base_url or ILINK_BASE).rstrip("/")
         self._token = bot_token
         self._on_message = on_message
         self._allowed = allowed_user_ids
@@ -145,6 +147,13 @@ class WeixinPoller:
                 for msg_id in seen[-self._MAX_SEEN:]:
                     if isinstance(msg_id, str):
                         self._seen_ids[msg_id] = None
+            # Restore reply context so proactive pushes right after a restart
+            # don't have to wait for the user's next message.
+            ctx = data.get("context_tokens")
+            if isinstance(ctx, dict):
+                for uid, tok in ctx.items():
+                    if isinstance(uid, str) and isinstance(tok, str) and tok:
+                        self._last_context[uid] = tok
             logger.info(
                 "WeixinPoller resumed from %s (%d seen ids)",
                 path, len(self._seen_ids),
@@ -155,7 +164,26 @@ class WeixinPoller:
                 "continuing with an in-memory cursor", path, exc,
             )
 
+    def _snapshot_state(self) -> dict[str, Any]:
+        return {
+            "token": self._state_key,
+            "cursor": self._cursor,
+            # Bounded so the file cannot grow without limit.
+            "seen_ids": list(self._seen_ids)[-self._MAX_SEEN:],
+            "context_tokens": dict(list(self._last_context.items())[-20:]),
+        }
+
     def _save_state(self) -> None:
+        """Synchronous cursor write (see :meth:`_write_state`)."""
+        self._write_state(self._snapshot_state())
+
+    async def _asave_state(self) -> None:
+        """Write the cursor off the event loop (write + fsync can stall it)."""
+        if self._state_path is None:
+            return
+        await asyncio.to_thread(self._write_state, self._snapshot_state())
+
+    def _write_state(self, payload: dict[str, Any]) -> None:
         """Write the cursor atomically (temp file + ``os.replace``).
 
         Called on every cursor advance rather than on a timer: inbound IM
@@ -166,12 +194,6 @@ class WeixinPoller:
         path = self._state_path
         if path is None:
             return
-        payload = {
-            "token": self._state_key,
-            "cursor": self._cursor,
-            # Bounded so the file cannot grow without limit.
-            "seen_ids": list(self._seen_ids)[-self._MAX_SEEN:],
-        }
         tmp = path.with_suffix(path.suffix + ".tmp")
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -220,10 +242,9 @@ class WeixinPoller:
         while self._running:
             try:
                 updates = await self._fetch_updates()
-                if updates:
-                    backoff = 1.0
-                    for upd in updates:
-                        await self._process_update(upd)
+                backoff = 1.0  # any successful poll proves the link is healthy
+                for upd in updates:
+                    await self._process_update(upd)
             except asyncio.CancelledError:
                 logger.info("WeixinPoller cancelled")
                 break
@@ -248,7 +269,7 @@ class WeixinPoller:
         }
 
         resp = await self._client.post(
-            f"{ILINK_BASE}/ilink/bot/getupdates",
+            f"{self._base_url}/ilink/bot/getupdates",
             json=body,
             headers=common_headers(self._token),
         )
@@ -273,7 +294,7 @@ class WeixinPoller:
         nxt = data.get("get_updates_buf") or ""
         if nxt and nxt != self._cursor:
             self._cursor = nxt
-            self._save_state()
+            await self._asave_state()
         return data.get("msgs") or []
 
     async def _process_update(self, update: dict[str, Any]) -> None:
@@ -288,7 +309,7 @@ class WeixinPoller:
                     del self._seen_ids[old]
             # Persist *before* dispatching: a crash mid-handler must not
             # replay the message (and re-run whatever command it carried).
-            self._save_state()
+            await self._asave_state()
 
         from_user = str(update.get("from_user_id") or "")
         if not from_user:
@@ -303,8 +324,9 @@ class WeixinPoller:
             return
 
         ctx_token = str(update.get("context_token") or "")
-        if ctx_token:
+        if ctx_token and self._last_context.get(from_user) != ctx_token:
             self._last_context[from_user] = ctx_token
+            await self._asave_state()
 
         text = _extract_text(update)
         if not text:

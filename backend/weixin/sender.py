@@ -71,7 +71,9 @@ class WeixinSender:
         bot_token: str,
         default_user_id: str | None = None,
         get_context_token: Callable[[str], str | None] | None = None,
+        base_url: str | None = None,
     ) -> None:
+        self._base_url = (base_url or ILINK_BASE).rstrip("/")
         self._token = bot_token
         self._default_user_id = default_user_id
         self.default_chat_id = default_user_id
@@ -282,7 +284,7 @@ class WeixinSender:
         owns_client = self._client is None
         try:
             resp = await client.post(
-                f"{ILINK_BASE}/ilink/bot/getuploadurl",
+                f"{self._base_url}/ilink/bot/getuploadurl",
                 json=upload_payload,
                 headers=common_headers(self._token),
                 timeout=30.0,
@@ -355,7 +357,7 @@ class WeixinSender:
         client = self._client or httpx.AsyncClient(timeout=15.0)
         try:
             resp = await client.post(
-                f"{ILINK_BASE}{path}",
+                f"{self._base_url}{path}",
                 json=payload,
                 headers=common_headers(self._token),
             )

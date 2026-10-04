@@ -57,6 +57,14 @@ def _resolve_state_path(explicit: Path | str | None) -> Path | None:
         return None
 
 
+class _RateLimited(RuntimeError):
+    """Telegram answered 429; ``retry_after`` is how long to back off (s)."""
+
+    def __init__(self, retry_after: float, payload: Any) -> None:
+        super().__init__(f"Telegram API rate limited (retry_after={retry_after}): {payload}")
+        self.retry_after = retry_after
+
+
 class TelegramPoller:
     """
     Long-poll the Telegram ``getUpdates`` endpoint and dispatch envelopes.
@@ -90,7 +98,8 @@ class TelegramPoller:
         self._token = token
         self._on_message = on_message
         self._on_callback_query = on_callback_query
-        self._poll_timeout = poll_timeout
+        # ``timeout=0`` turns getUpdates into a hot short-poll loop.
+        self._poll_timeout = max(1, int(poll_timeout))
         self._allowed_chat_ids = allowed_chat_ids
         self._base_url = f"https://api.telegram.org/bot{token}"
         self._offset: int = 0
@@ -154,7 +163,25 @@ class TelegramPoller:
                 "continuing with an in-memory cursor", path, exc,
             )
 
+    def _snapshot_state(self) -> dict[str, Any]:
+        return {
+            "token": self._state_key,
+            "offset": self._offset,
+            # Bounded so the file cannot grow without limit.
+            "seen_ids": list(self._seen_ids)[-self._MAX_SEEN:],
+        }
+
     def _save_state(self) -> None:
+        """Synchronous cursor write (see :meth:`_write_state`)."""
+        self._write_state(self._snapshot_state())
+
+    async def _asave_state(self) -> None:
+        """Write the cursor off the event loop (write + fsync can stall it)."""
+        if self._state_path is None:
+            return
+        await asyncio.to_thread(self._write_state, self._snapshot_state())
+
+    def _write_state(self, payload: dict[str, Any]) -> None:
         """Write the cursor atomically (temp file + ``os.replace``).
 
         Called on every cursor advance rather than on a timer: inbound IM
@@ -165,12 +192,6 @@ class TelegramPoller:
         path = self._state_path
         if path is None:
             return
-        payload = {
-            "token": self._state_key,
-            "offset": self._offset,
-            # Bounded so the file cannot grow without limit.
-            "seen_ids": list(self._seen_ids)[-self._MAX_SEEN:],
-        }
         tmp = path.with_suffix(path.suffix + ".tmp")
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -220,16 +241,19 @@ class TelegramPoller:
         while self._running:
             try:
                 updates = await self._fetch_updates()
-                if updates:
-                    backoff = 1.0  # reset on success
-                    for update in updates:
-                        await self._process_update(update)
-                else:
-                    # No updates — normal, just loop
-                    pass
+                # Any successful poll (even an empty long-poll) proves the link
+                # is healthy — reset the back-off so one blip doesn't leave the
+                # next failure waiting on a stale, inflated delay.
+                backoff = 1.0
+                for update in updates:
+                    await self._process_update(update)
             except asyncio.CancelledError:
                 logger.info("Poller cancelled")
                 break
+            except _RateLimited as exc:
+                delay = min(max(exc.retry_after, 1.0), 300.0)
+                logger.warning("Poller rate limited by Telegram (retry in %.0fs)", delay)
+                await asyncio.sleep(delay)
             except Exception as exc:
                 logger.warning("Poller error (retry in %.0fs): %s", backoff, exc)
                 await asyncio.sleep(backoff)
@@ -259,13 +283,20 @@ class TelegramPoller:
         data = resp.json()
 
         if not data.get("ok"):
+            if data.get("error_code") == 429:
+                retry_after = (data.get("parameters") or {}).get("retry_after", 5)
+                try:
+                    retry_after = float(retry_after)
+                except (TypeError, ValueError):
+                    retry_after = 5.0
+                raise _RateLimited(retry_after, data)
             raise RuntimeError(f"Telegram API error: {data}")
 
         results: list[dict] = data.get("result", [])
         if results:
             # Advance offset past the last received update
             self._offset = results[-1]["update_id"] + 1
-            self._save_state()
+            await self._asave_state()
         return results
 
     async def _process_update(self, update: dict[str, Any]) -> None:
@@ -326,7 +357,7 @@ class TelegramPoller:
                 del self._seen_ids[_k]
         # Persist *before* dispatching: a crash mid-handler must not replay
         # the message (and re-run whatever command it carried) on restart.
-        self._save_state()
+        await self._asave_state()
 
         # Build envelope
         sender = msg.get("from", {})

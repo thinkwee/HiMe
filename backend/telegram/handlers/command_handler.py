@@ -80,7 +80,7 @@ class CommandHandler:
             return await handler(cmd)
         except Exception as exc:
             logger.error("Command handler error: %s", exc, exc_info=True)
-            return f"Error processing command: {exc}"
+            return "Error processing command. See server logs for details."
 
     # ── /help ────────────────────────────────────────────────────────
 
