@@ -1552,6 +1552,19 @@ class AgentLoopsMixin:
             "Run an open-ended health analysis. Query the data, find "
             "something meaningful to report, and publish the report."
         )
+        if getattr(goal, "deadline_passed", None) is not None:
+            # Scheduler-originated run: tell the agent the truth about the clock
+            # and data freshness (user message only; system prompt stays static).
+            try:
+                from .scheduled_freshness import build_run_context, parse_sample_ts
+                ctx = build_run_context(
+                    parse_sample_ts(current_sim_time),
+                    deadline_passed=bool(goal.deadline_passed),
+                    waited_min=float(getattr(goal, "waited_min", 0.0)),
+                )
+                sub_goal = f"{ctx}\n\n{sub_goal}"
+            except Exception as exc:
+                logger.debug("run-context line skipped: %s", exc)
         try:
             sub_result = await asyncio.wait_for(
                 self._run_sub_analysis(

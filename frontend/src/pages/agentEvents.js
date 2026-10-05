@@ -179,6 +179,12 @@ export function eventToMessage(ev) {
       case 'cycle_end':
         msg = { text: `✅ ${tr('agent.evt_task_completed', { cycle: d.cycle || '' })}`, type: 'system' }
         break
+      case 'analysis_deferred':
+        msg = { text: `⏳ ${tr('agent.evt_analysis_deferred', { age: Math.round(d.data_age_min ?? 0), wait: Math.round(d.max_wait_min ?? 0) })}`, type: 'system' }
+        break
+      case 'analysis_released':
+        msg = { text: `▶️ ${tr(d.reason === 'deadline' ? 'agent.evt_analysis_released_deadline' : 'agent.evt_analysis_released_fresh', { wait: Math.round(d.waited_min ?? 0) })}`, type: 'system' }
+        break
       case 'report_pushed':
         msg = { text: `📊 ${tr('agent.evt_report_pushed', { id: d.report_id || '?' })}`, type: 'system' }
         break

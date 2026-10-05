@@ -507,6 +507,12 @@ async def _ingest_cycle(reader, data_store: DataStore, user_id: str, hwm: dict,
     logger.info("Live ingest: %d records synced (%d new, %d updated) hwm_id=%d ua=%.0f",
                 len(all_records), len(new_samples), len(extra), new_id, new_ua)
 
+    if all_records:
+        # Fresh data may release scheduled runs that were waiting for it.
+        agent = (active_agents.get(user_id) or {}).get("agent")
+        if agent is not None and hasattr(agent, "request_deferred_recheck"):
+            agent.request_deferred_recheck()
+
     if all_records and evaluate_triggers:
         try:
             triggered = await trigger_eval.evaluate_after_ingest(
