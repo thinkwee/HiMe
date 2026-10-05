@@ -221,6 +221,14 @@ class Settings(BaseSettings):
     # Independent of the container's system clock so deployments work
     # consistently regardless of host TZ.
     TIMEZONE: str   = "UTC"
+    # Freshness gate for scheduled (cron) analysis runs: if the newest ingested
+    # sample is older than MAX_AGE minutes when a run is due, the run is deferred
+    # (re-checked every RECHECK minutes, released at once when a live-ingest
+    # batch brings fresh data) and runs anyway after MAX_WAIT minutes.
+    # MAX_AGE = 0 disables the gate.
+    SCHEDULED_FRESHNESS_MAX_AGE_MIN: float = 45
+    SCHEDULED_FRESHNESS_RECHECK_MIN: float = 10
+    SCHEDULED_FRESHNESS_MAX_WAIT_MIN: float = 120
     CORS_ORIGINS: list[str] = [
         "http://localhost:5173",
         "http://localhost:3000",

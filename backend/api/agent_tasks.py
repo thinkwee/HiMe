@@ -198,7 +198,7 @@ async def trigger_analysis(user_id: str, request: Request):
     queue = getattr(agent, "_analysis_queue", None)
     if queue is not None and queue.maxsize > 0 and queue.qsize() >= queue.maxsize:
         raise HTTPException(status_code=429, detail="Analysis queue is full; try again later.")
-    await agent.run_scheduled_analysis(goal)
+    await agent.run_scheduled_analysis(goal, gate=False)
     return {"success": True, "message": "Analysis queued"}
 
 

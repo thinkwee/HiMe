@@ -34,13 +34,16 @@ from .cancellation import CancellationToken
 from .chat_stream import json_safe
 from .llm_providers import BaseLLMProvider
 from .persistence import AgentStateRepository
+from .scheduled_freshness import ScheduledFreshnessMixin
 from .skills.registry import SkillRegistry
 from .tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
 
-class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin):
+class AutonomousHealthAgent(
+    ScheduledFreshnessMixin, AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin,
+):
     """
     Single-agent event-driven health assistant.
 
@@ -130,6 +133,9 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
         # producing duplicate reports.
         self._recent_scheduled_goals: dict[str, float] = {}
         self._scheduled_dedupe_window_s: float = 120.0
+
+        # Scheduled runs waiting for fresh data (see scheduled_freshness.py)
+        self._deferred_scheduled: list[dict] = []
 
         # Event queue for yielding events from run_forever
         self._event_queue: asyncio.Queue = asyncio.Queue()
@@ -539,6 +545,13 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
                         active_task = asyncio.create_task(_process_chats(envelopes))
                         continue
 
+                # 1b. Deferred scheduled runs whose data is fresh / deadline hit?
+                if self._deferred_scheduled:
+                    try:
+                        await self.poll_deferred_scheduled()
+                    except Exception as exc:
+                        logger.warning("Deferred-run poll failed: %s", exc)
+
                 # 2. Analysis tasks in queue?
                 try:
                     goal = self._analysis_queue.get_nowait()
@@ -577,7 +590,9 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
     # Scheduled analysis — called by cron scheduler
     # ==================================================================
 
-    async def run_scheduled_analysis(self, goal: str, task_id: int | str | None = None) -> None:
+    async def run_scheduled_analysis(
+        self, goal: str, task_id: int | str | None = None, gate: bool = True,
+    ) -> None:
         """
         Queue an analysis task. Called by the cron scheduler or via chat command.
         The task will be processed in the main event loop.
@@ -586,6 +601,8 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
         scopes the duplicate guard to that task. Without it the guard falls
         back to the goal text, which also collapses two *different* tasks that
         share the same goal.
+
+        ``gate=False`` skips the data-freshness gate (user-initiated runs).
         """
         # Dedupe: reject the same task (or, lacking an id, the same goal) if it
         # was queued within the window.
@@ -604,14 +621,8 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
             return
         self._recent_scheduled_goals[dedupe_key] = now_mono
 
-        if self._analysis_queue.full():
-            try:
-                dropped = self._analysis_queue.get_nowait()
-                logger.warning("Analysis queue full — dropped oldest task: %s", (dropped or "")[:60])
-            except asyncio.QueueEmpty:
-                pass
-        await self._analysis_queue.put(goal)
-        logger.info("Queued scheduled analysis for %s: %s", self.user_id, (goal or "default")[:60])
+        await self._gate_scheduled(goal, task_id, gate)
+        logger.info("Scheduled analysis accepted for %s: %s", self.user_id, (goal or "default")[:60])
 
     # ==================================================================
     # Control
@@ -638,6 +649,7 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
     def stop(self) -> None:
         self.is_running = False
         self._cancellation.cancel("Agent stopped")
+        self.cancel_deferred_scheduled()
         logger.info("Agent %s stopping...", self.user_id)
 
     def get_status(self) -> dict:
@@ -663,4 +675,5 @@ class AutonomousHealthAgent(AgentPromptsMixin, AgentToolsMixin, AgentLoopsMixin)
             "user_messages_received": self.user_messages_received,
             "cumulative_tokens": self.cumulative_tokens,
             "analysis_queue_size": self._analysis_queue.qsize(),
+            "deferred_scheduled": len(self._deferred_scheduled),
         }

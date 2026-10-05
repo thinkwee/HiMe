@@ -27,6 +27,7 @@ const TIMELINE_TYPES = new Set([
   'quick_analysis_start', 'quick_analysis_complete',
   'agent_started', 'agent_stopped', 'agent_error', 'startup_error', 'agent_waiting',
   'error', 'forced_sleep', 'token_truncated',
+  'analysis_deferred', 'analysis_released',
 ])
 
 /** Tools whose output is the reply bubble itself, so no step row is shown. */
@@ -514,6 +515,8 @@ export function buildTimeline(records, { now = Date.now(), idle = false } = {}) 
         break
       case 'agent_started':
       case 'agent_waiting':
+      case 'analysis_deferred':
+      case 'analysis_released':
         addNotice(rec, 'info')
         break
       case 'startup_error':
