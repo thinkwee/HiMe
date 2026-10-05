@@ -694,9 +694,9 @@ async def test_apns_payload_levels_and_aps_last(monkeypatch, tmp_path):
     fake.PushType = SimpleNamespace(ALERT="alert")
     monkeypatch.setitem(sys.modules, "aioapns", fake)
     monkeypatch.setattr(apns_mod.device_store, "list_device_tokens",
-                        lambda u, e: [{"device_token": "aa" * 32}])
+                        lambda u: [{"device_token": "aa" * 32}])
     s = apns_mod.APNSSender(SimpleNamespace(APNS_ENABLED=True, APNS_ENV="production"))
-    s._client = _Client()
+    s._clients["production"] = _Client()
     n = await s.send("LiveUser", "T", "B", data={"aps": {"evil": 1}, "chat_id": "c"})
     assert n == 1
     assert sent[0]["aps"]["interruption-level"] == "active" and "evil" not in sent[0]["aps"]
@@ -721,9 +721,9 @@ async def test_apns_send_times_out(monkeypatch):
     monkeypatch.setitem(sys.modules, "aioapns", fake)
     monkeypatch.setattr(apns_mod, "_SEND_TIMEOUT_S", 0.05)
     monkeypatch.setattr(apns_mod.device_store, "list_device_tokens",
-                        lambda u, e: [{"device_token": "aa" * 32}])
+                        lambda u: [{"device_token": "aa" * 32}])
     s = apns_mod.APNSSender(SimpleNamespace(APNS_ENABLED=True, APNS_ENV="production"))
-    s._client = _Client()
+    s._clients["production"] = _Client()
     t0 = time.monotonic()
     assert await s.send("LiveUser", "T", "B") == 0
     assert time.monotonic() - t0 < 2

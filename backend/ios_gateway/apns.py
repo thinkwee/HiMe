@@ -29,7 +29,12 @@ class APNSSender:
 
     def __init__(self, settings) -> None:
         self._settings = settings
-        self._client = None
+        # One aioapns client per APNs environment ("production" / "sandbox"),
+        # created on first use: App Store / TestFlight installs mint production
+        # tokens, Xcode debug builds mint sandbox tokens, and one server must
+        # reach both.
+        self._clients: dict[str, object] = {}
+        self._key: str | None = None
         self._enabled = bool(getattr(settings, "APNS_ENABLED", False))
         self._lock = asyncio.Lock()
 
@@ -37,12 +42,18 @@ class APNSSender:
     def enabled(self) -> bool:
         return self._enabled
 
-    async def _get_client(self):
-        if self._client is not None:
-            return self._client
+    def _env_of(self, token: dict) -> str:
+        # Tokens registered without an environment (old app builds) use APNS_ENV.
+        default = getattr(self._settings, "APNS_ENV", "production") or "production"
+        env = str(token.get("environment") or default).lower()
+        return "sandbox" if env == "sandbox" else "production"
+
+    async def _get_client(self, env: str):
+        if env in self._clients:
+            return self._clients[env]
         async with self._lock:
-            if self._client is not None:
-                return self._client
+            if env in self._clients:
+                return self._clients[env]
             try:
                 from aioapns import APNs
             except Exception as e:
@@ -53,30 +64,31 @@ class APNSSender:
                 self._enabled = False
                 return None
             s = self._settings
-            use_sandbox = getattr(s, "APNS_ENV", "production").lower() != "production"
             # aioapns hands `key` straight to jwt.encode(), which expects the
             # PEM *contents*, not a file path. Passing the path raises
             # "Unable to load PEM file ... MalformedFraming" at first send.
+            if self._key is None:
+                try:
+                    with open(s.APNS_KEY_PATH) as f:
+                        self._key = f.read()
+                except OSError as e:
+                    logger.error("APNs: cannot read key file %s: %s", s.APNS_KEY_PATH, e)
+                    self._enabled = False
+                    return None
             try:
-                with open(s.APNS_KEY_PATH) as f:
-                    key_content = f.read()
-            except OSError as e:
-                logger.error("APNs: cannot read key file %s: %s", s.APNS_KEY_PATH, e)
-                self._enabled = False
-                return None
-            try:
-                self._client = APNs(
-                    key=key_content,
+                client = APNs(
+                    key=self._key,
                     key_id=s.APNS_KEY_ID,
                     team_id=s.APNS_TEAM_ID,
                     topic=s.APNS_BUNDLE_ID,
-                    use_sandbox=use_sandbox,
+                    use_sandbox=(env == "sandbox"),
                 )
             except Exception as e:
-                logger.error("APNs client init failed: %s", e)
+                logger.error("APNs client init failed (%s): %s", env, e)
                 self._enabled = False
                 return None
-            return self._client
+            self._clients[env] = client
+            return client
 
     async def send(
         self, user_id: str, title: str, body: str, data: dict | None = None,
@@ -91,16 +103,10 @@ class APNSSender:
         """
         if not self._enabled:
             return 0
-        # The client is bound to one APNs environment; tokens minted for the
-        # other one can never succeed, so don't even try them.
-        env = str(getattr(self._settings, "APNS_ENV", "production") or "production").lower()
-        tokens = await asyncio.to_thread(
-            device_store.list_device_tokens, user_id, env,
-        )
+        # Every active token, each sent through the APNs environment it was
+        # registered for (the app reports it with the token).
+        tokens = await asyncio.to_thread(device_store.list_device_tokens, user_id)
         if not tokens:
-            return 0
-        client = await self._get_client()
-        if client is None:
             return 0
         try:
             from aioapns import NotificationRequest, PushType
@@ -110,6 +116,9 @@ class APNSSender:
         sent = 0
         for t in tokens:
             device_token = t["device_token"]
+            client = await self._get_client(self._env_of(t))
+            if client is None:
+                return sent
             try:
                 # time-sensitive breaks through Focus/lock for proactive health
                 # nudges. Requires the
@@ -139,14 +148,14 @@ class APNSSender:
                     desc = str(getattr(resp, "description", ""))
                     status = str(getattr(resp, "status", ""))
                     # 410/Unregistered = uninstalled. 400/BadDeviceToken = the
-                    # token is malformed or belongs to the other environment;
-                    # it can never succeed either, so retire it rather than
+                    # token is malformed or stale (sent to its own environment,
+                    # so it can never succeed): retire it rather than
                     # re-warning on every push.
                     if status == "410" or desc in ("Unregistered", "BadDeviceToken"):
                         await asyncio.to_thread(device_store.revoke_device_token, device_token)
                         logger.info(
-                            "APNs: revoked dead token (%s) for user=%s",
-                            desc or status, user_id,
+                            "APNs: revoked dead %s token (%s) for user=%s",
+                            self._env_of(t), desc or status, user_id,
                         )
             except asyncio.TimeoutError:
                 logger.warning(

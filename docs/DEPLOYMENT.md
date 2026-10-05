@@ -305,7 +305,7 @@ The native iOS chat path does **not** require a public inbound URL. The phone in
 
 Behind your reverse proxy, ensure WebSocket upgrade headers are forwarded (same `location /` block as in section 2.4). Pass `API_AUTH_TOKEN` via `Authorization: Bearer` on HTTP and `?token=` on the WebSocket if auth is enabled.
 
-**APNs (optional):** mount the `.p8` key into the backend container read-only and set `APNS_*` in `.env`. `APNS_ENV` must match the build (`sandbox` for Xcode debug, `production` for TestFlight/App Store). Device tokens are stored in the memory DB via `POST /api/devices/register`.
+**APNs (optional):** mount the `.p8` key into the backend container read-only and set `APNS_*` in `.env`. Each device token is pushed through the APNs environment the app registered it with (`sandbox` for Xcode debug, `production` for TestFlight/App Store), so debug and store builds both work against one server; `APNS_ENV` is only the fallback for tokens without one. Device tokens are stored in the memory DB via `POST /api/devices/register`.
 
 **Event fan-out:** multiple WebSocket clients (iOS app + web agent monitor) subscribe through `EventHub` in `backend/api/event_hub.py`. The iOS client uses `replay=false` on subscribe so reconnects do not duplicate bubbles; the dashboard keeps replay for late joins.
 

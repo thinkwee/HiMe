@@ -762,9 +762,11 @@ async def test_apns_still_revokes_unregistered(tmp_path, monkeypatch) -> None:
     assert device_store.list_device_tokens("u") == []
 
 
-async def test_apns_only_pushes_tokens_from_its_own_environment(
+async def test_apns_pushes_every_token_via_its_own_environment(
     tmp_path, monkeypatch,
 ) -> None:
+    # Store and Xcode builds both reach one server: each token goes out through
+    # the APNs environment it was registered for (see test_apns_environments).
     from backend.config import settings
     from backend.ios_gateway import device_store
     from backend.ios_gateway.apns import APNSSender
@@ -775,7 +777,7 @@ async def test_apns_only_pushes_tokens_from_its_own_environment(
 
     sent = _install_fake_aioapns(monkeypatch, [])
     await APNSSender(_apns_settings(tmp_path)).send("u", "t", "b")
-    assert sent == ["tok-prod"]
+    assert sorted(sent) == ["tok-prod", "tok-sbox"]
 
 
 def test_list_device_tokens_filters_by_environment(tmp_path, monkeypatch) -> None:

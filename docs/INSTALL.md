@@ -129,7 +129,7 @@ When the app is closed or backgrounded it disconnects the stream socket; replies
    APNS_KEY_ID=<10-char key id>
    APNS_TEAM_ID=<10-char team id>
    APNS_BUNDLE_ID=com.example.hime          # must match the app bundle id
-   APNS_ENV=sandbox                         # sandbox for debug builds; production for TestFlight/App Store
+   APNS_ENV=production                      # fallback only: each token is sent via the env the app registered (sandbox for Xcode, production for TestFlight/App Store)
    ```
 
 4. Build the iOS app with the Push Notifications capability and register the device token (the app calls `POST /api/devices/register` after permission is granted).

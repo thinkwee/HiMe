@@ -318,7 +318,7 @@ class Settings(BaseSettings):
     APNS_KEY_ID:    str  = ""          # 10-char APNs Key ID
     APNS_TEAM_ID:   str  = ""          # 10-char Apple Developer Team ID
     APNS_BUNDLE_ID: str  = ""          # app bundle id (APNs topic)
-    APNS_ENV:       str  = "production"  # "production" | "sandbox"
+    APNS_ENV:       str  = "production"  # fallback env for tokens registered without one; each token is otherwise sent via its own env
 
     # ------------------------------------------------------------------ #
     # Skills subsystem (openclaw-compatible capability packs)
