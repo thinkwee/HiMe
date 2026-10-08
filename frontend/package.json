@@ -32,7 +32,7 @@
     "lucide-react": "^1.31.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.8",
-    "react-i18next": "^14.1.2",
+    "react-i18next": "^17.0.15",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.18.2",
     "react-syntax-highlighter": "^16.1.1",
