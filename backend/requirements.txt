@@ -23,7 +23,7 @@ scikit-learn>=1.3,<2
 matplotlib>=3.7,<4
 
 # Persistent IPython shell powering the code tool
-ipython>=8.0,<9
+ipython>=9.17.1,<10
 
 # LLM providers
 openai>=1.50,<3
