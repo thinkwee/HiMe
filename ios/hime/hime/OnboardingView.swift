@@ -30,6 +30,10 @@ struct OnboardingView: View {
     @StateObject private var survey = SurveyModel()
 
     private let totalPages = 7
+    /// Tag of `aiDisclosurePage`. The app only leaves onboarding once consent
+    /// is recorded (`himeApp.isReady`), so no page past this one is reachable
+    /// without it.
+    private let consentPageIndex = 3
 
     enum ServerTestState: Equatable {
         case idle
@@ -51,6 +55,13 @@ struct OnboardingView: View {
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             .indexViewStyle(.page(backgroundDisplayMode: .always))
+            .onChange(of: pageIndex) { _, newIndex in
+                // The paged TabView lets users swipe past the consent page
+                // without tapping "I Agree"; bounce them back to it.
+                if newIndex > consentPageIndex && !hasConsentedToAI {
+                    withAnimation { pageIndex = consentPageIndex }
+                }
+            }
 
             // Dot indicator + primary action
             VStack(spacing: 16) {
@@ -424,6 +435,12 @@ struct OnboardingView: View {
     }
 
     private func finishOnboarding() {
+        // Without consent, setting hasOnboarded alone leaves isReady false and
+        // the Start button looks dead. Send the user to the consent page.
+        guard hasConsentedToAI else {
+            withAnimation { pageIndex = consentPageIndex }
+            return
+        }
         hasOnboarded = true
     }
 
